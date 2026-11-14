@@ -17,8 +17,7 @@ use super::{DraggedMessages, MailPrefs, ops};
 use crate::app_state::AppState;
 use crate::components::{Badge, Button, Icon, IconButton, IconName};
 use crate::theme::{
-    ICON_SIZE, ICON_SIZE_SM, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TEXT_MD, TEXT_XS, Theme, hex,
-    theme,
+    ICON_SIZE, ICON_SIZE_SM, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TEXT_MD, TEXT_XS, Theme, theme,
 };
 
 /// Icon for a folder: special folders by role, a few well-known custom names.
@@ -401,13 +400,7 @@ impl FolderPaneView {
             .into_any_element()
     }
 
-    fn section_header(
-        id: ElementId,
-        label: String,
-        dot: Option<Hsla>,
-        collapsed: bool,
-        t: &Theme,
-    ) -> Stateful<Div> {
+    fn section_header(id: ElementId, label: String, collapsed: bool, t: &Theme) -> Stateful<Div> {
         div()
             .id(id)
             .flex()
@@ -431,9 +424,6 @@ impl FolderPaneView {
                 })
                 .size(px(12.)),
             )
-            .when_some(dot, |el, color| {
-                el.child(div().size(px(8.)).rounded(px(4.)).bg(color))
-            })
             .child(label)
     }
 
@@ -568,7 +558,6 @@ impl Render for FolderPaneView {
                 Self::section_header(
                     "favorites-header".into(),
                     "FAVORITES".into(),
-                    None,
                     self.favorites_collapsed,
                     &t,
                 )
@@ -605,7 +594,6 @@ impl Render for FolderPaneView {
                 Self::section_header(
                     ("account", account_id as u64).into(),
                     account.name.to_uppercase(),
-                    Some(hex(account.color)),
                     collapsed,
                     &t,
                 )

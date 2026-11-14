@@ -699,12 +699,6 @@ impl Render for RulesDialog {
                         .when(!selected, |el| {
                             el.text_color(t.text_muted).hover(|style| style.bg(t.hover))
                         })
-                        .child(
-                            div()
-                                .size(px(8.))
-                                .rounded(RADIUS_FULL)
-                                .bg(hex(account.color)),
-                        )
                         .child(account.name.clone())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.account_id = Some(account_id);

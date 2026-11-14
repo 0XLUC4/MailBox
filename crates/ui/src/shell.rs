@@ -7,7 +7,7 @@ use gpui::*;
 
 use crate::app_state::{AppEvent, AppState, Module};
 use crate::calendar::CalendarView;
-use crate::components::{Icon, IconButton, IconName};
+use crate::components::IconButton;
 use crate::mail::MailView;
 use crate::people::{PeopleEvent, PeopleView};
 use crate::ribbon::RibbonView;
@@ -15,8 +15,9 @@ use crate::search::SearchView;
 use crate::settings::SettingsView;
 use crate::tasks::TasksView;
 use crate::theme::{
-    RADIUS_LG, RAIL_WIDTH, SPACE_1, SPACE_3, TEXT_LG, TEXT_MD, TOP_BAR_HEIGHT, Theme, theme,
+    RAIL_WIDTH, SPACE_1, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TOP_BAR_HEIGHT, Theme, theme,
 };
+use crate::titlebar;
 use crate::{GoToCalendar, GoToMail, GoToPeople, GoToSettings, GoToTasks, Redo, Undo};
 
 pub struct Shell {
@@ -131,49 +132,47 @@ impl Shell {
             .w(RAIL_WIDTH)
             .h_full()
             .py(SPACE_3)
+            // Clear the native traffic lights.
+            .when(cfg!(target_os = "macos"), |el| el.pt(px(40.)))
             .gap(SPACE_1)
             .bg(t.rail)
             .border_r_1()
             .border_color(t.border_subtle)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(32.))
-                    .mb(SPACE_3)
-                    .rounded(RADIUS_LG)
-                    .bg(t.accent)
-                    .text_color(t.on_accent)
-                    .child(Icon::new(IconName::Mailbox).size(px(18.))),
-            )
             .children(Module::MAIN.map(&rail_item))
             .child(div().flex_1())
             .child(rail_item(Module::Settings))
     }
 
+    /// Top bar doubling as the window title bar: empty space drags the window,
+    /// caption buttons sit flush right.
     fn render_top_bar(&self, active: Module, t: &Theme) -> impl IntoElement {
         div()
             .flex()
             .flex_row()
             .flex_shrink_0()
             .items_center()
-            .gap(SPACE_3)
             .h(TOP_BAR_HEIGHT)
-            .px(SPACE_3)
+            .pl(SPACE_3)
             .bg(t.surface)
             .border_b_1()
             .border_color(t.border_subtle)
-            .child(
+            .child(titlebar::drag_area(
                 div()
-                    .flex_shrink_0()
-                    .w(px(120.))
+                    .id("top-bar-drag")
+                    .flex()
+                    .flex_1()
+                    .h_full()
+                    .items_center()
+                    .min_w(px(0.))
                     .text_size(TEXT_LG)
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(active.label()),
-            )
-            .child(div().flex_1())
+            ))
             .child(div().flex_shrink_0().w(px(420.)).child(self.search.clone()))
+            .child(titlebar::drag_area(
+                div().id("top-bar-gap").flex_shrink_0().w(SPACE_4).h_full(),
+            ))
+            .child(titlebar::WindowControls)
     }
 }
 
@@ -181,7 +180,17 @@ impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let active = self.state.read(cx).module();
+        // First run: no account yet → onboarding (Settings stays reachable).
+        let has_account = self
+            .state
+            .read(cx)
+            .store()
+            .list_accounts()
+            .is_ok_and(|accounts| !accounts.is_empty());
         let content = match active {
+            _ if !has_account && active != Module::Settings => {
+                crate::onboarding::onboarding(self.state.clone(), cx).into_any_element()
+            }
             Module::Mail => self.mail.clone().into_any_element(),
             Module::Calendar => self.calendar.clone().into_any_element(),
             Module::People => self.people.clone().into_any_element(),

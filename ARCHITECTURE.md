@@ -6,10 +6,30 @@ Mailbox is a mail + calendar + contacts + tasks desktop client in Rust, UI in GP
 
 | Crate | Path | Role |
 |---|---|---|
-| `mailbox-core` | `crates/core` | Domain model, SQLite store (rusqlite, migrations), `Command` + undo/redo, sample data. No UI, no network. |
-| `mailbox-sync` | `crates/sync` | Protocol backends behind `trait MailBackend` (IMAP/SMTP/CalDAV later). |
-| `mailbox-ui` | `crates/ui` | GPUI app: `AppState`, theme, shell, module views, components. |
-| `mailbox` | `apps/mailbox` | Binary: `mailbox [--sample] [--data <path>]`. |
+| `mailbox-core` | `crates/core` | Domain model, SQLite store (rusqlite, migrations), `Command` + undo/redo. No UI, no network. Sample data (`sample`) only under `cfg(test)` or the `dev` feature. |
+| `mailbox-sync` | `crates/sync` | Protocol backends behind `trait MailBackend` (IMAP/SMTP), sync engine + worker threads, OAuth2, server discovery, .eml/.mbox. |
+| `mailbox-ui` | `crates/ui` | GPUI app: `AppState`, theme, shell, module views, components, `sync_bridge`, onboarding. |
+| `mailbox` | `apps/mailbox` | Binary: `mailbox [--data <path>]`, default `<data dir>/mailbox.db` (`mailbox_ui::data_dir()`). |
+
+## Mail sync
+
+```
+Add account wizard ── test_connection (IMAP login + LIST, SMTP EHLO/AUTH) ──▶ keychain + store
+       │                                                    (AccountServers + account.<id>.auth)
+       ▼
+sync_bridge::start_account ──▶ WorkerHandle (thread, + IDLE thread) ──SyncEvent──▶ bridge ──Command──▶ Store
+compose Send ──▶ <data>/outbox/<id>.json (Bcc, In-Reply-To, References, read receipt)
+             └─▶ QueueSend → Outbox folder ──▶ SMTP ──▶ APPEND to server Sent (not Gmail) ──▶ local Sent
+```
+
+- No account → `onboarding.rs` replaces the content area (Settings stays reachable).
+- `AppState::sync_summary()` (`SyncPhase`: no account / idle + last synced / syncing / offline /
+  error, plus unsent count) feeds the status area; F9 = Send/Receive, Work Offline toggle.
+- A failed send stays in the Outbox with an error toast + Retry (no silent auto-retry).
+- `Command::DeleteAccount` removes an account's local data (not undoable); the bridge also drops
+  its sync state, attachments and keychain secrets.
+- Tests: `crates/sync/tests/fake_servers.rs` runs the real backend against in-process fake IMAP
+  and SMTP servers on 127.0.0.1.
 
 ## Data flow
 
@@ -72,7 +92,7 @@ icons `components::IconName` (full Lucide set). Light/dark follows the system; S
 | ribbon / palette / search | `crates/ui/src/ribbon.rs`, `command_palette.rs`, `search.rs` |
 | settings / dialogs | `crates/ui/src/settings/`, `crates/ui/src/dialogs/` |
 | sync | `crates/sync/` |
-| sample data | `crates/core/src/sample.rs` |
+| sample data (tests / `dev` feature only) | `crates/core/src/sample.rs` |
 
 Shared additions (a `Command` variant, a store query, a component) are additive: append, don't reshape.
 

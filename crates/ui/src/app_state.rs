@@ -43,6 +43,32 @@ impl Module {
     }
 }
 
+/// What the sync engine is doing, for the status area (set by `sync_bridge`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyncPhase {
+    /// No account syncs (none configured yet).
+    #[default]
+    NoAccount,
+    /// Up to date (see [`SyncSummary::last_synced`]).
+    Idle,
+    Syncing,
+    /// Work Offline is on.
+    Offline,
+    /// The last attempt failed (see [`SyncSummary::detail`]); it is retried automatically.
+    Error,
+}
+
+/// Structured sync status. [`AppState::sync_status`] is the same as one line of text.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SyncSummary {
+    pub phase: SyncPhase,
+    pub last_synced: Option<chrono::DateTime<chrono::Local>>,
+    /// Progress or error text.
+    pub detail: SharedString,
+    /// Outbox messages whose last send attempt failed (Send/Receive retries them).
+    pub unsent: usize,
+}
+
 /// Events for the shell (toasts). Views normally just observe the entity.
 #[derive(Debug, Clone)]
 pub enum AppEvent {
@@ -59,6 +85,7 @@ pub struct AppState {
     search_query: String,
     /// Sync status line (set by `sync_bridge`).
     sync_status: SharedString,
+    sync_summary: SyncSummary,
 }
 
 impl EventEmitter<AppEvent> for AppState {}
@@ -85,6 +112,7 @@ impl AppState {
             selected_message: None,
             search_query: String::new(),
             sync_status: SharedString::default(),
+            sync_summary: SyncSummary::default(),
         }
     }
 
@@ -209,6 +237,17 @@ impl AppState {
         let status = status.into();
         if self.sync_status != status {
             self.sync_status = status;
+            cx.notify();
+        }
+    }
+
+    pub fn sync_summary(&self) -> &SyncSummary {
+        &self.sync_summary
+    }
+
+    pub fn set_sync_summary(&mut self, summary: SyncSummary, cx: &mut Context<Self>) {
+        if self.sync_summary != summary {
+            self.sync_summary = summary;
             cx.notify();
         }
     }

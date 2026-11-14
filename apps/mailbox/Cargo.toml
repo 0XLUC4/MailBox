@@ -10,7 +10,6 @@ name = "mailbox"
 path = "src/main.rs"
 
 [dependencies]
-chrono.workspace = true
 mailbox-core.workspace = true
 mailbox-ui.workspace = true
 

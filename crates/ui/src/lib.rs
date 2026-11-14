@@ -7,8 +7,10 @@ pub mod calendar;
 pub mod command_palette;
 pub mod components;
 pub mod compose;
+pub mod dav_bridge;
 pub mod dialogs;
 pub mod mail;
+pub mod onboarding;
 pub mod people;
 pub mod ribbon;
 pub mod search;
@@ -17,6 +19,7 @@ pub mod shell;
 pub mod sync_bridge;
 pub mod tasks;
 pub mod theme;
+pub mod titlebar;
 
 // App-wide actions (ribbon, command palette, shortcuts).
 pub mod actions;
@@ -33,13 +36,13 @@ pub mod receipts;
 pub mod shortcuts;
 pub mod system_integration;
 
-use gpui::{
-    App, AppContext as _, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
-};
+use gpui::{App, AppContext as _, KeyBinding, WindowBounds, WindowOptions, px, size};
 use mailbox_core::Store;
 
 use crate::app_state::AppState;
 use crate::shell::Shell;
+
+pub use crate::sync_bridge::data_dir;
 
 gpui::actions!(
     mailbox,
@@ -72,14 +75,11 @@ pub fn run_with(store: Store, mailto: Option<String>) {
 
             let state = cx.new(|_| AppState::new(store));
             sync_bridge::init(state.clone(), cx);
+            dav_bridge::init(state.clone(), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1360.), px(860.)), cx)),
                 window_min_size: Some(size(px(900.), px(560.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Mailbox".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
+                ..titlebar::window_options("Mailbox")
             };
             let shell_state = state.clone();
             let opened = gpui::open_window(options, cx, |window, cx| {

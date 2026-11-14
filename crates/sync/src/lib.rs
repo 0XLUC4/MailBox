@@ -10,11 +10,13 @@
 //! - [`worker`]: background thread (+ optional IDLE thread) driven by channels.
 //! - [`mime`], [`thread`], [`formats`]: RFC 5322 parsing, conversation threading, .eml/.mbox.
 //! - [`config`], [`oauth`]: account server settings, OS keyring credentials, OAuth2 PKCE.
+//! - [`dav`]: CalDAV/CardDAV discovery and two-way sync of calendars and contacts.
 //!
 //! Backends never write to the store: the UI bridge turns events into `mailbox_core::Command`s.
 
 pub mod backend;
 pub mod config;
+pub mod dav;
 pub mod engine;
 pub mod formats;
 pub mod imap_smtp;

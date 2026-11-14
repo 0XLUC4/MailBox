@@ -35,6 +35,8 @@ pub enum Command {
     },
     SaveMessage(Box<Message>),
     SaveAccount(Box<Account>),
+    /// Removes an account and all its local data (not undoable: the inverse is a no-op).
+    DeleteAccount(Id),
     SaveFolder(Box<Folder>),
     DeleteFolder(Id),
     SaveCalendar(Box<Calendar>),
@@ -138,6 +140,7 @@ impl Command {
             Self::DeleteMessages { ids } => format!("Delete {}", count(ids)),
             Self::SaveMessage(_) => "Save message".into(),
             Self::SaveAccount(_) => "Save account".into(),
+            Self::DeleteAccount(_) => "Remove account".into(),
             Self::SaveFolder(_) => "Save folder".into(),
             Self::DeleteFolder(_) => "Delete folder".into(),
             Self::SaveCalendar(_) => "Save calendar".into(),
@@ -227,6 +230,10 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
         Command::SaveMessage(message) => save(store, *message, Command::SaveMessage, |id| {
             Command::DeleteMessages { ids: vec![id] }
         }),
+        Command::DeleteAccount(id) => {
+            store.delete_account(id)?;
+            Ok(Command::Batch(vec![]))
+        }
         Command::SaveAccount(account) => {
             // Accounts are never deleted through commands: undoing a creation is not supported.
             let previous = store.get::<Account>(account.id)?;
