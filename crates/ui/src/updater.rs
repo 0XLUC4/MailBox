@@ -105,7 +105,7 @@ impl Updater {
         cx.spawn(async move |this, cx| match task.await {
             Ok(()) => cx.update(|cx| cx.quit()),
             Err(err) => {
-                eprintln!("mailbox: update failed: {err}");
+                crate::log::error(format_args!("update failed: {err}"));
                 this.update(cx, |updater, cx| {
                     updater.installing = false;
                     updater.install_error = Some(err);

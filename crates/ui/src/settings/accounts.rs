@@ -362,7 +362,9 @@ fn confirm_remove_dav(account: DavAccount, window: &mut Window, cx: &mut App) {
                     let _ = credentials::delete(dav_config::DAV_PASSWORD_SERVICE, account.login());
                     dav_bridge::reload(cx);
                 }
-                Err(err) => eprintln!("mailbox: cannot update {}: {err}", path.display()),
+                Err(err) => {
+                    crate::log::error(format_args!("cannot update {}: {err}", path.display()))
+                }
             }
             cx.refresh_windows();
         },

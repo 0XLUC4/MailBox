@@ -745,7 +745,7 @@ impl ReadingPaneView {
             .is_some()
     }
 
-    /// The message body: HTML in the system web engine on a white "paper", exactly as sent;
+    /// The message body: HTML in the system web engine, exactly as sent;
     /// otherwise our renderer in the app theme. Also returns "has remote content".
     fn body(
         &mut self,
@@ -768,22 +768,20 @@ impl ReadingPaneView {
                     remote
                 }
             };
-            // Blank paper until the webview exists (it is created in the background).
-            let paper = div()
-                .size_full()
-                .bg(gpui::white())
-                .when_some(web, |el, web| {
-                    let key = format!("{}-{}-{}", message.id, u8::from(allowed), html.len());
-                    web.load(key, || web_page(message, html, allowed));
-                    el.child(webview::paper(web))
-                });
+            // Nothing painted under the webview: until it exists (created in the background), or
+            // if the system fails to show it, the app background shows, not a white void.
+            let paper = div().size_full().when_some(web, |el, web| {
+                let key = format!("{}-{}-{}", message.id, u8::from(allowed), html.len());
+                web.load(key, || web_page(message, html, allowed));
+                el.child(webview::paper(web))
+            });
             let paper = div()
                 .flex_1()
                 .min_h(px(0.))
                 .mx(SPACE_4)
                 .mb(SPACE_4)
-                .p(px(1.))
-                .bg(t.border)
+                .border_1()
+                .border_color(t.border)
                 .child(paper);
             let remote = remote || self.blocked.contains(&message.id);
             return (paper.into_any_element(), remote);
@@ -843,9 +841,9 @@ impl ReadingPaneView {
                     match web {
                         Ok(web) => this.web = Some(web),
                         Err(err) => {
-                            eprintln!(
+                            crate::log::error(format_args!(
                                 "mail webview unavailable, using the built-in renderer: {err}"
-                            );
+                            ));
                             this.web_failed = true;
                         }
                     }

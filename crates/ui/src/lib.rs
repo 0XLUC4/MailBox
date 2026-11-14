@@ -31,6 +31,7 @@ pub mod attachments;
 pub mod auto_reply;
 pub mod everyday;
 pub mod later;
+pub mod log;
 pub mod notifications;
 pub mod print;
 pub mod receipts;
@@ -101,7 +102,7 @@ pub fn run_with(store: Store, mailto: Option<String>) {
                     handle.window_id()
                 }
                 Err(err) => {
-                    eprintln!("mailbox: failed to open window: {err:#}");
+                    crate::log::error(format_args!("failed to open window: {err:#}"));
                     cx.quit();
                     return;
                 }

@@ -70,18 +70,22 @@ fn send_line(port: u16, payload: &str) -> std::io::Result<bool> {
 pub fn listen(state: Entity<AppState>, main_window: AnyWindowHandle, cx: &mut App) {
     let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
         Ok(listener) => listener,
-        Err(err) => return eprintln!("mailbox: single-instance listener failed: {err}"),
+        Err(err) => {
+            return crate::log::error(format_args!("single-instance listener failed: {err}"));
+        }
     };
     let port = match listener.local_addr() {
         Ok(address) => address.port(),
-        Err(err) => return eprintln!("mailbox: single-instance listener failed: {err}"),
+        Err(err) => {
+            return crate::log::error(format_args!("single-instance listener failed: {err}"));
+        }
     };
     let path = port_file();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Err(err) = std::fs::write(&path, port.to_string()) {
-        return eprintln!("mailbox: cannot write {}: {err}", path.display());
+        return crate::log::error(format_args!("cannot write {}: {err}", path.display()));
     }
 
     let (sender, received) = channel::<String>();

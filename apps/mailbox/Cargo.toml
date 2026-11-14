@@ -14,6 +14,7 @@ path = "src/main.rs"
 mailbox-core.workspace = true
 mailbox-ui.workspace = true
 mailbox-updater.workspace = true
+mailbox-window-handle.workspace = true
 
 [dev-dependencies]
 resvg.workspace = true

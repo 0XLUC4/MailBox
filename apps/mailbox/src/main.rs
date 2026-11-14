@@ -7,6 +7,11 @@
 //!
 //! `mailto:...`: open compose (how Windows launches the default mail app). When Mailbox is
 //! already running, the URL is handed to that window and this process exits.
+//!
+//! Release builds are Windows GUI programs (no console window); errors and panics go to
+//! `<data dir>/logs` (`mailbox_ui::log`). Debug builds keep their console.
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -52,12 +57,15 @@ fn open_store(args: &Args) -> Result<Store, String> {
 }
 
 fn main() -> ExitCode {
+    // First, while the process has one thread: lets the mail webview show (see the function).
+    mailbox_window_handle::host_child_windows();
     // After an in-app update: wait for the previous version to exit, delete its old exe.
     mailbox_updater::finish_pending_update();
+    mailbox_ui::log::init();
     let args = match parse_args(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(message) => {
-            eprintln!("{message}");
+            mailbox_ui::log::error(&message);
             return ExitCode::from(2);
         }
     };
@@ -71,7 +79,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(message) => {
-            eprintln!("mailbox: {message}");
+            mailbox_ui::log::error(&message);
             ExitCode::FAILURE
         }
     }

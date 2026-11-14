@@ -251,7 +251,7 @@ mod platform {
             })
             .show();
         if let Err(err) = result {
-            eprintln!("mailbox: notification failed: {err}");
+            crate::log::error(format_args!("notification failed: {err}"));
         }
     }
 }

@@ -4011,6 +4011,7 @@ dependencies = [
  "mailbox-core",
  "mailbox-ui",
  "mailbox-updater",
+ "mailbox-window-handle",
  "resvg 0.45.1",
 ]
 
