@@ -3862,8 +3862,10 @@ dependencies = [
 name = "mailbox"
 version = "0.1.0"
 dependencies = [
+ "embed-resource",
  "mailbox-core",
  "mailbox-ui",
+ "resvg 0.45.1",
 ]
 
 [[package]]

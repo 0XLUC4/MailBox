@@ -42,9 +42,10 @@ pub fn confirm(
     cx: &mut App,
 ) {
     let on_confirm = Rc::new(on_confirm);
-    window.open_alert_dialog(cx, move |alert, _, _| {
+    window.open_alert_dialog(cx, move |alert, _, cx| {
         let on_confirm = on_confirm.clone();
         alert
+            .cancel_text(tr(cx, "Cancel"))
             .title(confirm.title.clone())
             .description(confirm.description.clone())
             .show_cancel(true)
@@ -72,18 +73,7 @@ pub fn open_about(window: &mut Window, cx: &mut App) {
                 .items_center()
                 .gap(SPACE_2)
                 .py(SPACE_4)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(56.))
-                        .mb(SPACE_2)
-                        .rounded(px(14.))
-                        .bg(t.accent)
-                        .text_color(t.on_accent)
-                        .child(Icon::new(IconName::Mailbox).size(px(30.))),
-                )
+                .child(crate::titlebar::app_icon(px(64.)).mb(SPACE_2))
                 .child(
                     div()
                         .text_size(TEXT_LG)
@@ -94,7 +84,7 @@ pub fn open_about(window: &mut Window, cx: &mut App) {
                     div()
                         .text_size(TEXT_SM)
                         .text_color(t.text_muted)
-                        .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                        .child(tr(cx, "Version {}").replace("{}", env!("CARGO_PKG_VERSION"))),
                 )
                 .child(
                     div()
@@ -103,17 +93,18 @@ pub fn open_about(window: &mut Window, cx: &mut App) {
                         .text_center()
                         .text_size(TEXT_SM)
                         .text_color(t.text_muted)
-                        .child(
+                        .child(tr(
+                            cx,
                             "Mail, calendar, contacts and tasks in one fast native app. \
                              Built in Rust with GPUI.",
-                        ),
+                        )),
                 )
                 .child(
                     div()
                         .mt(SPACE_2)
                         .text_size(TEXT_XS)
                         .text_color(t.text_subtle)
-                        .child("Icons by Lucide (ISC)"),
+                        .child(tr(cx, "Icons by Lucide (ISC)")),
                 ),
         )
     });

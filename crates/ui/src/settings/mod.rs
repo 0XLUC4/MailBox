@@ -2,6 +2,7 @@
 //! language, about. Preferences persist in the store (`mailbox_core::settings`) through undoable
 //! commands; this view also keeps the [`prefs`] global and the theme in sync with the store.
 
+pub mod accounts;
 pub mod controls;
 pub mod i18n;
 mod prefs;
@@ -10,18 +11,18 @@ use gpui::component::switch::Switch;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::settings::{
-    AccountServers, Density, Language, ReadingPane, RibbonMode, Settings, ThemePreference,
-    WeekStart,
+    Density, Language, ReadingPane, RibbonMode, Settings, ThemePreference, WeekStart,
 };
 
-use crate::actions::{OpenAbout, OpenAddAccount, OpenRules, OpenSignatures};
+use crate::actions::{OpenAbout, OpenRules, OpenSignatures};
 use crate::app_state::AppState;
 use crate::components::{Button, Icon, IconName};
 use crate::dialogs;
 use crate::theme::{
-    ACCENTS, RADIUS_FULL, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8,
-    TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XL, hex, theme,
+    ACCENTS, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TEXT_LG, TEXT_MD,
+    TEXT_XL, theme,
 };
+pub use accounts::ordered_accounts;
 use controls::{segmented, setting_row, stepper, swatches};
 pub use i18n::tr;
 pub use prefs::{prefs, update_settings};
@@ -222,7 +223,7 @@ impl SettingsView {
             setting_row(tr(cx, "Accent colour"), None, accent, cx).into_any_element(),
             setting_row(
                 tr(cx, "Density"),
-                Some("Row height in lists.".into()),
+                Some(tr(cx, "Row height in lists.").into()),
                 density,
                 cx,
             )
@@ -230,7 +231,7 @@ impl SettingsView {
             setting_row(tr(cx, "Font size"), None, font, cx).into_any_element(),
             setting_row(
                 tr(cx, "Ribbon layout"),
-                Some("One compact row, or large buttons in labelled groups.".into()),
+                Some(tr(cx, "One compact row, or large buttons in labelled groups.").into()),
                 ribbon,
                 cx,
             )
@@ -286,7 +287,7 @@ impl SettingsView {
             setting_row(tr(cx, "Mark as read when opened"), None, mark_read, cx).into_any_element(),
             setting_row(
                 tr(cx, "Signatures"),
-                Some("Added to new messages and replies.".into()),
+                Some(tr(cx, "Added to new messages and replies.").into()),
                 signatures,
                 cx,
             )
@@ -341,7 +342,7 @@ impl SettingsView {
             setting_row(tr(cx, "Week starts on"), None, week, cx).into_any_element(),
             setting_row(
                 tr(cx, "Work hours"),
-                Some("Highlighted in day and week views.".into()),
+                Some(tr(cx, "Highlighted in day and week views.").into()),
                 div()
                     .flex()
                     .flex_row()
@@ -369,7 +370,7 @@ impl SettingsView {
         vec![
             setting_row(
                 tr(cx, "New mail alerts"),
-                Some("Desktop notification when mail arrives.".into()),
+                Some(tr(cx, "Desktop notification when mail arrives.").into()),
                 toggle("notify-mail", settings.notify_new_mail, |s, v| {
                     s.notify_new_mail = v
                 }),
@@ -398,94 +399,7 @@ impl SettingsView {
     }
 
     fn render_accounts(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let t = theme(cx).clone();
-        let store = self.state.read(cx).store();
-        let accounts: Vec<_> = store
-            .list_accounts()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|account| {
-                let servers = AccountServers::load(store, account.id).ok().flatten();
-                (account, servers)
-            })
-            .collect();
-        let mut rows: Vec<AnyElement> = accounts
-            .into_iter()
-            .map(|(account, servers)| {
-                let detail = match servers {
-                    Some(servers) if !servers.provider.is_empty() => {
-                        format!("{} · {}", account.email, servers.provider)
-                    }
-                    Some(servers) => format!("{} · {}", account.email, servers.imap.host),
-                    None => account.email.clone(),
-                };
-                let state = self.state.clone();
-                let account_id = account.id;
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(SPACE_3)
-                    .py(SPACE_3)
-                    .border_b_1()
-                    .border_color(t.border_subtle)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(32.))
-                            .rounded(RADIUS_FULL)
-                            .bg(hex(account.color))
-                            .text_color(t.on_accent)
-                            .child(Icon::new(IconName::AtSign).size(px(16.))),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .child(div().text_size(TEXT_MD).child(account.name.clone()))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(TEXT_SM)
-                                    .text_color(t.text_muted)
-                                    .child(detail),
-                            ),
-                    )
-                    .child(
-                        Button::new(("account-edit", account_id as u64))
-                            .icon(IconName::Settings)
-                            .label(tr(cx, "Edit"))
-                            .on_click(move |_, window, cx| {
-                                dialogs::account::open_account_settings(
-                                    state.clone(),
-                                    account_id,
-                                    window,
-                                    cx,
-                                )
-                            }),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-        rows.push(
-            div()
-                .pt(SPACE_3)
-                .child(
-                    Button::new("account-add")
-                        .primary()
-                        .icon(IconName::Plus)
-                        .label(tr(cx, "Add account"))
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(OpenAddAccount), cx)
-                        }),
-                )
-                .into_any_element(),
-        );
-        rows
+        accounts::rows(&self.state, cx)
     }
 
     fn render_rules(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -503,10 +417,12 @@ impl SettingsView {
             setting_row(
                 tr(cx, "Rules"),
                 Some(
-                    format!(
-                        "{count} rule(s). Rules run on new mail, in order, and can be run on a \
-                         folder at any time."
+                    tr(
+                        cx,
+                        "{} rule(s). Rules run on new mail, in order, and can be run on a \
+                         folder at any time.",
                     )
+                    .replace("{}", &count.to_string())
                     .into(),
                 ),
                 Button::new("manage-rules")
@@ -537,7 +453,7 @@ impl SettingsView {
         vec![
             setting_row(
                 tr(cx, "Language"),
-                Some("Menus, ribbon and settings.".into()),
+                Some(tr(cx, "Menus, ribbon and settings.").into()),
                 language,
                 cx,
             )
@@ -549,7 +465,11 @@ impl SettingsView {
         vec![
             setting_row(
                 "Mailbox",
-                Some(format!("Version {}", env!("CARGO_PKG_VERSION")).into()),
+                Some(
+                    tr(cx, "Version {}")
+                        .replace("{}", env!("CARGO_PKG_VERSION"))
+                        .into(),
+                ),
                 Button::new("about")
                     .icon(IconName::Info)
                     .label(tr(cx, "About Mailbox"))
@@ -572,7 +492,7 @@ fn everyday_rows(cx: &App) -> Vec<AnyElement> {
                action: fn() -> Box<dyn Action>| {
         setting_row(
             tr(cx, title),
-            Some(hint.into()),
+            Some(tr(cx, hint).into()),
             Button::new(id)
                 .icon(icon)
                 .label(tr(cx, label))
@@ -641,7 +561,7 @@ impl Render for SettingsView {
             Button::new("open-rules-shortcut")
                 .ghost()
                 .icon(IconName::ListFilter)
-                .label("Open rules dialog")
+                .label(tr(cx, "Open rules dialog"))
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenRules), cx))
         });
 

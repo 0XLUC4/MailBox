@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Mailbox app icon: black rounded square, white geometric "M". Source of assets/png/*.png and assets/icon.ico
+       (regenerate: cargo run -p mailbox, example make_icon). -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="#111111"/>
+  <path fill="#ffffff" d="M152 346 V166 H196 L256 258 L316 166 H360 V346 H318 V242 L272 312 H240 L194 242 V346 Z"/>
+</svg>

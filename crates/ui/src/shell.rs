@@ -99,7 +99,7 @@ impl Shell {
             .update(cx, |state, cx| state.set_module(module, cx));
     }
 
-    fn render_rail(&self, active: Module, t: &Theme) -> impl IntoElement {
+    fn render_rail(&self, active: Module, t: &Theme, cx: &App) -> impl IntoElement {
         let rail_item = |module: Module| {
             let state = self.state.clone();
             let is_active = module == active;
@@ -125,7 +125,7 @@ impl Shell {
                         .size(px(36.))
                         .icon_size(px(18.))
                         .active(is_active)
-                        .tooltip(module.label())
+                        .tooltip(crate::settings::tr(cx, module.label()))
                         .on_click(move |_, _, cx| {
                             state.update(cx, |state, cx| state.set_module(module, cx));
                         }),
@@ -153,7 +153,7 @@ impl Shell {
 
     /// Top bar doubling as the window title bar: empty space drags the window,
     /// caption buttons sit flush right.
-    fn render_top_bar(&self, active: Module, t: &Theme) -> impl IntoElement {
+    fn render_top_bar(&self, active: Module, t: &Theme, cx: &App) -> impl IntoElement {
         div()
             .flex()
             .flex_row()
@@ -174,7 +174,9 @@ impl Shell {
                     .min_w(px(0.))
                     .text_size(TEXT_LG)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(active.label()),
+                    .gap(px(10.))
+                    .child(titlebar::app_icon(px(18.)))
+                    .child(crate::settings::tr(cx, active.label())),
             ))
             .child(div().flex_shrink_0().w(px(420.)).child(self.search.clone()))
             .child(titlebar::drag_area(
@@ -232,7 +234,7 @@ impl Render for Shell {
             .bg(t.background)
             .text_color(t.text)
             .text_size(TEXT_MD)
-            .child(self.render_rail(active, &t))
+            .child(self.render_rail(active, &t, cx))
             .child(
                 div()
                     .flex()
@@ -240,7 +242,7 @@ impl Render for Shell {
                     .flex_1()
                     .min_w(px(0.))
                     .h_full()
-                    .child(self.render_top_bar(active, &t))
+                    .child(self.render_top_bar(active, &t, cx))
                     .child(self.ribbon.clone())
                     .child(
                         div()
