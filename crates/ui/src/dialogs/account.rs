@@ -1,7 +1,13 @@
-//! "Add account" wizard (email -> detected or manual IMAP/SMTP settings) and account settings.
+//! "Add account" wizard and account settings.
 //!
-//! Passwords are not asked here: they never go to the Mailbox database (the sync backend
-//! requests them and stores them in the OS keychain).
+//! Adding: email + password (or app password) → server settings from the built-in provider
+//! table, else looked up online ([`config::discover`]: only the domain is sent) → "Test
+//! connection" (IMAP login + folder list, SMTP EHLO + AUTH) → the password goes to the OS
+//! keychain (never the Mailbox database), the account is created with the server's folders and
+//! sync starts at once. Gmail / Outlook can sign in with OAuth when a client id is configured
+//! (field below, or `MAILBOX_GOOGLE_CLIENT_ID` / `MAILBOX_MS_CLIENT_ID`).
+//!
+//! Settings: edit name, colour and servers, enter a new password, test, remove the account.
 
 use std::cell::Cell;
 
@@ -10,29 +16,24 @@ use gpui::component::input::{Input, InputEvent, InputState};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::settings::{
-    AccountServers, Provider, Security, ServerEndpoint, detect_provider, email_domain,
-    suggest_servers,
+    self as core_settings, AccountServers, Provider, Security, ServerEndpoint, detect_provider,
+    email_domain, suggest_servers,
 };
-use mailbox_core::{Account, Calendar, Command, Folder, FolderRole, Id};
+use mailbox_core::{Account, Calendar, Command, Folder, FolderRole, Id, command};
+use mailbox_sync::RemoteFolder;
+use mailbox_sync::config::{self, AccountConfig, AuthConfig, OAuthProvider, credentials};
+use mailbox_sync::imap_smtp::test_connection;
+use mailbox_sync::oauth::OAuthSettings;
 
-use super::{card, field, section_title};
+use super::{Confirm, card, confirm, field, section_title};
 use crate::app_state::{AppState, Module};
 use crate::components::{Button, Icon, IconName};
 use crate::settings::controls::{segmented, swatches};
 use crate::settings::tr;
+use crate::sync_bridge;
 use crate::theme::{
     ACCENTS, DEFAULT_ACCENT, ICON_SIZE, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_SM, theme,
 };
-
-/// Folders created with every new account (name, role).
-const DEFAULT_FOLDERS: [(&str, FolderRole); 6] = [
-    ("Inbox", FolderRole::Inbox),
-    ("Drafts", FolderRole::Drafts),
-    ("Sent", FolderRole::Sent),
-    ("Archive", FolderRole::Archive),
-    ("Junk", FolderRole::Junk),
-    ("Trash", FolderRole::Trash),
-];
 
 const SECURITY: [(&str, Security); 3] = [
     ("SSL/TLS", Security::Tls),
@@ -40,10 +41,41 @@ const SECURITY: [(&str, Security); 3] = [
     ("None", Security::None),
 ];
 
+/// Setting key of the OAuth client id entered for a provider.
+fn client_id_key(provider: OAuthProvider) -> &'static str {
+    match provider {
+        OAuthProvider::Google => "oauth.google.client_id",
+        OAuthProvider::Microsoft => "oauth.microsoft.client_id",
+    }
+}
+
+/// Client id from the settings, else from the environment.
+fn configured_client_id(state: &AppState, provider: OAuthProvider) -> Option<String> {
+    core_settings::get_json::<String>(state.store(), client_id_key(provider))
+        .ok()
+        .flatten()
+        .filter(|id| !id.trim().is_empty())
+        .or_else(|| {
+            OAuthSettings::for_provider(provider, None)
+                .ok()
+                .map(|settings| settings.client_id)
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
     Identity,
     Servers,
+}
+
+/// State of the server lookup / connection test.
+#[derive(Debug, Clone)]
+enum Check {
+    Idle,
+    Running(&'static str),
+    /// Succeeded with exactly these settings; the server's folders.
+    Passed(Box<AccountConfig>, Vec<RemoteFolder>),
+    Failed(SharedString),
 }
 
 /// Inputs of one server endpoint.
@@ -109,13 +141,20 @@ pub struct AccountDialog {
     step: Step,
     name: Entity<InputState>,
     email: Entity<InputState>,
+    password: Entity<InputState>,
     username: Entity<InputState>,
+    client_id: Entity<InputState>,
     imap: EndpointInputs,
     smtp: EndpointInputs,
     color: u32,
     provider: Option<&'static Provider>,
+    /// Where the server settings came from, shown on the servers step.
+    source: Option<SharedString>,
+    /// Sign in with OAuth instead of a password.
+    use_oauth: bool,
+    check: Check,
     error: Option<SharedString>,
-    _subscription: Subscription,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl AccountDialog {
@@ -130,10 +169,21 @@ impl AccountDialog {
         let servers = account_id
             .and_then(|id| AccountServers::load(store, id).ok().flatten())
             .unwrap_or_default();
+        let auth: AuthConfig = account_id
+            .and_then(|id| {
+                core_settings::get_json(store, &config::auth_setting_key(id))
+                    .ok()
+                    .flatten()
+            })
+            .unwrap_or_default();
         let (name, email, color) = account
             .map(|account| (account.name, account.email, account.color))
             .unwrap_or_else(|| (String::new(), String::new(), DEFAULT_ACCENT));
         let provider = detect_provider(&email);
+        let oauth = OAuthProvider::for_host(&servers.imap.host);
+        let client_id = oauth
+            .and_then(|provider| configured_client_id(state.read(cx), provider))
+            .unwrap_or_default();
 
         let name = cx.new(|cx| {
             InputState::new(window, cx)
@@ -145,28 +195,52 @@ impl AccountDialog {
                 .placeholder("you@example.com")
                 .default_value(email)
         });
+        let password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(if account_id.is_some() {
+                    "Leave empty to keep the saved password"
+                } else {
+                    "Password or app password"
+                })
+        });
         let username = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Usually your email address")
                 .default_value(servers.username.clone())
         });
+        let client_id = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Optional: enables “Sign in with Google / Microsoft”")
+                .default_value(client_id)
+        });
         let imap = EndpointInputs::new(&servers.imap, window, cx);
         let smtp = EndpointInputs::new(&servers.smtp, window, cx);
-        let subscription = cx.subscribe_in(
-            &email,
-            window,
-            |this, input, event: &InputEvent, window, cx| match event {
-                InputEvent::Change => {
-                    this.provider = detect_provider(&input.read(cx).value());
-                    this.error = None;
-                    cx.notify();
+        let on_enter =
+            |this: &mut Self, event: &InputEvent, window: &mut Window, cx: &mut Context<Self>| {
+                if matches!(event, InputEvent::PressEnter { .. }) && this.step == Step::Identity {
+                    this.next(window, cx);
                 }
-                InputEvent::PressEnter { .. } if this.step == Step::Identity => {
-                    this.next(window, cx)
-                }
-                _ => {}
-            },
-        );
+            };
+        let subscriptions = vec![
+            cx.subscribe_in(
+                &email,
+                window,
+                move |this, input, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        this.provider = detect_provider(&input.read(cx).value());
+                        this.error = None;
+                        cx.notify();
+                    }
+                    on_enter(this, event, window, cx);
+                },
+            ),
+            cx.subscribe_in(
+                &password,
+                window,
+                move |this, _, event: &InputEvent, window, cx| on_enter(this, event, window, cx),
+            ),
+        ];
         Self {
             state,
             account_id,
@@ -177,13 +251,18 @@ impl AccountDialog {
             },
             name,
             email,
+            password,
             username,
+            client_id,
             imap,
             smtp,
             color,
             provider,
+            source: None,
+            use_oauth: matches!(auth, AuthConfig::OAuth2 { .. }),
+            check: Check::Idle,
             error: None,
-            _subscription: subscription,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -191,23 +270,43 @@ impl AccountDialog {
         self.email.read(cx).value().trim().to_owned()
     }
 
+    fn password_value(&self, cx: &App) -> Option<String> {
+        let password = self.password.read(cx).value().to_string();
+        (!password.is_empty()).then_some(password)
+    }
+
     fn fail(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.error = Some(message.into());
         cx.notify();
     }
 
-    /// Identity step -> servers step, pre-filled from the provider table.
+    /// OAuth provider of the email's well-known provider (Gmail, Outlook.com).
+    fn oauth_provider_for_email(&self) -> Option<OAuthProvider> {
+        let provider = self.provider?;
+        OAuthProvider::for_host(provider.imap.0)
+    }
+
+    /// OAuth provider of the IMAP server currently entered.
+    fn oauth_provider(&self, cx: &App) -> Option<OAuthProvider> {
+        OAuthProvider::for_host(self.imap.host.read(cx).value().trim())
+    }
+
+    // ---------- identity → servers ----------
+
+    /// Identity step → servers step: settings from the provider table, else looked up online.
     fn next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.check, Check::Running(_)) {
+            return;
+        }
         let email = self.email_value(cx);
-        let Some(servers) = suggest_servers(&email) else {
+        let Some(guess) = suggest_servers(&email) else {
             return self.fail("Enter a valid email address", cx);
         };
+        if !self.use_oauth && self.password_value(cx).is_none() {
+            return self.fail("Enter your password (or an app password)", cx);
+        }
+        self.error = None;
         self.provider = detect_provider(&email);
-        self.imap.fill(&servers.imap, window, cx);
-        self.smtp.fill(&servers.smtp, window, cx);
-        self.username.update(cx, |input, cx| {
-            input.set_value(servers.username, window, cx)
-        });
         if self.name.read(cx).value().trim().is_empty() {
             let name = self.provider.map_or_else(
                 || email_domain(&email).unwrap_or_default(),
@@ -216,10 +315,71 @@ impl AccountDialog {
             self.name
                 .update(cx, |input, cx| input.set_value(name, window, cx));
         }
-        self.step = Step::Servers;
-        self.error = None;
+        if let Some(provider) = self.provider {
+            let source = format!("{} settings detected.", provider.name);
+            return self.show_servers(guess, source, window, cx);
+        }
+
+        self.check = Check::Running("Looking up the server settings…");
         cx.notify();
+        let lookup_email = email.clone();
+        let lookup = cx
+            .background_executor()
+            .spawn(async move { config::discover(&lookup_email) });
+        cx.spawn_in(window, async move |this, cx| {
+            let found = lookup.await;
+            this.update_in(cx, |this, window, cx| {
+                this.check = Check::Idle;
+                let (servers, source) = match found {
+                    Some(servers) => {
+                        let source = if servers.provider.is_empty() {
+                            "Settings found online.".to_owned()
+                        } else {
+                            format!("{} settings found online.", servers.provider)
+                        };
+                        (servers, source)
+                    }
+                    None => (
+                        guess,
+                        "Provider not recognised: we guessed the usual settings. Check them \
+                         with your provider."
+                            .to_owned(),
+                    ),
+                };
+                this.show_servers(servers, source, window, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
+
+    fn show_servers(
+        &mut self,
+        servers: AccountServers,
+        source: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.imap.fill(&servers.imap, window, cx);
+        self.smtp.fill(&servers.smtp, window, cx);
+        let client_id = OAuthProvider::for_host(&servers.imap.host)
+            .filter(|_| self.client_id.read(cx).value().trim().is_empty())
+            .and_then(|provider| configured_client_id(self.state.read(cx), provider));
+        if let Some(client_id) = client_id {
+            self.client_id
+                .update(cx, |input, cx| input.set_value(client_id, window, cx));
+        }
+        self.username.update(cx, |input, cx| {
+            input.set_value(servers.username, window, cx)
+        });
+        self.source = Some(source.into());
+        self.step = Step::Servers;
+        cx.notify();
+        // Test right away: most users never need to touch the servers.
+        self.run_test(false, window, cx);
+    }
+
+    // ---------- test / save ----------
 
     fn servers(&self, cx: &App) -> Result<AccountServers, String> {
         let username = self.username.read(cx).value().trim().to_owned();
@@ -235,33 +395,183 @@ impl AccountDialog {
         })
     }
 
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn auth(&self, cx: &App) -> Result<AuthConfig, String> {
+        if !self.use_oauth {
+            return Ok(AuthConfig::Password);
+        }
+        let provider = self
+            .oauth_provider(cx)
+            .ok_or("Sign-in with a browser only works with Gmail and Outlook servers")?;
+        let client_id = self.client_id.read(cx).value().trim().to_owned();
+        if client_id.is_empty() {
+            return Err(format!(
+                "Enter the OAuth client id of your {} app, or use an app password",
+                provider.label()
+            ));
+        }
+        Ok(AuthConfig::OAuth2 {
+            provider,
+            client_id: Some(client_id),
+        })
+    }
+
+    fn config(&self, cx: &App) -> Result<AccountConfig, String> {
         let email = self.email_value(cx);
         if email_domain(&email).is_none() {
-            return self.fail("Enter a valid email address", cx);
+            return Err("Enter a valid email address".into());
         }
-        let servers = match self.servers(cx) {
-            Ok(servers) => servers,
+        Ok(AccountConfig::from_servers(
+            &email,
+            &self.servers(cx)?,
+            self.auth(cx)?,
+        ))
+    }
+
+    /// Tests the connection in the background; with `then_save`, saves when it passes.
+    fn run_test(&mut self, then_save: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.check, Check::Running(_)) {
+            return;
+        }
+        let config = match self.config(cx) {
+            Ok(config) => config,
             Err(message) => return self.fail(message, cx),
         };
+        let password = match config.auth {
+            AuthConfig::Password => self.password_value(cx),
+            AuthConfig::OAuth2 { .. } => None,
+        };
+        if self.account_id.is_none() && !self.use_oauth && password.is_none() {
+            return self.fail("Enter your password (or an app password)", cx);
+        }
+        self.error = None;
+        self.check = Check::Running(if self.use_oauth {
+            "Finish signing in in your browser…"
+        } else {
+            "Testing the connection…"
+        });
+        cx.notify();
+        let tested = config.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { test_connection(&tested, password.as_deref()) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(folders) => {
+                        this.check = Check::Passed(Box::new(config), folders);
+                        if then_save {
+                            this.save(window, cx);
+                        }
+                    }
+                    Err(message) => this.check = Check::Failed(message.into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Primary button: adding requires a passed test with the current settings.
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let config = match self.config(cx) {
+            Ok(config) => config,
+            Err(message) => return self.fail(message, cx),
+        };
+        let tested = matches!(&self.check, Check::Passed(passed, _) if **passed == config);
+        if self.account_id.is_none() && !tested {
+            return self.run_test(true, window, cx);
+        }
+        self.save(window, cx);
+    }
+
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let config = self.config(cx);
+        let (config, servers) = match config.and_then(|config| Ok((config, self.servers(cx)?))) {
+            Ok(values) => values,
+            Err(message) => return self.fail(message, cx),
+        };
+        if let (AuthConfig::Password, Some(password)) = (&config.auth, self.password_value(cx))
+            && let Err(err) = credentials::set_password(&config.email, &password)
+        {
+            return self.fail(
+                format!("The password could not be saved in the system keychain: {err}"),
+                cx,
+            );
+        }
         let name = match self.name.read(cx).value().trim() {
-            "" => email.clone(),
+            "" => config.email.clone(),
             name => name.to_owned(),
         };
         let account = Account {
             id: self.account_id.unwrap_or(0),
             name,
-            email,
+            email: config.email.clone(),
             color: self.color,
         };
+        let mut extra = vec![];
+        if let Some(id) = self.account_id {
+            match core_settings::set_json_command(config::auth_setting_key(id), &config.auth) {
+                Ok(command) => extra.push(command),
+                Err(err) => return self.fail(err.to_string(), cx),
+            }
+        }
+        if let Some(provider) = self.oauth_provider(cx) {
+            let client_id = self.client_id.read(cx).value().trim().to_owned();
+            match core_settings::set_json_command(client_id_key(provider), &client_id) {
+                Ok(command) => extra.push(command),
+                Err(err) => return self.fail(err.to_string(), cx),
+            }
+        }
         let saved = match self.account_id {
-            Some(id) => save_account(&self.state, id, account, servers, cx),
-            None => create_account(&self.state, account, servers, cx),
+            Some(id) => save_account(&self.state, id, account, servers, extra, cx).then_some(id),
+            None => {
+                let folders = match &self.check {
+                    Check::Passed(_, folders) => folders.clone(),
+                    _ => Vec::new(),
+                };
+                create_account(
+                    &self.state,
+                    account,
+                    servers,
+                    &config.auth,
+                    extra,
+                    &folders,
+                    cx,
+                )
+            }
         };
-        if saved {
+        if let Some(id) = saved {
+            sync_bridge::start_account(id, cx);
             window.close_dialog(cx);
         }
     }
+
+    /// Closes this dialog and asks to confirm the removal.
+    fn remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(account_id) = self.account_id else {
+            return;
+        };
+        let email = self.email_value(cx);
+        window.close_dialog(cx);
+        confirm(
+            Confirm {
+                title: format!("Remove {email}?").into(),
+                description: "Its mail, folders and calendars are deleted from this computer \
+                              and its password is removed from the system keychain. Nothing \
+                              is deleted on the server."
+                    .into(),
+                ok: "Remove account".into(),
+                danger: true,
+            },
+            move |_, cx| sync_bridge::remove_account(account_id, cx),
+            window,
+            cx,
+        );
+    }
+
+    // ---------- rendering ----------
 
     fn render_endpoint(&self, title: &'static str, which: Which, cx: &mut Context<Self>) -> Div {
         let inputs = match which {
@@ -310,6 +620,70 @@ impl AccountDialog {
             .child(field("Security", security, cx))
     }
 
+    /// A tinted one-line message (detected settings, test result...).
+    fn banner(icon: IconName, color: Hsla, text: impl Into<SharedString>) -> Div {
+        div()
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap(SPACE_2)
+            .p(SPACE_2)
+            .rounded(px(6.))
+            .bg(color.alpha(0.1))
+            .text_size(TEXT_SM)
+            .child(Icon::new(icon).size(ICON_SIZE).text_color(color))
+            .child(div().flex_1().child(text.into()))
+    }
+
+    /// OAuth sign-in button, or how to use an app password, for Gmail / Outlook addresses.
+    fn render_oauth_hint(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let provider = self.oauth_provider_for_email()?;
+        let t = theme(cx).clone();
+        let has_client_id = configured_client_id(self.state.read(cx), provider).is_some();
+        let hint = div()
+            .text_size(TEXT_SM)
+            .text_color(t.text_muted)
+            .child(match provider {
+                OAuthProvider::Google => {
+                    "With two-step verification on, Gmail needs an app password: Google account \
+                     › Security › App passwords."
+                }
+                OAuthProvider::Microsoft => {
+                    "With two-step verification on, Outlook needs an app password: Microsoft \
+                     account › Security › Advanced security options › App passwords."
+                }
+            });
+        if !has_client_id {
+            return Some(div().child(hint).child(
+                div().text_size(TEXT_SM).text_color(t.text_subtle).child(format!(
+                    "To sign in with {} in your browser instead, set an OAuth client id in the \
+                     server settings or the {} environment variable.",
+                    provider.label(),
+                    match provider {
+                        OAuthProvider::Google => "MAILBOX_GOOGLE_CLIENT_ID",
+                        OAuthProvider::Microsoft => "MAILBOX_MS_CLIENT_ID",
+                    }
+                )),
+            ));
+        }
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(SPACE_2)
+                .child(
+                    Button::new("account-oauth")
+                        .icon(IconName::Globe)
+                        .label(format!("Sign in with {}", provider.label()))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.use_oauth = true;
+                            this.next(window, cx);
+                        })),
+                )
+                .child(hint),
+        )
+    }
+
     fn render_identity(&self, cx: &mut Context<Self>) -> Div {
         let t = theme(cx).clone();
         let view = cx.entity().downgrade();
@@ -327,12 +701,17 @@ impl AccountDialog {
                     provider.name
                 ))
         });
+        let adding = self.account_id.is_none();
         div()
             .flex()
             .flex_col()
             .gap(SPACE_3)
             .child(field("Email address", Input::new(&self.email), cx))
             .children(detected)
+            .when(adding, |el| {
+                el.child(field("Password", Input::new(&self.password), cx))
+                    .children(self.render_oauth_hint(cx))
+            })
             .child(field("Account name", Input::new(&self.name), cx))
             .child(field(
                 "Colour",
@@ -354,60 +733,99 @@ impl AccountDialog {
             ))
     }
 
-    fn render_servers(&self, cx: &mut Context<Self>) -> Div {
+    fn render_check(&self, cx: &mut Context<Self>) -> Option<Div> {
         let t = theme(cx).clone();
-        let banner = match (self.account_id, self.provider) {
-            (Some(_), _) => None,
-            (None, Some(provider)) => Some((
-                IconName::ShieldCheck,
+        match &self.check {
+            Check::Idle => None,
+            Check::Running(text) => Some(Self::banner(IconName::Clock, t.accent, *text)),
+            Check::Passed(_, folders) => Some(Self::banner(
+                IconName::Check,
                 t.success,
                 format!(
-                    "{} settings detected. Review them, then add the account.",
-                    provider.name
+                    "Connected: sign-in works for receiving and sending ({} folders).",
+                    folders.len()
                 ),
             )),
-            (None, None) => Some((
-                IconName::CircleAlert,
-                t.warning,
-                "Provider not recognised: we guessed the usual settings. Check them with your \
-                 provider."
-                    .to_owned(),
-            )),
-        };
+            Check::Failed(message) => {
+                Some(Self::banner(IconName::CircleX, t.danger, message.clone()))
+            }
+        }
+    }
+
+    fn render_servers(&self, cx: &mut Context<Self>) -> Div {
+        let t = theme(cx).clone();
+        let editing = self.account_id.is_some();
+        let source = (!editing)
+            .then(|| self.source.clone())
+            .flatten()
+            .map(|text| {
+                let (icon, color) = if self.provider.is_some() || !text.contains("guessed") {
+                    (IconName::ShieldCheck, t.success)
+                } else {
+                    (IconName::CircleAlert, t.warning)
+                };
+                Self::banner(icon, color, text)
+            });
+        let oauth = self.oauth_provider(cx);
+        let auth_line = oauth.map(|provider| {
+            let (text, toggle) = if self.use_oauth {
+                (
+                    format!("Signing in with {} in your browser.", provider.label()),
+                    "Use a password instead",
+                )
+            } else {
+                (
+                    "Signing in with a password or app password.".to_owned(),
+                    "Sign in with the browser instead",
+                )
+            };
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(SPACE_2)
+                .text_size(TEXT_SM)
+                .text_color(t.text_muted)
+                .child(div().flex_1().child(text))
+                .child(
+                    Button::new("account-auth-toggle")
+                        .ghost()
+                        .compact()
+                        .label(toggle)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.use_oauth = !this.use_oauth;
+                            this.check = Check::Idle;
+                            cx.notify();
+                        })),
+                )
+        });
         div()
             .flex()
             .flex_col()
             .gap(SPACE_3)
-            .when_some(banner, |el, (icon, color, text)| {
-                el.child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(SPACE_2)
-                        .p(SPACE_2)
-                        .rounded(px(6.))
-                        .bg(color.alpha(0.1))
-                        .text_size(TEXT_SM)
-                        .child(Icon::new(icon).size(ICON_SIZE).text_color(color))
-                        .child(div().flex_1().child(text)),
-                )
-            })
-            .when(self.account_id.is_some(), |el| {
-                el.child(self.render_identity(cx))
-            })
+            .children(source)
+            .when(editing, |el| el.child(self.render_identity(cx)))
             .child(
                 card(cx)
                     .child(self.render_endpoint("INCOMING MAIL (IMAP)", Which::Imap, cx))
                     .child(self.render_endpoint("OUTGOING MAIL (SMTP)", Which::Smtp, cx)),
             )
             .child(field("Username", Input::new(&self.username), cx))
-            .child(
-                div()
-                    .text_size(TEXT_SM)
-                    .text_color(t.text_subtle)
-                    .child("Passwords are never stored in the Mailbox database."),
-            )
+            .children(auth_line)
+            .when(!self.use_oauth, |el| {
+                el.child(field(
+                    if editing { "New password" } else { "Password" },
+                    Input::new(&self.password),
+                    cx,
+                ))
+            })
+            .when(oauth.is_some(), |el| {
+                el.child(field("OAuth client id", Input::new(&self.client_id), cx))
+            })
+            .child(div().text_size(TEXT_SM).text_color(t.text_subtle).child(
+                "Passwords are kept in the system keychain, never in the Mailbox \
+                         database.",
+            ))
     }
 }
 
@@ -422,11 +840,11 @@ impl Render for AccountDialog {
         let t = theme(cx).clone();
         let editing = self.account_id.is_some();
         let (heading, subtitle) = match (editing, self.step) {
-            (true, _) => ("Account settings", "Name, colour and server settings."),
+            (true, _) => ("Account settings", "Name, colour, servers and password."),
             (false, Step::Identity) => (
                 "Add an account",
-                "Enter your email address: Mailbox detects the server settings of Gmail, \
-                 Outlook, iCloud, Yahoo, Fastmail, OVH and more.",
+                "Enter your email address and password: Mailbox finds the server settings \
+                 and checks that everything works.",
             ),
             (false, Step::Servers) => ("Server settings", "Step 2 of 2"),
         };
@@ -434,17 +852,34 @@ impl Render for AccountDialog {
             (false, Step::Identity) => self.render_identity(cx),
             _ => self.render_servers(cx),
         };
+        let running = matches!(self.check, Check::Running(_));
 
         let back = (!editing && self.step == Step::Servers).then(|| {
             Button::new("account-back")
                 .ghost()
                 .icon(IconName::ArrowLeft)
                 .label("Back")
+                .disabled(running)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.step = Step::Identity;
+                    this.use_oauth = false;
+                    this.check = Check::Idle;
                     this.error = None;
                     cx.notify();
                 }))
+        });
+        let remove = editing.then(|| {
+            Button::new("account-remove")
+                .ghost()
+                .icon(IconName::Trash)
+                .label("Remove account…")
+                .on_click(cx.listener(|this, _, window, cx| this.remove(window, cx)))
+        });
+        let test = (self.step == Step::Servers).then(|| {
+            Button::new("account-test")
+                .label("Test connection")
+                .disabled(running)
+                .on_click(cx.listener(|this, _, window, cx| this.run_test(false, window, cx)))
         });
         let primary_label = match (editing, self.step) {
             (true, _) => tr(cx, "Save"),
@@ -454,6 +889,7 @@ impl Render for AccountDialog {
         let primary = Button::new("account-primary")
             .primary()
             .label(primary_label)
+            .disabled(running)
             .on_click(cx.listener(|this, _, window, cx| {
                 if this.account_id.is_none() && this.step == Step::Identity {
                     this.next(window, cx);
@@ -491,6 +927,7 @@ impl Render for AccountDialog {
                     .overflow_y_scroll()
                     .child(body),
             )
+            .children(self.render_check(cx))
             .when_some(self.error.clone(), |el, error| {
                 el.child(div().text_size(TEXT_SM).text_color(t.danger).child(error))
             })
@@ -501,87 +938,135 @@ impl Render for AccountDialog {
                     .items_center()
                     .gap(SPACE_2)
                     .children(back)
+                    .children(remove)
                     .child(div().flex_1())
                     .child(
                         Button::new("account-cancel")
                             .label(tr(cx, "Cancel"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
+                    .children(test)
                     .child(primary),
             )
     }
 }
 
-/// Creates the account, its default folders, a calendar and its server settings.
+/// Folder position: well-known folders first, in the usual order.
+fn role_position(role: FolderRole) -> i64 {
+    match role {
+        FolderRole::Inbox => 0,
+        FolderRole::Drafts => 1,
+        FolderRole::Sent => 2,
+        FolderRole::Archive => 3,
+        FolderRole::Junk => 4,
+        FolderRole::Trash => 5,
+        _ => 10,
+    }
+}
+
+/// Creates the account with the server's folders (parents first), a calendar, its server
+/// settings and auth method. Returns the new account id.
 fn create_account(
     state: &Entity<AppState>,
     account: Account,
     servers: AccountServers,
+    auth: &AuthConfig,
+    extra: Vec<Command>,
+    folders: &[RemoteFolder],
     cx: &mut App,
-) -> bool {
+) -> Option<Id> {
     state.update(cx, |state, cx| {
         let email = account.email.clone();
         let color = account.color;
-        if !state.run(Command::SaveAccount(Box::new(account)), cx) {
-            return false;
+        if !state.run_untracked(Command::SaveAccount(Box::new(account)), cx) {
+            return None;
         }
-        let created = state.store().list_accounts().ok().and_then(|accounts| {
+        let account_id = state.store().list_accounts().ok().and_then(|accounts| {
             accounts
                 .into_iter()
                 .filter(|account| account.email == email)
                 .map(|account| account.id)
                 .max()
         });
-        let Some(account_id) = created else {
+        let Some(account_id) = account_id else {
             state.report_error("The new account could not be found", cx);
-            return false;
+            return None;
         };
-        let mut commands: Vec<Command> = DEFAULT_FOLDERS
+
+        // Folder ids are needed for children, so each folder is its own command.
+        let mut folders = folders.to_vec();
+        if !folders
             .iter()
-            .enumerate()
-            .map(|(position, (name, role))| {
-                Command::SaveFolder(Box::new(Folder {
-                    id: 0,
-                    account_id,
-                    parent_id: None,
-                    name: (*name).to_owned(),
-                    role: *role,
-                    position: position as i64,
-                }))
-            })
-            .collect();
-        commands.push(Command::SaveCalendar(Box::new(Calendar {
+            .any(|folder| folder.role == FolderRole::Inbox)
+        {
+            folders.push(RemoteFolder::new("INBOX", None, FolderRole::Inbox));
+        }
+        folders.sort_by_key(|folder| folder.path.len());
+        let mut created: Vec<(String, Id)> = Vec::new();
+        for remote in &folders {
+            let parent_id = remote.parent.as_ref().and_then(|parent| {
+                created
+                    .iter()
+                    .find(|(path, _)| path == parent)
+                    .map(|(_, id)| *id)
+            });
+            let folder = Folder {
+                id: 0,
+                account_id,
+                parent_id,
+                name: if remote.role == FolderRole::Inbox {
+                    "Inbox".to_owned()
+                } else {
+                    remote.name.clone()
+                },
+                role: remote.role,
+                position: role_position(remote.role),
+            };
+            match command::apply(state.store(), Command::SaveFolder(Box::new(folder))) {
+                Ok(Command::DeleteFolder(id)) => created.push((remote.path.clone(), id)),
+                Ok(_) => {}
+                Err(err) => state.report_error(err, cx),
+            }
+        }
+
+        let mut commands = vec![Command::SaveCalendar(Box::new(Calendar {
             id: 0,
             account_id,
             name: "Calendar".into(),
             color,
-        })));
-        match servers.command(account_id) {
-            Ok(command) => commands.push(command),
+        }))];
+        let settings = servers.command(account_id).and_then(|servers| {
+            let auth = core_settings::set_json_command(config::auth_setting_key(account_id), auth)?;
+            Ok([servers, auth])
+        });
+        match settings {
+            Ok(settings) => commands.extend(settings),
             Err(err) => {
                 state.report_error(err, cx);
-                return false;
+                return None;
             }
         }
-        if !state.run(Command::Batch(commands), cx) {
-            return false;
+        commands.extend(extra);
+        if !state.run_untracked(Command::Batch(commands), cx) {
+            return None;
         }
         let inbox = state.store().folder_by_role(account_id, FolderRole::Inbox);
         if let Ok(Some(inbox)) = inbox {
             state.set_module(Module::Mail, cx);
             state.select_folder(Some(inbox.id), cx);
         }
-        state.notify_info(format!("Account {email} added"), cx);
-        true
+        state.notify_info(format!("Account {email} added: syncing…"), cx);
+        Some(account_id)
     })
 }
 
-/// Updates an existing account and its server settings in one undoable step.
+/// Updates an existing account, its server settings and auth in one undoable step.
 fn save_account(
     state: &Entity<AppState>,
     account_id: Id,
     account: Account,
     servers: AccountServers,
+    extra: Vec<Command>,
     cx: &mut App,
 ) -> bool {
     state.update(cx, |state, cx| {
@@ -592,10 +1077,9 @@ fn save_account(
                 return false;
             }
         };
-        state.run(
-            Command::Batch(vec![Command::SaveAccount(Box::new(account)), servers]),
-            cx,
-        )
+        let mut commands = vec![Command::SaveAccount(Box::new(account)), servers];
+        commands.extend(extra);
+        state.run(Command::Batch(commands), cx)
     })
 }
 

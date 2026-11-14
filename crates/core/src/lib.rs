@@ -1,4 +1,5 @@
-//! Mailbox core: domain model, SQLite store, commands (undo/redo) and sample data.
+//! Mailbox core: domain model, SQLite store, commands (undo/redo).
+//! Sample data ([`sample`]) is only compiled for tests or with the `dev` feature.
 //!
 //! Every mutation goes through [`Command`] + [`History::run`]; reads go straight to [`Store`].
 
@@ -8,6 +9,7 @@ pub mod error;
 pub mod mail_ops;
 pub mod model;
 pub mod people;
+#[cfg(any(test, feature = "dev"))]
 pub mod sample;
 pub mod store;
 pub mod todo;

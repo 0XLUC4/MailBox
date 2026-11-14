@@ -14,7 +14,7 @@ use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use crate::backend::{
     FolderStatus, MailBackend, RawMessage, RemoteFlags, RemoteFolder, Uid, classify_folder,
 };
-use crate::config::{AccountConfig, AuthConfig, Security, credentials};
+use crate::config::{AccountConfig, AuthConfig, Security, ServerConfig, credentials};
 use crate::oauth::{OAuthSettings, TokenProvider, xoauth2};
 use crate::{SyncError, SyncResult};
 
@@ -63,6 +63,13 @@ impl ImapSmtpBackend {
             session: None,
             capabilities: Capabilities::default(),
         })
+    }
+
+    /// Uses `password` instead of the OS credential store (account setup, tests).
+    pub fn with_password(config: AccountConfig, password: impl Into<String>) -> SyncResult<Self> {
+        let mut backend = Self::new(config)?;
+        backend.secret = Secret::Password(Some(password.into()));
+        Ok(backend)
     }
 
     fn credential(&mut self) -> SyncResult<Credential> {
@@ -318,13 +325,7 @@ impl MailBackend for ImapSmtpBackend {
         let envelope =
             Envelope::new(Some(from), to).map_err(|err| SyncError::Protocol(err.to_string()))?;
         let transport = self.smtp_transport()?;
-        transport.send_raw(&envelope, raw).map_err(|err| {
-            if err.is_permanent() {
-                SyncError::Protocol(err.to_string())
-            } else {
-                SyncError::Connection(err.to_string())
-            }
-        })?;
+        transport.send_raw(&envelope, raw).map_err(smtp_error)?;
         Ok(())
     }
 
@@ -339,6 +340,69 @@ impl MailBackend for ImapSmtpBackend {
             let outcome = idle.wait_while(imap::extensions::idle::stop_on_any)?;
             Ok(outcome == imap::extensions::idle::WaitOutcome::MailboxChanged)
         })
+    }
+}
+
+/// Account setup check: IMAP login + folder list, then SMTP EHLO + AUTH. Returns the server's
+/// folders. Errors are sentences for the user. `password: None` = OAuth sign-in (or the
+/// stored password).
+pub fn test_connection(
+    config: &AccountConfig,
+    password: Option<&str>,
+) -> Result<Vec<RemoteFolder>, String> {
+    let incoming = |err: SyncError| explain("Incoming mail (IMAP)", &config.imap, &err);
+    let outgoing = |err: SyncError| explain("Outgoing mail (SMTP)", &config.smtp, &err);
+    let mut backend = match password {
+        Some(password) => ImapSmtpBackend::with_password(config.clone(), password),
+        None => ImapSmtpBackend::new(config.clone()),
+    }
+    .map_err(incoming)?;
+    let folders = backend
+        .connect()
+        .and_then(|()| backend.list_folders())
+        .map_err(incoming)?;
+    backend.disconnect();
+    let transport = backend.smtp_transport().map_err(outgoing)?;
+    match transport.test_connection() {
+        Ok(true) => Ok(folders),
+        Ok(false) => Err(outgoing(SyncError::Connection(
+            "the server closed the connection".into(),
+        ))),
+        Err(err) => Err(outgoing(smtp_error(err))),
+    }
+}
+
+/// A user-facing explanation of a connection test failure.
+fn explain(stage: &str, server: &ServerConfig, err: &SyncError) -> String {
+    let hint = match err {
+        SyncError::Auth(_) => "the server rejected the user name or password. If the account \
+                               uses two-step verification (Gmail, Outlook, iCloud, Yahoo...), \
+                               create an app password and use it here."
+            .to_owned(),
+        SyncError::Connection(_) | SyncError::Io(_) => format!(
+            "cannot reach {}:{}. Check the server name, the port, the security setting and \
+             your internet connection.",
+            server.host, server.port
+        ),
+        SyncError::Credentials(_) => {
+            "the password could not be read from the system keychain.".to_owned()
+        }
+        _ => "the server answered with an error.".to_owned(),
+    };
+    format!("{stage}: {hint} ({err})")
+}
+
+/// SMTP failures: 535 & co. are authentication errors, other permanent ones protocol errors,
+/// the rest (network, 4xx) are retryable connection errors.
+fn smtp_error(err: lettre::transport::smtp::Error) -> SyncError {
+    let text = err.to_string();
+    let lower = text.to_lowercase();
+    if lower.contains("535") || lower.contains("authentication") {
+        SyncError::Auth(text)
+    } else if err.is_permanent() {
+        SyncError::Protocol(text)
+    } else {
+        SyncError::Connection(text)
     }
 }
 

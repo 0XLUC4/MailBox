@@ -61,7 +61,13 @@ impl OAuthSettings {
         let env = |name: &str| std::env::var(format!("{prefix}_{name}")).ok();
         let client_id = client_id
             .map(str::to_owned)
+            .filter(|id| !id.trim().is_empty())
             .or_else(|| env("CLIENT_ID"))
+            .or_else(|| {
+                (provider == OAuthProvider::Microsoft)
+                    .then(|| std::env::var("MAILBOX_MS_CLIENT_ID").ok())
+                    .flatten()
+            })
             .filter(|id| !id.trim().is_empty())
             .ok_or_else(|| {
                 SyncError::Auth(format!("no OAuth client id: set {prefix}_CLIENT_ID"))

@@ -13,5 +13,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 chrono-tz.workspace = true
 
+[features]
+# Sample data generator (`mailbox_core::sample`), for tests and demos. Off in the shipped app.
+dev = []
+
 [lints]
 workspace = true

@@ -1,19 +1,19 @@
-//! `mailbox [--sample] [--data <path>]`
+//! `mailbox [--data <path>]`
 //!
-//! - `--data <path>`: SQLite database file (default: `<data dir>/mailbox/mailbox.db`).
-//! - `--sample`: fill the database with sample data if it is empty. Without `--data`,
-//!   the sample runs in memory so your real database is never touched.
+//! Opens the user's database: `<data dir>/mailbox.db` (`%APPDATA%\mailbox` on Windows,
+//! `$XDG_DATA_HOME/mailbox` or `~/.local/share/mailbox` elsewhere, `MAILBOX_DATA_DIR`
+//! overrides), or the SQLite file given with `--data`. A new database has no account: the app
+//! starts on the onboarding screen.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use mailbox_core::{Store, sample};
+use mailbox_core::Store;
 
-const USAGE: &str = "usage: mailbox [--sample] [--data <path>]";
+const USAGE: &str = "usage: mailbox [--data <path>]";
 
 #[derive(Debug, Default)]
 struct Args {
-    sample: bool,
     data: Option<PathBuf>,
 }
 
@@ -21,7 +21,6 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut parsed = Args::default();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--sample" => parsed.sample = true,
             "--data" => {
                 let path = args.next().ok_or("--data needs a path")?;
                 parsed.data = Some(PathBuf::from(path));
@@ -33,40 +32,16 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(parsed)
 }
 
-/// Platform data directory: %APPDATA% on Windows, $XDG_DATA_HOME or ~/.local/share elsewhere.
-fn default_data_path() -> PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .or_else(|| std::env::var_os("XDG_DATA_HOME"))
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("mailbox").join("mailbox.db")
-}
-
 fn open_store(args: &Args) -> Result<Store, String> {
-    let store = match (&args.data, args.sample) {
-        (Some(path), _) => Store::open(path),
-        (None, true) => Store::open_in_memory(),
-        (None, false) => {
-            let path = default_data_path();
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
-            }
-            Store::open(&path)
-        }
+    let path = args
+        .data
+        .clone()
+        .unwrap_or_else(|| mailbox_ui::data_dir().join("mailbox.db"));
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)
+            .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
     }
-    .map_err(|err| format!("cannot open database: {err}"))?;
-
-    let is_empty = store
-        .list_accounts()
-        .map_err(|err| err.to_string())?
-        .is_empty();
-    if args.sample && is_empty {
-        sample::generate(&store, chrono::Utc::now())
-            .map_err(|err| format!("cannot generate sample data: {err}"))?;
-    }
-    Ok(store)
+    Store::open(&path).map_err(|err| format!("cannot open {}: {err}", path.display()))
 }
 
 fn main() -> ExitCode {
@@ -99,10 +74,25 @@ mod tests {
 
     #[test]
     fn parses_flags() {
-        let args = parse(&["--sample", "--data", "x.db"]).unwrap();
-        assert!(args.sample);
+        let args = parse(&["--data", "x.db"]).unwrap();
         assert_eq!(args.data, Some(PathBuf::from("x.db")));
+        assert!(parse(&[]).unwrap().data.is_none());
         assert!(parse(&["--data"]).is_err());
+        assert!(parse(&["--sample"]).is_err(), "sample data is not shipped");
         assert!(parse(&["--nope"]).is_err());
+    }
+
+    #[test]
+    fn opens_a_fresh_database_without_accounts() {
+        let dir = std::env::temp_dir().join(format!("mailbox-main-{}", std::process::id()));
+        let path = dir.join("nested").join("mailbox.db");
+        let store = open_store(&Args {
+            data: Some(path.clone()),
+        })
+        .unwrap();
+        assert!(store.list_accounts().unwrap().is_empty());
+        assert!(path.exists());
+        drop(store);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
