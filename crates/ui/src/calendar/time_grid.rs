@@ -18,6 +18,19 @@ const GUTTER: f32 = 56.;
 const ALL_DAY_LANE: f32 = 22.;
 const MIN_EVENT_HEIGHT: f32 = 20.;
 
+/// `+01:00` → `UTC+1`, `-03:30` → `UTC-3:30` (fits the narrow time gutter).
+fn short_offset(offset: &str) -> String {
+    let (sign, rest) = offset.split_at(offset.len().min(1));
+    let (hours, minutes) = rest.split_once(':').unwrap_or((rest, "00"));
+    let hours = hours.trim_start_matches('0');
+    let hours = if hours.is_empty() { "0" } else { hours };
+    if minutes == "00" {
+        format!("UTC{sign}{hours}")
+    } else {
+        format!("UTC{sign}{hours}:{minutes}")
+    }
+}
+
 fn minutes_to_px(minutes: i64) -> f32 {
     minutes as f32 / 60. * HOUR_HEIGHT
 }
@@ -133,7 +146,7 @@ impl CalendarView {
         t: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let offset = Local::now().format("UTC%:z").to_string();
+        let offset = short_offset(&Local::now().format("%:z").to_string());
         let show_lanes = lanes.len() > 1;
         let days: Vec<AnyElement> = data
             .days
@@ -614,7 +627,7 @@ impl CalendarView {
                     div()
                         .absolute()
                         .top(px(minutes_to_px(quick.start)))
-                        .h(px(minutes_to_px(quick.end - quick.start).max(44.)))
+                        .h(px(minutes_to_px(quick.end - quick.start).max(52.)))
                         .left(px(2.))
                         .right(px(4.))
                         .px(SPACE_2)
@@ -629,6 +642,7 @@ impl CalendarView {
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div()
+                                .truncate()
                                 .text_size(TEXT_XS)
                                 .text_color(t.accent)
                                 .font_weight(FontWeight::MEDIUM)
@@ -889,4 +903,17 @@ pub(super) fn chip_body(
                     })
                 }),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_offset;
+
+    #[test]
+    fn short_offsets() {
+        assert_eq!(short_offset("+01:00"), "UTC+1");
+        assert_eq!(short_offset("-03:30"), "UTC-3:30");
+        assert_eq!(short_offset("+00:00"), "UTC+0");
+        assert_eq!(short_offset("+10:00"), "UTC+10");
+    }
 }

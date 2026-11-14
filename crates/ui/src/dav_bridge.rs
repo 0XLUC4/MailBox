@@ -25,10 +25,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::calendar::{self, CalendarCommand, EventDetails, EventSnapshot};
 use mailbox_core::people::{self, ContactCard, PeopleCommand};
-use mailbox_core::{
-    Account, Address, Attachment, Calendar, CalendarEvent, Command, Id, Importance, Message,
-    MessageFlags, command,
-};
+use mailbox_core::{Account, Address, Calendar, CalendarEvent, Command, Id, command};
 use mailbox_sync::SyncResult;
 use mailbox_sync::dav::http::{Auth, DavClient};
 use mailbox_sync::dav::sync::AccountOutcome;
@@ -642,7 +639,8 @@ impl DavBridge {
             .map(|()| InvitationRoute::Email)
     }
 
-    /// Puts an invitation email (iMIP) in the account's Outbox; the mail sync sends it.
+    /// Puts an invitation email (iMIP) in the Outbox of the calendar's account (the first
+    /// account for a local calendar); the mail sync sends it.
     fn queue_imip(
         &mut self,
         account_id: Id,
@@ -650,25 +648,13 @@ impl DavBridge {
         details: &EventDetails,
         cx: &mut Context<Self>,
     ) -> Option<()> {
-        let account = self
-            .state
-            .read(cx)
-            .store()
-            .get::<Account>(account_id)
-            .ok()
-            .flatten()?;
-        let outbox = sync_bridge::outbox_folder(account_id, cx)?;
-        let (name, mime, ics) = items::invitation_attachment(event, details);
+        let account = crate::calendar::sending_account(self.state.read(cx).store(), account_id)?;
         let to: Vec<Address> = event
             .attendees
             .iter()
             .map(|a| a.address.clone())
             .filter(|a| !a.email.eq_ignore_ascii_case(&account.email))
             .collect();
-        if to.is_empty() {
-            self.report("The event has no attendee to invite", cx);
-            return None;
-        }
         let when = event
             .start
             .with_timezone(&Local)
@@ -677,49 +663,23 @@ impl DavBridge {
             "{}\n{when}\n{}\n\n{}",
             event.title, event.location, event.description
         );
-        let message = Message {
-            id: 0,
-            account_id,
-            folder_id: outbox,
-            thread_id: details.uid.clone(),
-            from: Address::new(account.name.clone(), account.email.clone()),
+        let state = self.state.clone();
+        let queued = crate::calendar::queue_calendar_mail(
+            &state,
+            &account,
             to,
-            cc: Vec::new(),
-            subject: format!("Invitation: {}", event.title),
-            date: chrono::Utc::now(),
-            preview: body.chars().take(120).collect(),
-            body_text: body,
-            body_html: None,
-            flags: MessageFlags {
-                read: true,
-                ..MessageFlags::default()
-            },
-            importance: Importance::Normal,
-            categories: Vec::new(),
-            attachments: vec![Attachment {
-                name: name.clone(),
-                mime,
-                size: ics.len() as u64,
-            }],
-        };
-        let Some(Command::DeleteMessages { ids }) =
-            self.apply(Command::SaveMessage(Box::new(message)), cx)
-        else {
-            return None;
-        };
-        let id = ids.first().copied()?;
-        // Written before the mail bridge can pick the message up (same thread).
-        let path = sync_bridge::attachment_path(id, &name);
-        let written = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, ics));
-        if let Err(err) = written {
-            self.report(format!("Cannot attach the invitation: {err}"), cx);
-            let _ = self.apply(Command::DeleteMessages { ids }, cx);
-            return None;
+            format!("Invitation: {}", event.title),
+            body,
+            items::invitation_attachment(event, details),
+            cx,
+        );
+        match queued {
+            Ok(()) => Some(()),
+            Err(err) => {
+                self.report(err, cx);
+                None
+            }
         }
-        Some(())
     }
 
     // ---------- status / helpers ----------
@@ -1101,5 +1061,92 @@ impl Render for AddDavAccountDialog {
                     .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
             );
         dialog_frame("dav-body", header, body, messages, footer, window)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone, Utc};
+    use mailbox_core::calendar::{CalendarCommand, EventDetails, LOCAL_ACCOUNT};
+    use mailbox_core::{Calendar, CalendarEvent, History, Store};
+
+    use super::{calendar_items, rows_in_calendar};
+
+    fn event(calendar_id: i64, title: &str, recurrence: Option<&str>) -> CalendarEvent {
+        let start = Utc.with_ymd_and_hms(2026, 11, 16, 9, 0, 0).unwrap();
+        CalendarEvent {
+            id: 0,
+            calendar_id,
+            title: title.into(),
+            location: String::new(),
+            description: String::new(),
+            start,
+            end: start + Duration::hours(1),
+            all_day: false,
+            recurrence: recurrence.map(str::to_owned),
+            attendees: Vec::new(),
+            reminders: Vec::new(),
+            categories: Vec::new(),
+        }
+    }
+
+    /// What a CalDAV sync pushes for a calendar: one resource per series (its modified
+    /// occurrences inside), never the occurrences on their own.
+    #[test]
+    fn calendar_snapshot_groups_series_and_exceptions() {
+        let store = Store::open_in_memory().unwrap();
+        let mut calendar = Calendar {
+            id: 0,
+            account_id: LOCAL_ACCOUNT,
+            name: "Calendar".into(),
+            color: 0x3b82f6,
+        };
+        store.save(&mut calendar).unwrap();
+        let mut history = History::new();
+        let mut save = |event: CalendarEvent| {
+            history
+                .run(
+                    &store,
+                    CalendarCommand::Save {
+                        event: Box::new(event),
+                        details: Box::new(EventDetails::default_for(0)),
+                    }
+                    .into_command(),
+                )
+                .unwrap();
+        };
+        save(event(calendar.id, "Standup", Some("FREQ=DAILY;COUNT=5")));
+        save(event(calendar.id, "Lunch", None));
+        let series = store
+            .query::<CalendarEvent>("WHERE title = 'Standup'", [])
+            .unwrap()
+            .remove(0);
+        let moved = series.start + Duration::days(1);
+        history
+            .run(
+                &store,
+                CalendarCommand::SaveOccurrence {
+                    series_id: series.id,
+                    occurrence: moved,
+                    event: Box::new(CalendarEvent {
+                        id: 0,
+                        start: moved + Duration::hours(2),
+                        end: moved + Duration::hours(3),
+                        recurrence: None,
+                        ..series.clone()
+                    }),
+                    details: Box::new(EventDetails::default_for(0)),
+                }
+                .into_command(),
+            )
+            .unwrap();
+
+        let items = calendar_items(&store, calendar.id);
+        assert_eq!(items.len(), 2, "series + one-off, exception folded in");
+        let standup = items.iter().find(|i| i.local_id == series.id).unwrap();
+        assert_eq!(standup.text.matches("BEGIN:VEVENT").count(), 2);
+        assert!(standup.text.contains("RECURRENCE-ID"));
+        assert_eq!(rows_in_calendar(&store, &standup.uid, calendar.id).len(), 2);
+        assert!(rows_in_calendar(&store, &standup.uid, calendar.id + 1).is_empty());
     }
 }

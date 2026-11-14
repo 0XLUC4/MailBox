@@ -194,7 +194,8 @@ impl Render for Shell {
         }
         let t = theme(cx).clone();
         let active = self.state.read(cx).module();
-        // First run: no account yet → onboarding (Settings stays reachable).
+        // First run: no account yet → onboarding (Settings, the local calendar and tasks
+        // stay reachable).
         let has_account = self
             .state
             .read(cx)
@@ -202,8 +203,13 @@ impl Render for Shell {
             .list_accounts()
             .is_ok_and(|accounts| !accounts.is_empty());
         let content = match active {
-            // People stays reachable: its empty state explains accounts and offers CardDAV.
-            _ if !has_account && !matches!(active, Module::Settings | Module::People) => {
+            // People, Calendar and Tasks stay reachable: they work locally without an account.
+            _ if !has_account
+                && !matches!(
+                    active,
+                    Module::Settings | Module::People | Module::Calendar | Module::Tasks
+                ) =>
+            {
                 crate::onboarding::onboarding(self.state.clone(), cx).into_any_element()
             }
             Module::Mail => self.mail.clone().into_any_element(),
