@@ -928,10 +928,20 @@ impl SyncBridge {
     }
 
     fn save_imported(&mut self, parsed: Vec<ParsedMail>, folder: &Folder, cx: &mut Context<Self>) {
+        let existing = self.subject_threads(folder.account_id, cx);
         let mut count = 0;
         for mut mail in parsed {
             let attachments = std::mem::take(&mut mail.attachments);
             let mut message = mail.message;
+            // Messages without threading headers join the account's conversation with the
+            // same subject, if any.
+            if message
+                .thread_id
+                .starts_with(mailbox_sync::mime::SUBJECT_THREAD)
+                && let Some(thread) = existing.get(&message.thread_id)
+            {
+                message.thread_id = thread.clone();
+            }
             message.account_id = folder.account_id;
             message.folder_id = folder.id;
             message.flags.read = true;
@@ -943,10 +953,30 @@ impl SyncBridge {
                 self.write_attachments(id, attachments, cx);
             }
         }
-        self.info(
-            format!("Imported {count} messages into {}", folder.name),
-            cx,
-        );
+        let noun = if count == 1 { "message" } else { "messages" };
+        self.info(format!("Imported {count} {noun} into {}", folder.name), cx);
+    }
+
+    /// Subject thread key (see `mime::subject_thread`) → thread id of the account's newest
+    /// message with that subject.
+    fn subject_threads(&self, account_id: Id, cx: &App) -> HashMap<String, String> {
+        let store = self.state.read(cx).store();
+        let mut messages: Vec<Message> = store
+            .list_folders(account_id)
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|folder| store.list_messages(folder.id).unwrap_or_default())
+            .collect();
+        messages.sort_by_key(|message| message.date);
+        messages
+            .into_iter()
+            .map(|message| {
+                (
+                    mailbox_sync::mime::subject_thread(&message.subject),
+                    message.thread_id,
+                )
+            })
+            .collect()
     }
 
     fn export_folder(&mut self, folder_id: Id, path: PathBuf, cx: &mut Context<Self>) {

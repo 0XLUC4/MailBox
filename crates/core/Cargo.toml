@@ -19,3 +19,7 @@ dev = []
 
 [lints]
 workspace = true
+
+[[example]]
+name = "seed"
+required-features = ["dev"]

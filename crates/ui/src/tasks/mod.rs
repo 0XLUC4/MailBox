@@ -1218,6 +1218,33 @@ fn reminder_label(at: DateTime<Utc>, today: NaiveDate) -> String {
     )
 }
 
+/// Ribbon / command palette entry points (routed by `crate::actions`).
+impl TasksView {
+    /// Focuses the "Add a task" field.
+    pub(crate) fn action_new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_task
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// Completes the selected task (or unflags the selected message); false when none.
+    pub(crate) fn action_complete(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(selection) = self.selected else {
+            return false;
+        };
+        self.check(selection, cx);
+        true
+    }
+
+    /// Deletes the selected task; false when no task is selected.
+    pub(crate) fn action_delete(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(Selection::Task(id)) = self.selected else {
+            return false;
+        };
+        self.delete_task(id, cx);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::day_label;

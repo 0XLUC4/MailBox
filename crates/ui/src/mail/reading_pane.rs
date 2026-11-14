@@ -253,7 +253,7 @@ impl ReadingPaneView {
                                     }
                                 }),
                         );
-                        message_menu::build(menu, &s_more, vec![id], window, cx)
+                        message_menu::build(menu, &s_more, vec![id], Some(id), window, cx)
                     }),
             )
             .child(div().flex_1())
@@ -397,7 +397,28 @@ impl ReadingPaneView {
                         .border_1()
                         .border_color(t.border_subtle)
                         .overflow_hidden()
-                        .child(img(path).h(px(96.)).max_w(px(160.)))
+                        .w(px(160.))
+                        .h(px(96.))
+                        .bg(t.surface)
+                        .child({
+                            let subtle = t.text_subtle;
+                            img(path)
+                                .size_full()
+                                .object_fit(ObjectFit::Cover)
+                                .with_fallback(move || {
+                                    div()
+                                        .size_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(IconName::ImageOff)
+                                                .size(px(20.))
+                                                .text_color(subtle),
+                                        )
+                                        .into_any_element()
+                                })
+                        })
                         .on_click(move |_, _, cx| {
                             crate::attachments::open(&state, message_id, &name, cx)
                         }),
@@ -737,6 +758,8 @@ impl Render for ReadingPaneView {
 
         let action_bar = self.action_bar(&message, in_role, cx);
         let subject = self.subject_header(&message, &t, cx);
+        // Meeting invitation: Accept / Tentative / Decline (calendar module).
+        let invitation = crate::calendar::invitation_bar(&self.state, message.id, cx);
         let others = thread.len().saturating_sub(1);
         let cards: Vec<AnyElement> = thread
             .iter()
@@ -765,6 +788,7 @@ impl Render for ReadingPaneView {
                     .py(SPACE_4)
                     .gap(SPACE_3)
                     .child(subject)
+                    .children(invitation)
                     .when(others > 0, |el| {
                         el.child(
                             div()

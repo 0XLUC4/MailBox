@@ -36,11 +36,8 @@ pub struct ParsedMail {
 impl ParsedMail {
     /// Sets `message.thread_id` from the threading headers.
     pub fn assign_thread(&mut self, index: &mut ThreadIndex) {
-        let fallback = format!(
-            "local:{}:{}",
-            self.message.date.timestamp(),
-            self.message.subject
-        );
+        // No ids at all (exported or hand-made files): group by subject.
+        let fallback = subject_thread(&self.message.subject);
         self.message.thread_id = index.assign(
             &self.message_id,
             &self.in_reply_to,
@@ -68,11 +65,17 @@ pub fn parse_message(raw: &[u8], received: Option<DateTime<Utc>>) -> SyncResult<
         .and_then(|list| list.first())
         .map(address)
         .unwrap_or_default();
-    let body_text = parsed
-        .body_text(0)
-        .map(|text| text.into_owned())
-        .unwrap_or_default();
     let body_html = parsed.body_html(0).map(|html| html.into_owned());
+    // HTML-only mail: mail-parser's own conversion glues headings, divs and table cells
+    // together ("order!Your parcel"), so convert with block breaks.
+    let html_only = parsed.text_part(0).is_some_and(|part| part.is_text_html());
+    let body_text = match &body_html {
+        Some(html) if html_only => html_text(html),
+        _ => parsed
+            .body_text(0)
+            .map(|text| text.into_owned())
+            .unwrap_or_default(),
+    };
     let attachments: Vec<AttachmentData> = parsed
         .attachments()
         .map(|part| AttachmentData {
@@ -175,6 +178,59 @@ fn importance(importance: Option<&str>, priority: Option<&str>) -> Importance {
         _ => Importance::Normal,
     }
 }
+
+/// Plain text of an HTML body: line breaks after block elements, spaces between cells.
+pub fn html_text(html: &str) -> String {
+    const BLOCKS: [&str; 13] = [
+        "</h1",
+        "</h2",
+        "</h3",
+        "</h4",
+        "</h5",
+        "</h6",
+        "</div",
+        "</tr",
+        "</li",
+        "</table",
+        "</blockquote",
+        "</ul",
+        "</ol",
+    ];
+    let lower = html.to_ascii_lowercase();
+    let mut spaced = String::with_capacity(html.len() + 64);
+    let mut last = 0;
+    for (index, _) in lower.match_indices("</") {
+        let rest = &lower[index..];
+        let boundary = |tag: &str| {
+            rest.starts_with(tag)
+                && rest[tag.len()..].starts_with(|c: char| c == '>' || c.is_whitespace())
+        };
+        let insert = if BLOCKS.iter().any(|tag| boundary(tag)) {
+            "<br>"
+        } else if boundary("</td") || boundary("</th") {
+            " "
+        } else {
+            continue;
+        };
+        spaced.push_str(&html[last..index]);
+        spaced.push_str(insert);
+        last = index;
+    }
+    spaced.push_str(&html[last..]);
+    mail_parser::decoders::html::html_to_text(&spaced)
+}
+
+/// Thread id of messages without threading headers: [`SUBJECT_THREAD`] + the subject
+/// without `Re:` / `Fwd:` prefixes.
+pub fn subject_thread(subject: &str) -> String {
+    format!(
+        "{SUBJECT_THREAD}{}",
+        mailbox_core::compose::conversation_subject(subject)
+    )
+}
+
+/// Prefix of [`subject_thread`] ids.
+pub const SUBJECT_THREAD: &str = "subject:";
 
 /// First [`PREVIEW_LEN`] characters of the text with whitespace collapsed.
 pub fn preview(text: &str) -> String {
@@ -306,5 +362,38 @@ JVBERi0xLjQK\r\n\
         assert_eq!(parsed.receipt_to.map(|a| a.email), Some("ada@b.co".into()));
         let plain = parse_message(b"From: a@b.co\r\nSubject: x\r\n\r\nhi\r\n", None).unwrap();
         assert!(plain.receipt_to.is_none());
+    }
+
+    #[test]
+    fn html_only_mail_keeps_block_breaks() {
+        let raw = b"From: shop@example.com\r\nSubject: Order\r\nContent-Type: text/html\r\n\r\n\
+<h2>Thanks for your order!</h2><div>Your parcel is on its way.</div>\
+<table><tr><td>Item</td><td>Price</td></tr></table>";
+        let parsed = parse_message(raw, None).unwrap();
+        assert!(
+            parsed
+                .message
+                .preview
+                .starts_with("Thanks for your order! Your parcel"),
+            "{}",
+            parsed.message.preview
+        );
+        assert!(parsed.message.body_text.contains("Item Price"));
+    }
+
+    #[test]
+    fn messages_without_ids_thread_by_subject() {
+        let mut index = ThreadIndex::new();
+        let mut first =
+            parse_message(b"From: a@example.com\r\nSubject: Q4 budget\r\n\r\nHi", None).unwrap();
+        let mut reply = parse_message(
+            b"From: b@example.com\r\nSubject: RE: q4 Budget\r\n\r\nOk",
+            None,
+        )
+        .unwrap();
+        first.assign_thread(&mut index);
+        reply.assign_thread(&mut index);
+        assert_eq!(first.message.thread_id, "subject:q4 budget");
+        assert_eq!(first.message.thread_id, reply.message.thread_id);
     }
 }

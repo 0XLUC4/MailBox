@@ -17,7 +17,12 @@ $me = "$env:TEMP\mbx-<your-agent-name>"; New-Item -ItemType Directory -Force $me
 Copy-Item C:\Users\Luca\Desktop\MailBox\mailbox\target\debug\mailbox.exe "$me\mailbox.exe" -Force
 $p = Start-Process "$me\mailbox.exe" -ArgumentList "--data","$me\test.db" -PassThru -NoNewWindow
 ```
-Always use `--data` with a temp db (never the user's real data). Stop it afterwards: `Stop-Process -Id $p.Id -Force`.
+Always use `--data` with a temp db (never the user's real data). Sample data (2 accounts, ~200
+messages, events, contacts, tasks): `cargo run -p mailbox-core --features dev --example seed -- <temp.db>`.
+
+Every worktree shares one target dir and its crates get the same artifact names: if a build
+misses your latest change (e.g. "cannot find function" that exists), `touch crates/*/src/lib.rs`
+and rebuild, then copy the exe right away. Stop it afterwards: `Stop-Process -Id $p.Id -Force`.
 
 ## Drive and look at the window
 Capture ONLY the app window, never the whole screen (privacy). Click, then type (typing alone does not reach the field):

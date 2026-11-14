@@ -360,7 +360,9 @@ impl SearchView {
     fn render_suggestions(&self, suggestions: Vec<Suggestion>, cx: &mut Context<Self>) -> Div {
         let t = theme(cx).clone();
         let empty_input = self.text(cx).is_empty();
-        let title = if empty_input && !self.recent.is_empty() {
+        let title = if !empty_input {
+            tr(cx, "Suggestions")
+        } else if !self.recent.is_empty() {
             tr(cx, "Recent searches")
         } else {
             tr(cx, "Search operators")
@@ -497,10 +499,13 @@ impl Render for SearchView {
                     .when(show_scope, |input| input.suffix(self.render_scope(cx)))
                     .cleanable(true),
             )
+            // Below the field (not over it), so the typed query stays visible.
             .when(!suggestions.is_empty(), |el| {
                 el.child(
-                    deferred(anchored().child(self.render_suggestions(suggestions, cx)))
-                        .with_priority(1),
+                    div().absolute().top(relative(1.)).left(px(0.)).child(
+                        deferred(anchored().child(self.render_suggestions(suggestions, cx)))
+                            .with_priority(1),
+                    ),
                 )
             })
     }

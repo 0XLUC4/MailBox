@@ -34,6 +34,7 @@ pub mod notifications;
 pub mod print;
 pub mod receipts;
 pub mod shortcuts;
+pub mod signatures;
 pub mod system_integration;
 
 use gpui::{App, AppContext as _, KeyBinding, WindowBounds, WindowOptions, px, size};

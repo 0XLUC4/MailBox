@@ -322,6 +322,38 @@ pub fn rename_folder(store: &Store, folder_id: Id, name: &str) -> Result<Command
     Ok(Command::SaveFolder(Box::new(folder)))
 }
 
+/// Moves a custom folder (with its subfolders) under `parent_id` (`None`: top level) of the
+/// same account, last among its new siblings.
+pub fn move_folder(store: &Store, folder_id: Id, parent_id: Option<Id>) -> Result<Command> {
+    let mut folder = store.require::<Folder>(folder_id)?;
+    if folder.role != FolderRole::Custom {
+        return Err(Error::Invalid("special folders can't be moved".into()));
+    }
+    let folders = store.list_folders(folder.account_id)?;
+    // Walk up from the target: reaching the folder itself means moving into its own subtree.
+    let mut ancestor = parent_id;
+    while let Some(id) = ancestor {
+        if id == folder_id {
+            return Err(Error::Invalid("a folder can't move into itself".into()));
+        }
+        let Some(parent) = folders.iter().find(|f| f.id == id) else {
+            return Err(Error::Invalid(
+                "the target folder belongs to another account".into(),
+            ));
+        };
+        ancestor = parent.parent_id;
+    }
+    folder.name = clean_name(store, folder.account_id, parent_id, &folder.name, folder.id)?;
+    folder.position = folders
+        .iter()
+        .filter(|f| f.parent_id == parent_id && f.id != folder_id)
+        .map(|f| f.position + 1)
+        .max()
+        .unwrap_or(0);
+    folder.parent_id = parent_id;
+    Ok(Command::SaveFolder(Box::new(folder)))
+}
+
 /// Deletes a custom folder and its subfolders; their messages go to Deleted Items.
 pub fn delete_folder(store: &Store, folder_id: Id) -> Result<Command> {
     let folder = store.require::<Folder>(folder_id)?;
@@ -573,6 +605,56 @@ mod tests {
             f.store.require::<Message>(f.msg.id).unwrap().folder_id,
             atlas.id
         );
+    }
+
+    #[test]
+    fn move_folder_checks_target_and_undoes() {
+        let f = setup();
+        let mut history = History::new();
+        let account_id = f.inbox.account_id;
+        let create = |history: &mut History, parent: Option<Id>, name: &str| {
+            history
+                .run(
+                    &f.store,
+                    new_folder(&f.store, account_id, parent, name).unwrap(),
+                )
+                .unwrap();
+            f.store
+                .list_folders(account_id)
+                .unwrap()
+                .into_iter()
+                .find(|folder| folder.name == name)
+                .unwrap()
+        };
+        let projects = create(&mut history, None, "Projects");
+        let atlas = create(&mut history, Some(projects.id), "Atlas");
+        let clients = create(&mut history, None, "Clients");
+
+        // Into its own subtree, special folders and duplicate names are refused.
+        assert!(move_folder(&f.store, projects.id, Some(atlas.id)).is_err());
+        assert!(move_folder(&f.store, projects.id, Some(projects.id)).is_err());
+        assert!(move_folder(&f.store, f.inbox.id, Some(clients.id)).is_err());
+        create(&mut history, Some(clients.id), "atlas");
+        assert!(move_folder(&f.store, atlas.id, Some(clients.id)).is_err());
+
+        let before = f.store.require::<Folder>(projects.id).unwrap();
+        history
+            .run(
+                &f.store,
+                move_folder(&f.store, projects.id, Some(clients.id)).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            f.store.require::<Folder>(projects.id).unwrap().parent_id,
+            Some(clients.id)
+        );
+        // The subfolder follows its parent.
+        assert_eq!(
+            f.store.require::<Folder>(atlas.id).unwrap().parent_id,
+            Some(projects.id)
+        );
+        history.undo(&f.store).unwrap();
+        assert_eq!(f.store.require::<Folder>(projects.id).unwrap(), before);
     }
 
     #[test]

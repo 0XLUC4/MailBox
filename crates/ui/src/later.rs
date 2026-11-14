@@ -9,14 +9,15 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use gpui::component::WindowExt as _;
+use gpui::component::input::{Input, InputEvent, InputState};
 use gpui::*;
 use mailbox_core::later::{Later, LaterPreset, SNOOZED_FOLDER};
 use mailbox_core::{Command, Folder, FolderRole, Id, Message, mail_ops};
 
 use crate::app_state::AppState;
-use crate::components::{Icon, IconName};
+use crate::components::{Button, Icon, IconName};
 use crate::notifications::{self, Activation};
 use crate::theme::{ICON_SIZE_SM, RADIUS_MD, SPACE_1, SPACE_2, TEXT_SM, TEXT_XS, theme};
 
@@ -212,12 +213,54 @@ pub fn open_snooze_picker(state: Entity<AppState>, window: &mut Window, cx: &mut
             state.notify_info("Select a message first", cx)
         });
     };
-    let on_pick: OnPick = Rc::new(move |until, _, cx| snooze(&state, &[id], until, cx));
+    open_snooze_picker_for(state, vec![id], window, cx);
+}
+
+/// Preset picker for snoozing `ids` (context menu, multi-selection).
+pub fn open_snooze_picker_for(
+    state: Entity<AppState>,
+    ids: Vec<Id>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let on_pick: OnPick = Rc::new(move |until, _, cx| snooze(&state, &ids, until, cx));
     open_time_picker("Snooze until", on_pick, window, cx);
 }
 
+/// Whether the conversation `thread_id` is muted.
+pub fn is_muted(state: &Entity<AppState>, thread_id: &str, cx: &App) -> bool {
+    load(state, cx).is_muted(thread_id)
+}
+
+type Submit = dyn Fn(&mut Window, &mut App);
+
 /// A dialog listing [`LaterPreset`]s; `on_pick` gets the chosen moment.
 pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Window, cx: &mut App) {
+    // Custom moment: "YYYY-MM-DD HH:MM" (local time), Enter or "Set".
+    let custom = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD HH:MM"));
+    let submit: Rc<Submit> = {
+        let (custom, on_pick) = (custom.clone(), on_pick.clone());
+        Rc::new(move |window, cx| {
+            let text = custom.read(cx).value().to_string();
+            match parse_when(&text, Local::now()) {
+                Ok(at) => {
+                    window.close_dialog(cx);
+                    on_pick(at, window, cx);
+                }
+                Err(err) => window.push_notification(err, cx),
+            }
+        })
+    };
+    {
+        let submit = submit.clone();
+        window
+            .subscribe(&custom, cx, move |_, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    submit(window, cx);
+                }
+            })
+            .detach();
+    }
     window.open_dialog(cx, move |dialog, _, cx| {
         let t = theme(cx).clone();
         let now = Local::now();
@@ -256,11 +299,61 @@ pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Windo
                         on_pick(at, window, cx);
                     })
             });
+        let set = submit.clone();
         dialog
             .w(px(360.))
             .title(title)
             .child(div().flex().flex_col().gap(SPACE_1).children(rows))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_1)
+                    .mt(SPACE_2)
+                    .pt(SPACE_2)
+                    .border_t_1()
+                    .border_color(t.border_subtle)
+                    .child(
+                        div()
+                            .text_size(TEXT_XS)
+                            .text_color(t.text_subtle)
+                            .child("Custom date and time"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(SPACE_2)
+                            .child(div().flex_1().child(Input::new(&custom)))
+                            .child(
+                                Button::new("later-custom")
+                                    .primary()
+                                    .label("Set")
+                                    .on_click(move |_, window, cx| set(window, cx)),
+                            ),
+                    ),
+            )
     });
+}
+
+/// Parses a local "YYYY-MM-DD HH:MM" (or just a date: 08:00) that must be in the future.
+fn parse_when(text: &str, now: DateTime<Local>) -> Result<DateTime<Utc>, String> {
+    let text = text.trim();
+    let naive = NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M")
+        .or_else(|_| {
+            NaiveDate::parse_from_str(text, "%Y-%m-%d")
+                .map(|date| date.and_time(NaiveTime::from_hms_opt(8, 0, 0).unwrap_or_default()))
+        })
+        .map_err(|_| "Use the format YYYY-MM-DD HH:MM".to_owned())?;
+    let at = naive
+        .and_local_timezone(Local)
+        .earliest()
+        .ok_or_else(|| "That time does not exist here (clock change)".to_owned())?;
+    if at <= now {
+        return Err("Pick a moment in the future".to_owned());
+    }
+    Ok(at.with_timezone(&Utc))
 }
 
 /// Records a draft to send at `at` (the draft stays in Drafts until then).
@@ -280,12 +373,17 @@ pub fn schedule_send(state: &Entity<AppState>, message_id: Id, at: DateTime<Utc>
 
 /// Mutes or unmutes the selected message's conversation.
 pub fn toggle_mute_selected(state: &Entity<AppState>, cx: &mut App) {
-    let message = {
-        let state = state.read(cx);
-        state
-            .selected_message()
-            .and_then(|id| state.store().get::<Message>(id).ok().flatten())
-    };
+    match state.read(cx).selected_message() {
+        Some(id) => toggle_mute(state, id, cx),
+        None => state.update(cx, |state, cx| {
+            state.notify_info("Select a message first", cx)
+        }),
+    }
+}
+
+/// Mutes or unmutes the conversation of message `id`.
+pub fn toggle_mute(state: &Entity<AppState>, id: Id, cx: &mut App) {
+    let message = state.read(cx).store().get::<Message>(id).ok().flatten();
     let Some(message) = message.filter(|message| !message.thread_id.is_empty()) else {
         return state.update(cx, |state, cx| {
             state.notify_info("Select a message first", cx)
@@ -354,4 +452,30 @@ pub fn archive_muted(state: &Entity<AppState>, ids: Vec<Id>, cx: &mut App) -> Ve
         });
     }
     rest.into_iter().map(|message| message.id).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: the parent's `gpui::*` would shadow `#[test]`.
+    use super::parse_when;
+    use chrono::{Local, TimeZone as _};
+
+    #[test]
+    fn custom_moment_is_parsed_and_must_be_future() {
+        let now = Local.with_ymd_and_hms(2026, 11, 14, 12, 0, 0).unwrap();
+        let at = parse_when(" 2026-11-20 09:30 ", now).unwrap();
+        assert_eq!(
+            at.with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string(),
+            "2026-11-20 09:30"
+        );
+        let day = parse_when("2026-11-21", now).unwrap();
+        assert_eq!(
+            day.with_timezone(&Local).format("%H:%M").to_string(),
+            "08:00"
+        );
+        assert!(parse_when("2026-11-13 09:00", now).is_err());
+        assert!(parse_when("20/11/2026", now).is_err());
+    }
 }

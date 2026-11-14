@@ -4,12 +4,13 @@ use std::rc::Rc;
 
 use gpui::component::Icon;
 use gpui::component::menu::{PopupMenu, PopupMenuItem};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::mail_ops::FlagPreset;
 use mailbox_core::{Folder, FolderRole, Id, Message};
 
 use super::folder_pane::{folder_icon, folder_name, folder_tree};
-use super::{message_window, ops};
+use super::{ComposeKind, message_window, ops};
 use crate::app_state::AppState;
 use crate::components::IconName;
 
@@ -29,12 +30,12 @@ fn action(
 }
 
 /// Destination folders, grouped by account: `(account name, [(depth, folder)])`.
-fn destinations(state: &Entity<AppState>, cx: &App) -> Rc<Vec<(String, Vec<(usize, Folder)>)>> {
+type Destinations = Rc<Vec<(String, Vec<(usize, Folder)>)>>;
+
+fn destinations(state: &Entity<AppState>, cx: &App) -> Destinations {
     let store = state.read(cx).store();
     Rc::new(
-        store
-            .list_accounts()
-            .unwrap_or_default()
+        crate::settings::ordered_accounts(store)
             .into_iter()
             .map(|account| {
                 let folders = store.list_folders(account.id).unwrap_or_default();
@@ -76,11 +77,14 @@ fn folder_submenu(
     menu
 }
 
-/// Builds the message menu for `ids` (the selection, or the right-clicked row).
+/// Builds the message menu for `ids` (the selection, or the right-clicked row with its
+/// conversation). `single` is the message shown when one row is targeted: it gets the
+/// open / respond / print entries.
 pub fn build(
     menu: PopupMenu,
     state: &Entity<AppState>,
     ids: Vec<Id>,
+    single: Option<Id>,
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
@@ -113,22 +117,38 @@ pub fn build(
         .map(|category| {
             let all_have = messages
                 .iter()
-                .all(|m| m.categories.iter().any(|c| *c == category.name));
+                .all(|m| m.categories.contains(&category.name));
             (category.name, category.color, all_have)
         })
         .collect();
-    let single = (ids.len() == 1).then(|| ids[0]);
     let targets = destinations(state, cx);
+    let muted = single
+        .and_then(|id| messages.iter().find(|m| m.id == id))
+        .is_some_and(|m| crate::later::is_muted(state, &m.thread_id, cx));
 
     let mut menu = menu.min_w(px(220.));
     if let Some(id) = single {
         let s = state.clone();
+        let respond = |label: &'static str, icon: IconName, kind: ComposeKind| {
+            let s = state.clone();
+            PopupMenuItem::new(label)
+                .icon(icon)
+                .on_click(move |_, window, cx| ops::compose_from(&s, id, kind, window, cx))
+        };
         menu = menu
             .item(
                 PopupMenuItem::new("Open in new window")
                     .icon(IconName::SquareArrowOutUpRight)
                     .on_click(move |_, _, cx| message_window::open(s.clone(), id, cx)),
             )
+            .separator()
+            .item(respond("Reply", IconName::Reply, ComposeKind::Reply))
+            .item(respond(
+                "Reply all",
+                IconName::ReplyAll,
+                ComposeKind::ReplyAll,
+            ))
+            .item(respond("Forward", IconName::Forward, ComposeKind::Forward))
             .separator();
     }
 
@@ -159,6 +179,30 @@ pub fn build(
                 ops::set_pinned(s, ids, false, cx)
             })
         });
+
+    menu = menu.item(action(
+        "Snooze…",
+        IconName::AlarmClock,
+        state,
+        &ids,
+        |s, ids, window, cx| crate::later::open_snooze_picker_for(s.clone(), ids, window, cx),
+    ));
+    if let Some(id) = single {
+        let s = state.clone();
+        menu = menu.item(
+            PopupMenuItem::new(if muted {
+                "Unmute conversation"
+            } else {
+                "Mute conversation"
+            })
+            .icon(if muted {
+                IconName::Bell
+            } else {
+                IconName::BellOff
+            })
+            .on_click(move |_, _, cx| crate::later::toggle_mute(&s, id, cx)),
+        );
+    }
 
     let (s, i) = (state.clone(), ids.clone());
     menu = menu.submenu_with_icon(
@@ -227,13 +271,21 @@ pub fn build(
                     }),
                 );
             }
-            sub.separator().item(action(
-                "Clear all categories",
-                IconName::X,
-                &s,
-                &i,
-                |s, ids, _, cx| ops::clear_categories(s, ids, cx),
-            ))
+            sub.separator()
+                .item(action(
+                    "New category…",
+                    IconName::Plus,
+                    &s,
+                    &i,
+                    |s, ids, window, cx| open_category_dialog(s.clone(), ids, window, cx),
+                ))
+                .item(action(
+                    "Clear all categories",
+                    IconName::X,
+                    &s,
+                    &i,
+                    |s, ids, _, cx| ops::clear_categories(s, ids, cx),
+                ))
         },
     );
 
@@ -254,6 +306,15 @@ pub fn build(
         cx,
         move |sub, _, _| folder_submenu(sub, &s, &i, &t, true),
     );
+    if in_trash {
+        menu = menu.item(action(
+            "Restore to Inbox",
+            IconName::Undo2,
+            state,
+            &ids,
+            |s, ids, _, cx| ops::move_to_role(s, ids, FolderRole::Inbox, cx),
+        ));
+    }
     if !in_archive {
         menu = menu.item(action(
             "Archive",
@@ -281,6 +342,22 @@ pub fn build(
         )
     });
 
+    if let Some(id) = single {
+        let (s1, s2) = (state.clone(), state.clone());
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new("Print")
+                    .icon(IconName::Printer)
+                    .on_click(move |_, _, cx| crate::print::print_message(&s1, id, cx)),
+            )
+            .item(
+                PopupMenuItem::new("Save as .eml")
+                    .icon(IconName::FileDown)
+                    .on_click(move |_, _, cx| crate::print::save_as_eml(&s2, id, cx)),
+            );
+    }
+
     menu.separator().item(action(
         if in_trash {
             "Delete permanently"
@@ -292,4 +369,218 @@ pub fn build(
         &ids,
         ops::delete,
     ))
+}
+
+// ---------- pickers (ribbon / palette "Move to folder" and "Categorize") ----------
+
+/// A selectable dialog row: leading icon or dot, label, check mark.
+fn picker_row(
+    id: impl Into<ElementId>,
+    leading: AnyElement,
+    label: SharedString,
+    checked: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let t = crate::theme::theme(cx);
+    let (hover, accent) = (t.hover, t.accent);
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(8.))
+        .h(px(30.))
+        .px(px(8.))
+        .rounded(crate::theme::RADIUS_MD)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+        .child(leading)
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .truncate()
+                .text_size(crate::theme::TEXT_SM)
+                .child(label),
+        )
+        .when(checked, |row| {
+            row.child(
+                gpui::component::Icon::new(IconName::Check)
+                    .size(crate::theme::ICON_SIZE_SM)
+                    .text_color(accent),
+            )
+        })
+}
+
+/// "Move to folder" for `ids`: every folder of every account, as a tree.
+pub fn open_move_dialog(state: Entity<AppState>, ids: Vec<Id>, window: &mut Window, cx: &mut App) {
+    use gpui::component::WindowExt as _;
+    if ids.is_empty() {
+        return;
+    }
+    let current: Vec<Id> = {
+        let store = state.read(cx).store();
+        ids.iter()
+            .filter_map(|&id| store.get::<Message>(id).ok().flatten())
+            .map(|m| m.folder_id)
+            .collect()
+    };
+    let targets = destinations(&state, cx);
+    let title: SharedString = if ids.len() == 1 {
+        "Move to folder".into()
+    } else {
+        format!("Move {} messages to", ids.len()).into()
+    };
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let t = crate::theme::theme(cx).clone();
+        let multi_account = targets.len() > 1;
+        let mut list = div().flex().flex_col().gap(px(2.));
+        for (account, folders) in targets.iter() {
+            if multi_account {
+                list = list.child(
+                    div()
+                        .pt(px(8.))
+                        .pb(px(2.))
+                        .px(px(8.))
+                        .text_size(crate::theme::TEXT_XS)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.text_subtle)
+                        .child(account.to_uppercase()),
+                );
+            }
+            for (depth, folder) in folders {
+                let folder_id = folder.id;
+                let (state, ids) = (state.clone(), ids.clone());
+                let icon = div()
+                    .pl(px(*depth as f32 * 16.))
+                    .child(
+                        gpui::component::Icon::new(folder_icon(folder))
+                            .size(crate::theme::ICON_SIZE_SM)
+                            .text_color(t.text_muted),
+                    )
+                    .into_any_element();
+                let here = !current.is_empty() && current.iter().all(|&f| f == folder_id);
+                list = list.child(
+                    picker_row(
+                        ("move-folder", folder_id as u64),
+                        icon,
+                        folder_name(folder).into(),
+                        here,
+                        cx,
+                    )
+                    .on_click(move |_, window, cx| {
+                        ops::move_to(&state, ids.clone(), folder_id, false, cx);
+                        window.close_dialog(cx);
+                    }),
+                );
+            }
+        }
+        dialog.w(px(360.)).title(title.clone()).child(
+            div()
+                .id("move-picker")
+                .max_h(px(420.))
+                .overflow_y_scroll()
+                .child(list),
+        )
+    });
+}
+
+/// "Categorize" for `ids`: toggles each category on all of them.
+pub fn open_category_dialog(
+    state: Entity<AppState>,
+    ids: Vec<Id>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    use gpui::component::WindowExt as _;
+    if ids.is_empty() {
+        return;
+    }
+    use gpui::component::input::{Input, InputEvent, InputState};
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder("New category, then Enter"));
+    let (s, i) = (state.clone(), ids.clone());
+    window
+        .subscribe(&input, cx, move |input, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                let name = input.read(cx).value().trim().to_owned();
+                if !name.is_empty() && create_category(&s, &i, &name, cx) {
+                    input.update(cx, |input, cx| input.set_value("", window, cx));
+                }
+            }
+        })
+        .detach();
+    window.open_dialog(cx, move |dialog, _, cx| {
+        // Re-read on each render so the list and checks follow the changes.
+        let store = state.read(cx).store();
+        let categories = store.list_categories().unwrap_or_default();
+        let messages: Vec<Message> = ids
+            .iter()
+            .filter_map(|&id| store.get::<Message>(id).ok().flatten())
+            .collect();
+        let rows: Vec<_> = categories
+            .iter()
+            .map(|category| {
+                let checked = !messages.is_empty()
+                    && messages
+                        .iter()
+                        .all(|m| m.categories.contains(&category.name));
+                let dot = div()
+                    .size(px(10.))
+                    .rounded(px(3.))
+                    .bg(crate::theme::hex(category.color))
+                    .into_any_element();
+                let (state, ids, name) = (state.clone(), ids.clone(), category.name.clone());
+                picker_row(
+                    ("category", category.id as u64),
+                    dot,
+                    category.name.clone().into(),
+                    checked,
+                    cx,
+                )
+                .on_click(move |_, _, cx| ops::toggle_category(&state, ids.clone(), &name, cx))
+            })
+            .collect();
+        dialog
+            .w(px(320.))
+            .title("Categorize")
+            .child(
+                div()
+                    .id("category-picker")
+                    .max_h(px(380.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .children(rows),
+            )
+            .child(div().pt(px(8.)).child(Input::new(&input)))
+    });
+}
+
+/// Colours given to new categories, in turn.
+const CATEGORY_COLORS: [u32; 8] = [
+    0x3b82f6, 0x22c55e, 0xf59e0b, 0xef4444, 0xa855f7, 0x14b8a6, 0xec4899, 0x64748b,
+];
+
+/// Creates category `name` (unless it exists) and adds it to `ids`.
+fn create_category(state: &Entity<AppState>, ids: &[Id], name: &str, cx: &mut App) -> bool {
+    let existing = state.read(cx).store().list_categories().unwrap_or_default();
+    if !existing.iter().any(|c| c.name.eq_ignore_ascii_case(name)) {
+        let color = CATEGORY_COLORS[existing.len() % CATEGORY_COLORS.len()];
+        let category = mailbox_core::Category {
+            id: 0,
+            name: name.to_owned(),
+            color,
+        };
+        if !ops::run(
+            state,
+            Ok(mailbox_core::Command::SaveCategory(Box::new(category))),
+            cx,
+        ) {
+            return false;
+        }
+    }
+    ops::toggle_category(state, ids.to_vec(), name, cx);
+    true
 }
