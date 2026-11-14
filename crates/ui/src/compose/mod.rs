@@ -90,6 +90,46 @@ pub fn open_compose(
     state.update(cx, |_, cx| cx.notify());
 }
 
+/// Is message `id` a draft compose can re-open?
+pub fn is_draft(state: &AppState, id: Id) -> bool {
+    compose::load_draft(state.store(), id).is_ok_and(|draft| draft.is_some())
+}
+
+/// Re-opens draft `id` in compose (brings it to the front if already open).
+pub fn edit_draft(state: &Entity<AppState>, id: Id, window: &mut Window, cx: &mut App) {
+    open_compose(state, ComposeRequest::EditDraft(id), window, cx);
+}
+
+/// Shell-level handlers for New mail (ribbon, Ctrl+N), Reply (Ctrl+R), Reply all
+/// (Ctrl+Shift+R) and Forward (Ctrl+Shift+F) on the selected message. A module that handles
+/// these closer to the focus wins.
+pub fn install<E: InteractiveElement>(element: E, state: &Entity<AppState>) -> E {
+    let new = state.clone();
+    let element = element.on_action(move |_: &crate::actions::NewMail, window, cx| {
+        open_compose(&new, ComposeRequest::New, window, cx)
+    });
+    let element = on_selected::<_, crate::actions::Reply>(element, state, ComposeRequest::Reply);
+    let element =
+        on_selected::<_, crate::actions::ReplyAll>(element, state, ComposeRequest::ReplyAll);
+    on_selected::<_, crate::actions::Forward>(element, state, ComposeRequest::Forward)
+}
+
+fn on_selected<E: InteractiveElement, A: Action>(
+    element: E,
+    state: &Entity<AppState>,
+    request: fn(Id) -> ComposeRequest,
+) -> E {
+    let state = state.clone();
+    element.on_action(
+        move |_: &A, window, cx| match state.read(cx).selected_message() {
+            Some(id) => open_compose(&state, request(id), window, cx),
+            None => state.update(cx, |state, cx| {
+                state.notify_info("Select a message first", cx)
+            }),
+        },
+    )
+}
+
 /// Queues saved draft `message_id` for sending now (Outbox, then Send/Receive). Used by
 /// "send later", automatic replies and read receipts.
 pub fn queue_draft(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
@@ -238,6 +278,21 @@ fn seed(state: &AppState, request: &ComposeRequest) -> mailbox_core::Result<Draf
             message.subject = compose::forward_subject(&original.subject);
             meta.reply_to = Some(original.id);
             meta.markup = body(&[&signature.reply, &compose::quote_for_forward(original)]);
+            // Forwards carry the original's files (those downloaded; headers-only mail has none).
+            meta.attachments = original
+                .attachments
+                .iter()
+                .filter_map(|attachment| {
+                    let path = crate::sync_bridge::attachment_path(original.id, &attachment.name);
+                    let size = std::fs::metadata(&path).ok()?.len();
+                    Some(compose::DraftAttachment {
+                        path: path.to_string_lossy().into_owned(),
+                        name: attachment.name.clone(),
+                        mime: attachment.mime.clone(),
+                        size,
+                    })
+                })
+                .collect();
         }
         _ => meta.markup = body(&[&signature.new_message]),
     }

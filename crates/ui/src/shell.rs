@@ -185,7 +185,11 @@ impl Shell {
 }
 
 impl Render for Shell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Keep shortcuts working: after a dialog closes nothing may hold the focus.
+        if window.focused(cx).is_none() {
+            self.focus_handle.focus(window, cx);
+        }
         let t = theme(cx).clone();
         let active = self.state.read(cx).module();
         // First run: no account yet → onboarding (Settings stays reachable).

@@ -59,6 +59,9 @@ pub const OUTBOX_NAME: &str = "Outbox";
 
 struct GlobalSyncBridge(Entity<SyncBridge>);
 
+/// Notification id type of the "Message not sent" toast (keyed by message id).
+struct SendFailedToast;
+
 impl Global for GlobalSyncBridge {}
 
 /// Creates the bridge, starts configured accounts and registers the global actions.
@@ -519,7 +522,7 @@ impl SyncBridge {
                     .existing(local_id, cx)
                     .map(|message| message.subject)
                     .unwrap_or_default();
-                self.notify_send_failure(subject, error, cx);
+                self.notify_send_failure(local_id, subject, error, cx);
             }
             SyncEvent::RemoteChanged => {
                 let soon = Instant::now() + Duration::from_secs(2);
@@ -864,6 +867,16 @@ impl SyncBridge {
 
     fn after_sent(&mut self, account: &mut AccountSync, local_id: Id, cx: &mut Context<Self>) {
         account.sending.remove(&local_id);
+        // A "Message not sent" toast from an earlier attempt is now wrong.
+        cx.defer(move |cx| {
+            for window in cx.windows() {
+                window
+                    .update(cx, |_, window, cx| {
+                        window.remove_notification1::<SendFailedToast>(local_id as u64, cx)
+                    })
+                    .ok();
+            }
+        });
         let Some(message) = self.existing(local_id, cx) else {
             return;
         };
@@ -1055,7 +1068,13 @@ impl SyncBridge {
     }
 
     /// "Message not sent" toast with a Retry button (the message stays in the Outbox).
-    fn notify_send_failure(&self, subject: String, error: String, cx: &mut Context<Self>) {
+    fn notify_send_failure(
+        &self,
+        local_id: Id,
+        subject: String,
+        error: String,
+        cx: &mut Context<Self>,
+    ) {
         let window = cx.active_window().or_else(|| cx.windows().first().copied());
         let Some(window) = window else {
             return self.report(format!("Could not send the message: {error}"), cx);
@@ -1070,11 +1089,15 @@ impl SyncBridge {
             Notification::new().with_type(NotificationType::Error),
             &message,
         )
+        .id1::<SendFailedToast>(local_id as u64)
         .title("Message not sent")
-        .action(|_, _, _| {
+        .action(move |_, _, _| {
             Button::new("retry-send")
                 .label("Retry")
-                .on_click(|_, _, cx| retry_outbox(cx))
+                .on_click(move |_, window, cx| {
+                    window.remove_notification1::<SendFailedToast>(local_id as u64, cx);
+                    retry_outbox(cx)
+                })
         });
         // Deferred: a window may be mid-update when the event is applied.
         cx.defer(move |cx| {
