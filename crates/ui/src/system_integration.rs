@@ -181,6 +181,11 @@ pub fn register_mail_handler(cx: &App) -> Result<(), String> {
 
     let client = CURRENT_USER.create(CLIENT).map_err(fail)?;
     client.set_string("", "Mailbox").map_err(fail)?;
+    // The exe's icon resource 1 (`apps/mailbox/build.rs`), shown in Default apps.
+    CURRENT_USER
+        .create(format!(r"{CLIENT}\DefaultIcon"))
+        .and_then(|key| key.set_string("", format!("\"{}\",0", exe.display())))
+        .map_err(fail)?;
     CURRENT_USER
         .create(format!(r"{CLIENT}\shell\open\command"))
         .and_then(|key| key.set_string("", format!("\"{}\"", exe.display())))

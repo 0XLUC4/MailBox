@@ -35,6 +35,9 @@ url = "2.5"
 # Windows integration (notifications, mailto handler); already in the lock file via deps.
 tauri-winrt-notification = "0.8.1"
 windows-registry = "0.6.1"
+# App icon: embedded in the exe (build), rendered from assets/icon.svg (examples/make_icon).
+embed-resource = "3.0.12"
+resvg = { version = "0.45.1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

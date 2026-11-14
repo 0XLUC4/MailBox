@@ -6,6 +6,8 @@
 //! maximize, Aero drag and the native resize frame keep working. Secondary windows
 //! get a slim bar for free through [`open_window`].
 
+use std::sync::{Arc, LazyLock};
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
@@ -21,6 +23,17 @@ pub const MACOS_TRAFFIC_LIGHTS_WIDTH: Pixels = px(76.);
 
 const IS_MACOS: bool = cfg!(target_os = "macos");
 const IS_WINDOWS: bool = cfg!(target_os = "windows");
+
+/// The app icon (`assets/icon.svg`, rendered by `cargo run -p mailbox --example make_icon`).
+pub const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/png/icon-128.png");
+
+static APP_ICON: LazyLock<Arc<Image>> =
+    LazyLock::new(|| Arc::new(Image::from_bytes(ImageFormat::Png, APP_ICON_PNG.to_vec())));
+
+/// The app icon as an element, `size` square.
+pub fn app_icon(size: Pixels) -> Img {
+    img(APP_ICON.clone()).size(size).flex_shrink_0()
+}
 
 /// Base options for any app window: no native title bar, client decorations.
 /// `title` is only used by the taskbar / Alt-Tab, it is never drawn.
@@ -97,7 +110,9 @@ impl Render for WindowFrame {
                     .bg(t.surface)
                     .border_b_1()
                     .border_color(t.border_subtle)
+                    .items_center()
                     .when(IS_MACOS, |el| el.pl(MACOS_TRAFFIC_LIGHTS_WIDTH))
+                    .when(!IS_MACOS, |el| el.pl(px(10.)).child(app_icon(px(16.))))
                     .child(drag_area(div().id("title-bar-drag").flex_1().h_full()))
                     .child(WindowControls),
             )
