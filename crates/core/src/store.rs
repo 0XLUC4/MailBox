@@ -118,6 +118,8 @@ CREATE TABLE message_flag_due (
     due TEXT NOT NULL
 );
 "#,
+    crate::people::MIGRATION,
+    crate::todo::MIGRATION,
     r#"
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY,
