@@ -10,6 +10,7 @@ Mailbox is a mail + calendar + contacts + tasks desktop client in Rust, UI in GP
 | `mailbox-sync` | `crates/sync` | Protocol backends behind `trait MailBackend` (IMAP/SMTP), sync engine + worker threads, OAuth2, server discovery, .eml/.mbox. |
 | `mailbox-ui` | `crates/ui` | GPUI app: `AppState`, theme, shell, module views, components, `sync_bridge`, onboarding. |
 | `mailbox-devserver` | `crates/devserver` | Local test IMAP + SMTP server (in-memory, any login), library + binary. Tests and manual runs only. |
+| `mailbox-window-handle` | `crates/window-handle` | A GPUI window's native handle usable outside the App borrow, to create the mail webview (WebView2 via `wry`, `crates/ui/src/mail/webview.rs`). The workspace's only `unsafe` (one line). |
 | `mailbox` | `apps/mailbox` | Binary: `mailbox [--data <path>]`, default `<data dir>/mailbox.db` (`mailbox_ui::data_dir()`). |
 
 ## Mail sync

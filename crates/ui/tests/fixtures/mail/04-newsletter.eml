@@ -1,0 +1,95 @@
+From: Northwind Outdoor <news@northwind-outdoor.example>
+To: Alex Martin <alex.martin@example.com>
+Subject: Winter sale: up to 40% off jackets
+Date: Thu, 12 Nov 2026 10:00:00 +0100
+Message-ID: <04-newsletter.eml@fixtures.mailbox.test>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="REL"; type="text/html"
+
+--REL
+Content-Type: text/html; charset=utf-8
+
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<style type="text/css">
+ body { margin:0; padding:0; }
+ h1 { font-family: Georgia, 'Times New Roman', serif; font-size:30px; color:#212529; margin:0 0 12px 0; }
+ @media only screen and (max-width:620px) { .container { width:100% !important; } .col { display:block !important; width:100% !important; } }
+</style></head>
+<body>
+<div style="background-color:#eceff1;padding:24px 0">
+<table class="container" role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0" style="width:600px;margin:0 auto;background-color:#ffffff">
+ <tr><td style="background-color:#212529;padding:6px 24px;color:#adb5bd;font-family:Arial,sans-serif;font-size:11px;text-align:right">Having trouble reading this? <a href="https://northwind-outdoor.example/web/123" style="color:#ffc107">Online version</a></td></tr>
+ <tr><td align="center" style="padding:24px 0 16px 0"><img src="cid:logo@northwind" width="160" height="48" alt="Northwind Outdoor" style="display:block;border:0"></td></tr>
+ <tr><td><img src="cid:hero@northwind" width="600" height="200" alt="Winter sale" style="display:block;width:100%;max-width:600px;height:auto;border:0"></td></tr>
+ <tr><td style="padding:32px 40px 8px 40px;text-align:center">
+   <h1>Winter sale is on</h1>
+   <p style="font-family:Arial,sans-serif;font-size:16px;line-height:24px;color:#495057;margin:0 0 24px 0">Stay warm for less: up to <strong style="color:#ff6200">40% off</strong> insulated jackets, fleeces and boots. Only until Sunday.</p>
+   <a href="https://northwind-outdoor.example/sale?utm_source=newsletter" style="background:#ff6200;color:#ffffff;border-radius:24px;padding:14px 34px;text-decoration:none;font-weight:bold;display:inline-block;font-family:Arial,sans-serif;font-size:15px">Shop the sale</a>
+ </td></tr>
+ <tr><td style="padding:32px 24px">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+   <td class="col" width="50%" valign="top" style="padding:0 8px">
+    <div style="background-color:#fff3e0;border-radius:8px;padding:20px;font-family:Arial,sans-serif">
+     <div style="font-size:12px;color:#ff6200;font-weight:bold;letter-spacing:1px">JACKETS</div>
+     <div style="font-size:18px;color:#212529;margin:6px 0">Alpine Down Parka</div>
+     <div style="font-size:14px;color:#495057"><s style="color:#adb5bd">249 &euro;</s> <b>149 &euro;</b></div>
+    </div>
+   </td>
+   <td class="col" width="50%" valign="top" style="padding:0 8px">
+    <div style="background-color:#e3f2fd;border-radius:8px;padding:20px;font-family:Arial,sans-serif">
+     <div style="font-size:12px;color:#1565c0;font-weight:bold;letter-spacing:1px">BOOTS</div>
+     <div style="font-size:18px;color:#212529;margin:6px 0">Trail Winter Boot</div>
+     <div style="font-size:14px;color:#495057"><s style="color:#adb5bd">139 &euro;</s> <b>99 &euro;</b></div>
+    </div>
+   </td>
+  </tr></table>
+ </td></tr>
+ <tr><td style="background-color:#212529;padding:24px;text-align:center;font-family:Arial,sans-serif;font-size:12px;line-height:18px;color:#adb5bd">
+  Northwind Outdoor &middot; 10 Example Street, Lyon<br>
+  <a href="https://northwind-outdoor.example/unsubscribe" style="color:#ffc107">Unsubscribe</a> &middot; <a href="https://northwind-outdoor.example/prefs" style="color:#ffc107">Preferences</a>
+ </td></tr>
+</table>
+</div>
+<img src="https://open.northwind-outdoor.example/p.gif?id=xyz" width="1" height="1" alt="">
+</body></html>
+
+--REL
+Content-Type: image/png; name="logo.png"
+Content-ID: <logo@northwind>
+Content-Disposition: inline; filename="logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAKAAAAAwCAIAAAAZy+Y5AAAA40lEQVR4nO3OwQ3DQBDDwKvV/fdw
+qcA/EVIMLuapBXjuc/Rh/QKh+gVC9QuE6hcI1S8Qql8gVL9AqH6BUP0CofoFQvULhOoXCNUvEKpf
+IFS/QKh+gVD9AqH6BUL1C4TqFwjVLxCqXyBUv0CofoFQ577d24/7v9rPBbnP7ueC3Gf3c0Hus/u5
+IPfZ/VyQ++x+Lsh9dj8X5D67nwtyn93PBbnP7ueC3Gf3c0Hus/u5IPfZ/VyQ++x+Lsh9dj8X5D67
+nwtyn93PBbnP7ueC3Gf3c0Hus/u5IPfZ/VyQ++x+Lsj9je5/r5vyTc67eCwAAAAASUVORK5CYII=
+--REL
+Content-Type: image/png; name="hero.png"
+Content-ID: <hero@northwind>
+Content-Disposition: inline; filename="hero.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAlgAAADICAIAAAC7/QjhAAAEqElEQVR4nO3VsQ2AMBAEQWeug4CA
+/iugMtwAxJbYkSbclz67cZwXAGSN7R8AwEaGEIA0QwhAmiEEIM0QApBmCAFIM4QApBlCANIMIQBp
+hhCANEMIQJohBCDNEAKQZggBSDOEAKQZQgDSDCEAaYYQgDRDCECaIQQgzRACkGYIAUgzhACkGUIA
+0gwhAGmGEIA0QwhAmiEEIM0QApBmCAFIM4QApBlCANIMIQBphhCANEMIQJohBCDNEAKQZggBSDOE
+AKQZQgDSDCEAaYYQgDRDCECaIQQgzRACkGYIAUgzhACkGUIA0gwhAGmGEIA0QwhAmiEEIM0QApBm
+CAFIM4QApBlCANIMIQBphhCANEMIQJohBCDNEAKQZggBSDOEAKQZQgDSDCEAaYYQgDRDCECaIQQg
+zRACkGYIAUgzhACkGUIA0gwhAGmGEIA0QwhAmiEEIM0QApBmCAFIM4QApBlCANIMIQBphhCANEMI
+QJohBCDNEAKQZggBSDOEAKQZQgDSDCEAaYYQgDRDCECaIQQgzRACkGYIAUgzhACkGUIA0gwhAGmG
+EIA0QwhAmiEEIG0893z1daDX6/V6/Z96Q6jX6/X6dG8I9Xq9Xp/uDaFer9fr070h1Ov1en26N4R6
+vV6vT/eGUK/X6/Xp3hDq9Xq9Pt0bQr1er9ene0Oo1+v1+nRvCPV6vV6f7g2hXq/X69O9IdTr9Xp9
+ujeEer1er0/3hlCv1+v16d4Q6vV6vT7dG0K9Xq/Xp3tDqNfr9fp0bwj1er1en+4NoV6v1+vTvSHU
+6/V6fbo3hHq9Xq9P94ZQr9fr9eneEOr1er0+3RtCvV6v16d7Q6jX6/X6dG8I9Xq9Xp/uDaFer9fr
+070h1Ov1en26N4R6vV6vT/eGUK/X6/Xp3hDq9Xq9Pt0bQr1er9ene0Oo1+v1+nRvCPV6vV6f7g2h
+Xq/X69O9IdTr9Xp9ujeEer1er0/3hlCv1+v16d4Q6vV6vT7dG0K9Xq/Xp3tDqNfr9fp0bwj1er1e
+n+4NoV6v1+vTvSHU6/V6fbo3hHq9Xq9P94ZQr9fr9eneEOr1er0+3RtCvV6v16d7Q6jX6/X6dG8I
+9Xq9Xp/uDaFer9fr070h1Ov1en26N4R6vV6vT/eGUK/X6/Xp3hDq9Xq9Pt0bQr1er9ene0Oo1+v1
++nRvCPV6vV6f7g2hXq/X69O9IdTr9Xp9ujeEer1er0/3hlCv1+v16d4Q6vV6vT7dG0K9Xq/Xp3tD
+qNfr9fp0bwj1er1en+4NoV6v1+vTvSHU6/V6fbo3hHq9Xq9P94ZQr9fr9eneEOr1er0+3RtCvV6v
+16d7Q6jX6/X6dG8I9Xq9Xp/uDaFer9fr070h1Ov1en26N4R6vV6vT/eGUK/X6/Xp3hDq9Xq9Pt0b
+Qr1er9ene0Oo1+v1+nRvCPV6vV6f7g2hXq/X69O9IdTr9Xp9ujeEer1er0/3hlCv1+v16d4Q6vV6
+vT7dG0K9Xq/Xp3tDqNfr9fp0bwj1er1en+4NoV6v1+vTvSHU6/V6fbo3hHq9Xq9P94ZQr9fr9ene
+EOr1er0+3RtCvV6v16d7Q6jX6/X6dG8I9Xq9Xj/L/QJ9nU3oKRgrWQAAAABJRU5ErkJggg==
+--REL--

@@ -368,6 +368,8 @@ impl SearchView {
             tr(cx, "Search operators")
         };
         div()
+            // Blocks clicks to what is below, and tells the mail webview it is covered.
+            .occlude()
             .w(px(380.))
             .mt(SPACE_1)
             .p(SPACE_1)

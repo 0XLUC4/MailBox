@@ -1,0 +1,21 @@
+From: Jordan Lee <jordan.lee@example.com>
+To: Alex Martin <alex.martin@example.com>
+Subject: Notes from Thursday's call
+Date: Sat, 14 Nov 2026 09:30:00 +0100
+Message-ID: <06-plain-text.eml@fixtures.mailbox.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi Alex,
+
+Quick recap of Thursday's call:
+
+- Launch moves to December 3rd.
+- Sam owns the migration checklist: https://wiki.example.com/projects/migration
+- Next sync: Tuesday 10:00.
+
+> Can we keep the old export format for one more release?
+Yes, until 2.4.
+
+Thanks,
+Jordan

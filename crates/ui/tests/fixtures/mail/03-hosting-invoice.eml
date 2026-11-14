@@ -1,0 +1,47 @@
+From: HostCloud Billing <billing@hostcloud.example>
+To: Alex Martin <alex.martin@example.com>
+Subject: Your invoice FR-2026-11-0042 is available
+Date: Wed, 11 Nov 2026 06:05:00 +0100
+Message-ID: <03-hosting-invoice.eml@fixtures.mailbox.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="ALT"
+
+--ALT
+Content-Type: text/plain; charset=utf-8
+
+(plain text version of Your invoice FR-2026-11-0042 is available)
+
+--ALT
+Content-Type: text/html; charset=utf-8
+
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>
+<body bgcolor="#f2f4f7" style="margin:0;padding:0">
+<table width="100%" bgcolor="#f2f4f7" border="0" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 8px">
+<table width="600" border="0" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="border:1px solid #d9dee5">
+ <tr><td bgcolor="#000e9c" style="padding:18px 24px"><img src="https://static.cdn.example.net/hc/logo-white-140x28.png" width="140" height="28" alt="HostCloud" style="display:block"></td></tr>
+ <tr><td style="padding:28px 24px 8px 24px;font-family:Arial,sans-serif;font-size:20px;color:#000e9c;font-weight:bold">Your invoice is available</td></tr>
+ <tr><td style="padding:0 24px 16px 24px;font-family:Arial,sans-serif;font-size:14px;line-height:22px;color:#4d5592">
+   Hello Alex,<br>Your invoice <b>FR-2026-11-0042</b> for the period 01/11/2026 &ndash; 30/11/2026 is now available in your customer area. The amount will be debited from your registered payment method.
+ </td></tr>
+ <tr><td style="padding:0 24px">
+  <table width="100%" border="0" cellpadding="8" cellspacing="0" style="font-family:Arial,sans-serif;font-size:13px;color:#333333;border-collapse:collapse">
+   <tr bgcolor="#eef1f8"><th align="left" style="color:#000e9c">Service</th><th align="center" style="color:#000e9c">Qty</th><th align="right" style="color:#000e9c">Amount</th></tr>
+   <tr><td style="border-bottom:1px solid #e5e8ee">VPS Value 2 vCores</td><td align="center" style="border-bottom:1px solid #e5e8ee">1</td><td align="right" style="border-bottom:1px solid #e5e8ee">6,00&nbsp;&euro;</td></tr>
+   <tr><td style="border-bottom:1px solid #e5e8ee">Domain example-project.test (renewal)</td><td align="center" style="border-bottom:1px solid #e5e8ee">1</td><td align="right" style="border-bottom:1px solid #e5e8ee">9,99&nbsp;&euro;</td></tr>
+   <tr><td style="border-bottom:1px solid #e5e8ee">Automated backup</td><td align="center" style="border-bottom:1px solid #e5e8ee">1</td><td align="right" style="border-bottom:1px solid #e5e8ee">1,20&nbsp;&euro;</td></tr>
+   <tr><td colspan="2" align="right"><b>Total incl. VAT</b></td><td align="right" style="font-size:15px;color:#000e9c"><b>20,63&nbsp;&euro;</b></td></tr>
+  </table>
+ </td></tr>
+ <tr><td align="center" style="padding:24px">
+  <table border="0" cellpadding="0" cellspacing="0"><tr><td bgcolor="#000e9c" style="border-radius:4px">
+   <a href="https://www.hostcloud.example/manager/billing/invoices/FR-2026-11-0042" style="display:inline-block;padding:12px 28px;font-family:Arial,sans-serif;font-size:14px;color:#ffffff;text-decoration:none;font-weight:bold">Download the invoice</a>
+  </td></tr></table>
+ </td></tr>
+ <tr><td style="padding:16px 24px;background:#f7f8fb;border-top:1px solid #e5e8ee;font-family:Arial,sans-serif;font-size:11px;line-height:16px;color:#8c93b6">
+  HostCloud SAS &middot; 2 rue de l'Exemple, 59100 Roubaix &middot; This is an automated message, please do not reply.
+ </td></tr>
+</table>
+</td></tr></table>
+</body></html>
+
+--ALT--
