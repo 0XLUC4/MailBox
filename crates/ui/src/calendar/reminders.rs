@@ -287,7 +287,7 @@ impl Render for ReminderWindow {
                                                 t.text_muted
                                             })
                                             .child(format!(
-                                                "{} · {}",
+                                                "{} - {}",
                                                 when_label(event.start, now),
                                                 if event.all_day {
                                                     local_start.format("%a %-d %b").to_string()

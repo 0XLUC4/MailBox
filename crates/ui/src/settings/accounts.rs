@@ -150,9 +150,9 @@ pub fn rows(state: &Entity<AppState>, cx: &App) -> Vec<AnyElement> {
         let oauth = matches!(auth_of(store, account.id), AuthConfig::OAuth2 { .. });
         let detail = match &servers {
             Some(servers) if !servers.provider.is_empty() => {
-                format!("{} · {}", account.email, servers.provider)
+                format!("{} - {}", account.email, servers.provider)
             }
-            Some(servers) => format!("{} · {}", account.email, servers.imap.host),
+            Some(servers) => format!("{} - {}", account.email, servers.imap.host),
             None => account.email.clone(),
         };
         let id = account.id;
@@ -260,7 +260,7 @@ pub fn rows(state: &Entity<AppState>, cx: &App) -> Vec<AnyElement> {
         if account.contacts {
             what.push(tr(cx, "People"));
         }
-        let detail = format!("{} · {}", account.provider.label(), what.join(", "));
+        let detail = format!("{} - {}", account.provider.label(), what.join(", "));
         let mut actions = Vec::new();
         if !account.provider.uses_oauth() {
             let target = PasswordTarget::Dav(account.clone());

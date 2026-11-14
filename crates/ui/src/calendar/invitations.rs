@@ -292,7 +292,7 @@ pub fn respond_to_invitation(
         cx,
     );
     state.update(cx, |state, cx| match queued {
-        Ok(()) => state.notify_info(format!("{verb} · reply queued in the Outbox"), cx),
+        Ok(()) => state.notify_info(format!("{verb} - reply queued in the Outbox"), cx),
         // The answer is saved; only the reply could not be queued.
         Err(err) => state.report_error(format!("Answer saved, reply not sent: {err}"), cx),
     });

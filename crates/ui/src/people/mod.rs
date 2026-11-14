@@ -393,7 +393,7 @@ impl PeopleView {
             "Contact saved"
         };
         self.state.update(cx, |state, cx| {
-            state.notify_info(format!("{noun} · Ctrl+Z to undo"), cx)
+            state.notify_info(format!("{noun} - Ctrl+Z to undo"), cx)
         });
         cx.notify();
     }
@@ -627,7 +627,7 @@ impl PeopleView {
         self.state.update(cx, |state, cx| {
             if state.run(Command::Batch(commands), cx) {
                 let noun = if count == 1 { "contact" } else { "contacts" };
-                state.notify_info(format!("Imported {count} {noun} · Ctrl+Z to undo"), cx);
+                state.notify_info(format!("Imported {count} {noun} - Ctrl+Z to undo"), cx);
             }
         });
         self.set_filter(Filter::All, cx);
@@ -1077,7 +1077,7 @@ impl PeopleView {
                     "emails"
                 };
                 let meta = format!(
-                    "{} {noun} · last {}",
+                    "{} {noun} - last {}",
                     suggestion.messages,
                     suggestion
                         .last
@@ -1199,7 +1199,7 @@ impl PeopleView {
                 div()
                     .text_size(TEXT_SM)
                     .text_color(t.text_subtle)
-                    .child("Ctrl+click to add or remove · Shift+click for a range · Esc to clear"),
+                    .child("Ctrl+click to add or remove - Shift+click for a range - Esc to clear"),
             )
             .child(
                 div()
@@ -1553,7 +1553,7 @@ impl Render for PeopleView {
                     .into_iter()
                     .filter(|part| !part.is_empty())
                     .collect::<Vec<_>>()
-                    .join(" · ");
+                    .join(" - ");
                 let subtitle = if subtitle.is_empty() {
                     card.primary_email().unwrap_or_default().to_owned()
                 } else {
@@ -1645,7 +1645,7 @@ impl Render for PeopleView {
         } else {
             EmptyState::new(IconName::Contact, "Select a contact")
                 .description(format!(
-                    "{} contacts · {} groups",
+                    "{} contacts - {} groups",
                     cards.len(),
                     groups.len()
                 ))

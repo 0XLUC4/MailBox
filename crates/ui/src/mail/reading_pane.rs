@@ -369,7 +369,7 @@ impl ReadingPaneView {
                             })
                             .when(message.flags.flagged, |el| {
                                 let label = match due {
-                                    Some(due) => format!("Follow up · {}", due.format("%a %d %b")),
+                                    Some(due) => format!("Follow up - {}", due.format("%a %d %b")),
                                     None => "Follow up".into(),
                                 };
                                 el.child(Badge::new(label).color(t.danger))

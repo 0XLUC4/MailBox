@@ -155,7 +155,7 @@ impl CommandPalette {
             for folder in store.list_folders(account.id).unwrap_or_default() {
                 items.push(Item {
                     title: folder.name.clone().into(),
-                    subtitle: format!("Folder · {}", account.name).into(),
+                    subtitle: format!("Folder - {}", account.name).into(),
                     icon: IconName::Folder,
                     shortcut: None,
                     keywords: format!("go to folder {}", folder.role.as_str()).into(),
@@ -171,7 +171,7 @@ impl CommandPalette {
                 subtitle: if email.is_empty() {
                     "Contact".into()
                 } else {
-                    format!("Contact · {email}").into()
+                    format!("Contact - {email}").into()
                 },
                 icon: IconName::User,
                 shortcut: None,

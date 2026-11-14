@@ -1217,7 +1217,7 @@ impl SyncBridge {
         } else if let Some(time) = self.last_success {
             (
                 SyncPhase::Idle,
-                format!("Up to date · {}", time.format("%H:%M")),
+                format!("Up to date - {}", time.format("%H:%M")),
             )
         } else {
             (SyncPhase::Syncing, "Waiting to sync".to_owned())

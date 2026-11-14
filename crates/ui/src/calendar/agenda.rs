@@ -254,7 +254,7 @@ impl CalendarView {
                             .text_color(t.text_muted)
                             .child(calendar_name)
                             .when(!event.location.is_empty(), |el| {
-                                el.child("·").child(
+                                el.child("-").child(
                                     div()
                                         .flex()
                                         .flex_row()
@@ -265,7 +265,7 @@ impl CalendarView {
                                 )
                             })
                             .when(!event.attendees.is_empty(), |el| {
-                                el.child("·").child(format!(
+                                el.child("-").child(format!(
                                     "{} {}",
                                     event.attendees.len(),
                                     if event.attendees.len() == 1 {

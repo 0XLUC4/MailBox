@@ -696,7 +696,7 @@ impl TasksView {
                             )
                             .child(div().text_size(TEXT_SM).text_color(t.text_muted).child(
                                 format!(
-                                    "From {} · {}",
+                                    "From {} - {}",
                                     message.from.display(),
                                     message.date.with_timezone(&Local).format("%a %-d %b %Y, %H:%M")
                                 ),

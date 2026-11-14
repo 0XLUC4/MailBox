@@ -640,7 +640,7 @@ impl Render for FolderPaneView {
                     folders.iter().find(|f| f.id == *id).map(|folder| {
                         let name = folder_name(folder);
                         let label = if multi_account && folder.role != FolderRole::Custom {
-                            format!("{name} · {}", account.name)
+                            format!("{name} - {}", account.name)
                         } else {
                             name
                         };

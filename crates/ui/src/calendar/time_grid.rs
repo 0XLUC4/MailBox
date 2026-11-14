@@ -647,7 +647,7 @@ impl CalendarView {
                                 .text_color(t.accent)
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(format!(
-                                    "{} – {}  ·  Enter to save, Esc to cancel",
+                                    "{} – {}  -  Enter to save, Esc to cancel",
                                     layout::format_minutes(quick.start),
                                     layout::format_minutes(quick.end)
                                 )),

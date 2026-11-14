@@ -839,7 +839,7 @@ impl TasksView {
                             .text_color(t.text_muted)
                             .child(Icon::new(IconName::Mail).size(px(12.)))
                             .child(format!(
-                                "{} · {}",
+                                "{} - {}",
                                 message.from.display(),
                                 message.date.with_timezone(&Local).format("%-d %b")
                             )),

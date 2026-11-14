@@ -694,7 +694,7 @@ impl DavBridge {
             error
         } else if let Some(time) = self.last_success {
             format!(
-                "Calendars and contacts up to date · {}",
+                "Calendars and contacts up to date - {}",
                 time.format("%H:%M")
             )
         } else {

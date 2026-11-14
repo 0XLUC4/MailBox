@@ -1212,7 +1212,7 @@ impl EventEditor {
                 let active = current_zone.as_deref() == zone;
                 let label = zone.map_or_else(
                     || "System time".to_owned(),
-                    |name| format!("{name}  ·  {}", cal::utc_offset_label(name, Utc::now())),
+                    |name| format!("{name}  -  {}", cal::utc_offset_label(name, Utc::now())),
                 );
                 let value = zone.map(str::to_owned);
                 div()
@@ -1679,7 +1679,7 @@ impl EventEditor {
             .map(|(index, start)| {
                 let label = start
                     .with_timezone(&Local)
-                    .format("%a %-d · %H:%M")
+                    .format("%a %-d - %H:%M")
                     .to_string();
                 chip(("slot", index as u64), label, false, t)
                     .on_click(cx.listener(move |this, _, window, cx| {

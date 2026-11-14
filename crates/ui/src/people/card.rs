@@ -60,7 +60,7 @@ impl PeopleView {
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
-            .join(" · ");
+            .join(" - ");
         let header = div()
             .flex()
             .items_center()
@@ -329,7 +329,7 @@ impl PeopleView {
                 } else if event.all_day {
                     start.format("%a %-d %b").to_string()
                 } else {
-                    start.format("%a %-d %b · %H:%M").to_string()
+                    start.format("%a %-d %b - %H:%M").to_string()
                 };
                 activity_row(
                     ("card-event", event.id as u64),

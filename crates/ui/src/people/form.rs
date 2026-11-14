@@ -570,7 +570,7 @@ impl PeopleView {
                         div()
                             .text_size(TEXT_XS)
                             .text_color(t.text_subtle)
-                            .child("Enter saves · Esc cancels"),
+                            .child("Enter saves - Esc cancels"),
                     ),
             )
             .into_any_element()
