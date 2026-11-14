@@ -3906,6 +3906,7 @@ dependencies = [
  "mailbox-core",
  "mailbox-sync",
  "tauri-winrt-notification",
+ "ureq",
  "windows-registry 0.6.1",
 ]
 

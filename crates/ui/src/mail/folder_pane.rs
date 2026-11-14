@@ -66,6 +66,8 @@ pub fn folder_tree(folders: &[Folder]) -> Vec<(usize, &Folder)> {
     ordered
 }
 
+type OnSubmit = dyn Fn(String, &mut Window, &mut App) -> bool;
+
 /// Opens a small dialog asking for a name. `on_submit` returns whether to close.
 pub fn prompt_text(
     title: &'static str,
@@ -76,7 +78,7 @@ pub fn prompt_text(
     on_submit: impl Fn(String, &mut Window, &mut App) -> bool + 'static,
 ) {
     let input = cx.new(|cx| InputState::new(window, cx).default_value(initial));
-    let on_submit: Rc<dyn Fn(String, &mut Window, &mut App) -> bool> = Rc::new(on_submit);
+    let on_submit: Rc<OnSubmit> = Rc::new(on_submit);
     let enter_submit = on_submit.clone();
     let subscription =
         window.subscribe(&input, cx, move |input, event: &InputEvent, window, cx| {
@@ -242,6 +244,101 @@ impl FolderPaneView {
         });
     }
 
+    /// "Move folder": the account's folders outside the moved subtree, plus the top level.
+    fn move_dialog(state: Entity<AppState>, folder: &Folder, window: &mut Window, cx: &mut App) {
+        let folder_id = folder.id;
+        let current_parent = folder.parent_id;
+        let folders = state
+            .read(cx)
+            .store()
+            .list_folders(folder.account_id)
+            .unwrap_or_default();
+        // The folder and its descendants are not valid targets.
+        let mut excluded = HashSet::from([folder_id]);
+        for (_, candidate) in folder_tree(&folders) {
+            if candidate
+                .parent_id
+                .is_some_and(|parent| excluded.contains(&parent))
+            {
+                excluded.insert(candidate.id);
+            }
+        }
+        let targets: Rc<Vec<(usize, Folder)>> = Rc::new(
+            folder_tree(&folders)
+                .into_iter()
+                .filter(|(_, candidate)| !excluded.contains(&candidate.id))
+                .map(|(depth, candidate)| (depth, candidate.clone()))
+                .collect(),
+        );
+        let title: SharedString = format!("Move “{}” to", folder.name).into();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let t = theme(cx).clone();
+            let row = |id: ElementId, depth: usize, icon: IconName, label: String, here: bool| {
+                div()
+                    .id(id)
+                    .flex()
+                    .flex_row()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(SPACE_2)
+                    .h(px(30.))
+                    .pl(px(8. + depth as f32 * 16.))
+                    .pr(SPACE_2)
+                    .rounded(RADIUS_MD)
+                    .cursor_pointer()
+                    .text_size(crate::theme::TEXT_SM)
+                    .hover(|style| style.bg(t.hover))
+                    .child(Icon::new(icon).size(ICON_SIZE_SM).text_color(t.text_muted))
+                    .child(div().flex_1().min_w(px(0.)).truncate().child(label))
+                    .when(here, |el| {
+                        el.child(
+                            Icon::new(IconName::Check)
+                                .size(ICON_SIZE_SM)
+                                .text_color(t.accent),
+                        )
+                    })
+            };
+            let pick = |parent: Option<Id>| {
+                let state = state.clone();
+                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                    let command = mail_ops::move_folder(state.read(cx).store(), folder_id, parent);
+                    if ops::run(&state, command, cx) {
+                        window.close_dialog(cx);
+                    }
+                }
+            };
+            let mut list = div().flex().flex_col().gap(px(2.)).child(
+                row(
+                    "move-top".into(),
+                    0,
+                    IconName::FolderTree,
+                    "Top level".into(),
+                    current_parent.is_none(),
+                )
+                .on_click(pick(None)),
+            );
+            for (depth, target) in targets.iter() {
+                list = list.child(
+                    row(
+                        ("move-to", target.id as u64).into(),
+                        depth + 1,
+                        folder_icon(target),
+                        folder_name(target),
+                        current_parent == Some(target.id),
+                    )
+                    .on_click(pick(Some(target.id))),
+                );
+            }
+            dialog.w(px(360.)).title(title.clone()).child(
+                div()
+                    .id("move-folder-picker")
+                    .max_h(px(420.))
+                    .overflow_y_scroll()
+                    .child(list),
+            )
+        });
+    }
+
     fn folder_menu(
         menu: PopupMenu,
         pane: &Entity<Self>,
@@ -260,6 +357,10 @@ impl FolderPaneView {
         let rename = item("Rename", IconName::FolderPen)
             .disabled(!custom)
             .on_click(move |_, window, cx| Self::rename_dialog(s.clone(), &f, window, cx));
+        let (s, f) = (state.clone(), folder.clone());
+        let move_to = item("Move folder…", IconName::FolderInput)
+            .disabled(!custom)
+            .on_click(move |_, window, cx| Self::move_dialog(s.clone(), &f, window, cx));
         let (s, f) = (state.clone(), folder.clone());
         let delete = item("Delete folder", IconName::FolderX)
             .disabled(!custom)
@@ -282,6 +383,7 @@ impl FolderPaneView {
 
         menu.item(new_sub)
             .item(rename)
+            .item(move_to)
             .item(delete)
             .separator()
             .item(mark_read)

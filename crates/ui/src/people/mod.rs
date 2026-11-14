@@ -1102,3 +1102,19 @@ fn decode_photo(uri: &str) -> Option<Arc<Image>> {
     };
     Some(Arc::new(Image::from_bytes(format, bytes)))
 }
+
+/// Ribbon / command palette entry points (routed by `crate::actions`).
+impl PeopleView {
+    pub(crate) fn action_new_contact(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_contact(window, cx);
+    }
+
+    /// Deletes the selected contact; false when nothing is selected.
+    pub(crate) fn action_delete(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(id) = self.selected else {
+            return false;
+        };
+        self.delete_contact(id, cx);
+        true
+    }
+}

@@ -212,8 +212,23 @@ pub fn open_snooze_picker(state: Entity<AppState>, window: &mut Window, cx: &mut
             state.notify_info("Select a message first", cx)
         });
     };
-    let on_pick: OnPick = Rc::new(move |until, _, cx| snooze(&state, &[id], until, cx));
+    open_snooze_picker_for(state, vec![id], window, cx);
+}
+
+/// Preset picker for snoozing `ids` (context menu, multi-selection).
+pub fn open_snooze_picker_for(
+    state: Entity<AppState>,
+    ids: Vec<Id>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let on_pick: OnPick = Rc::new(move |until, _, cx| snooze(&state, &ids, until, cx));
     open_time_picker("Snooze until", on_pick, window, cx);
+}
+
+/// Whether the conversation `thread_id` is muted.
+pub fn is_muted(state: &Entity<AppState>, thread_id: &str, cx: &App) -> bool {
+    load(state, cx).is_muted(thread_id)
 }
 
 /// A dialog listing [`LaterPreset`]s; `on_pick` gets the chosen moment.
@@ -280,12 +295,17 @@ pub fn schedule_send(state: &Entity<AppState>, message_id: Id, at: DateTime<Utc>
 
 /// Mutes or unmutes the selected message's conversation.
 pub fn toggle_mute_selected(state: &Entity<AppState>, cx: &mut App) {
-    let message = {
-        let state = state.read(cx);
-        state
-            .selected_message()
-            .and_then(|id| state.store().get::<Message>(id).ok().flatten())
-    };
+    match state.read(cx).selected_message() {
+        Some(id) => toggle_mute(state, id, cx),
+        None => state.update(cx, |state, cx| {
+            state.notify_info("Select a message first", cx)
+        }),
+    }
+}
+
+/// Mutes or unmutes the conversation of message `id`.
+pub fn toggle_mute(state: &Entity<AppState>, id: Id, cx: &mut App) {
+    let message = state.read(cx).store().get::<Message>(id).ok().flatten();
     let Some(message) = message.filter(|message| !message.thread_id.is_empty()) else {
         return state.update(cx, |state, cx| {
             state.notify_info("Select a message first", cx)

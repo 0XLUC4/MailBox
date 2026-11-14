@@ -240,7 +240,7 @@ impl ReadingPaneView {
                                     }
                                 }),
                         );
-                        message_menu::build(menu, &s_more, vec![id], window, cx)
+                        message_menu::build(menu, &s_more, vec![id], Some(id), window, cx)
                     }),
             )
             .child(div().flex_1())
@@ -384,7 +384,28 @@ impl ReadingPaneView {
                         .border_1()
                         .border_color(t.border_subtle)
                         .overflow_hidden()
-                        .child(img(path).h(px(96.)).max_w(px(160.)))
+                        .w(px(160.))
+                        .h(px(96.))
+                        .bg(t.surface)
+                        .child({
+                            let subtle = t.text_subtle;
+                            img(path)
+                                .size_full()
+                                .object_fit(ObjectFit::Cover)
+                                .with_fallback(move || {
+                                    div()
+                                        .size_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(IconName::ImageOff)
+                                                .size(px(20.))
+                                                .text_color(subtle),
+                                        )
+                                        .into_any_element()
+                                })
+                        })
                         .on_click(move |_, _, cx| {
                             crate::attachments::open(&state, message_id, &name, cx)
                         }),

@@ -318,6 +318,8 @@ struct TableState {
     rows: Vec<Vec<Vec<Block>>>,
     /// Frame depth of the open cell, if any.
     cell_depth: Option<usize>,
+    /// `colspan` of the open cell.
+    span: usize,
 }
 
 #[derive(Default)]
@@ -605,14 +607,18 @@ impl Builder {
         let blocks = self.pop_frame();
         if let Some(table) = self.tables.last_mut() {
             table.cell_depth = None;
+            // A spanning cell is followed by blank cells so later columns stay aligned.
+            let filler = if blocks.is_empty() { 0 } else { table.span - 1 };
+            let cells = std::iter::once(blocks)
+                .chain((0..filler).map(|_| vec![Block::Paragraph(Vec::new())]));
             match table.rows.last_mut() {
-                Some(row) => row.push(blocks),
-                None => table.rows.push(vec![blocks]),
+                Some(row) => row.extend(cells),
+                None => table.rows.push(cells.collect()),
             }
         }
     }
 
-    fn open_cell(&mut self) {
+    fn open_cell(&mut self, span: usize) {
         if self.tables.is_empty() {
             return;
         }
@@ -622,6 +628,7 @@ impl Builder {
         let depth = self.frames.len() - 1;
         if let Some(table) = self.tables.last_mut() {
             table.cell_depth = Some(depth);
+            table.span = span;
         }
     }
 
@@ -699,6 +706,7 @@ impl Builder {
                 self.tables.push(TableState {
                     rows: Vec::new(),
                     cell_depth: None,
+                    span: 1,
                 });
             }
             "tr" => {
@@ -708,7 +716,11 @@ impl Builder {
                 }
             }
             "td" | "th" => {
-                self.open_cell();
+                let span = attr(attrs, "colspan")
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(1)
+                    .clamp(1, 20);
+                self.open_cell(span);
                 if name == "th" {
                     self.bold += 1;
                 }
@@ -783,12 +795,55 @@ impl Builder {
     }
 }
 
+/// Elements without content or closing tag.
+const VOID_TAGS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "wbr",
+];
+
+/// Hidden content: newsletter preheaders (`display:none`), `hidden`, Outlook's `mso-hide:all`.
+fn is_hidden(attrs: &[(String, String)]) -> bool {
+    if attr(attrs, "hidden").is_some() {
+        return true;
+    }
+    let style: String = attr(attrs, "style")
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    style.split(';').any(|rule| {
+        rule.starts_with("display:none")
+            || rule.starts_with("mso-hide:all")
+            || rule.starts_with("visibility:hidden")
+    })
+}
+
 /// Parses an HTML mail body into display blocks.
 pub fn parse(html: &str) -> Vec<Block> {
     let mut builder = Builder::new();
+    // Hidden element being skipped: its name and how many of the same are open inside it.
+    let mut hidden: Option<(String, usize)> = None;
     for token in tokenize(html) {
+        if let Some((name, depth)) = hidden.as_mut() {
+            match &token {
+                Token::Open { name: open, .. } if open == name => *depth += 1,
+                Token::Close(close) if close == name => {
+                    *depth -= 1;
+                    if *depth == 0 {
+                        hidden = None;
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         match token {
             Token::Text(text) => builder.text(&text),
+            Token::Open { name, attrs } if is_hidden(&attrs) => {
+                if !VOID_TAGS.contains(&name.as_str()) {
+                    hidden = Some((name, 1));
+                }
+            }
             Token::Open { name, attrs } => builder.open(&name, &attrs),
             Token::Close(name) => builder.close(&name),
         }
@@ -1152,22 +1207,13 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
                     )
                     .into_any_element(),
                 Block::Image { src, alt } => {
-                    if ctx.show_images && is_remote(src) {
-                        let source = if src.starts_with("//") {
-                            format!("https:{src}")
-                        } else {
-                            src.clone()
-                        };
-                        div()
-                            .max_w(px(640.))
-                            .child(img(source).max_w_full().rounded(RADIUS_MD))
-                            .into_any_element()
+                    let label: SharedString = if alt.is_empty() {
+                        "Image".into()
                     } else {
-                        let label = if alt.is_empty() {
-                            "Image"
-                        } else {
-                            alt.as_str()
-                        };
+                        alt.clone().into()
+                    };
+                    let (border, surface, subtle) = (t.border_subtle, t.surface, t.text_subtle);
+                    let placeholder = move || {
                         div()
                             .flex()
                             .flex_row()
@@ -1178,13 +1224,32 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
                             .py(SPACE_1)
                             .rounded(RADIUS_MD)
                             .border_1()
-                            .border_color(t.border_subtle)
-                            .bg(t.surface)
+                            .border_color(border)
+                            .bg(surface)
                             .text_size(TEXT_SM)
-                            .text_color(t.text_subtle)
+                            .text_color(subtle)
                             .child(Icon::new(IconName::ImageOff).size(px(14.)))
-                            .child(label.to_owned())
+                            .child(label.clone())
                             .into_any_element()
+                    };
+                    if ctx.show_images && is_remote(src) {
+                        let source = if src.starts_with("//") {
+                            format!("https:{src}")
+                        } else {
+                            src.clone()
+                        };
+                        // Pictures that fail to load keep their alt text.
+                        div()
+                            .max_w(px(640.))
+                            .child(
+                                img(source)
+                                    .max_w_full()
+                                    .rounded(RADIUS_MD)
+                                    .with_fallback(placeholder),
+                            )
+                            .into_any_element()
+                    } else {
+                        placeholder()
                     }
                 }
                 Block::Rule => div()
@@ -1275,6 +1340,29 @@ mod tests {
         assert_eq!(blocks.len(), 3);
         assert!(has_remote_images(&blocks));
         assert!(!has_remote_images(&blocks[2..]));
+    }
+
+    #[test]
+    fn colspan_keeps_columns_aligned() {
+        let blocks = parse(
+            "<table><tr><th>Item</th><th>Qty</th><th>Price</th></tr>\
+             <tr><td colspan=\"2\">Total</td><td>9 EUR</td></tr></table>",
+        );
+        let Some(Block::Table(rows)) = blocks.first() else {
+            panic!("expected a table: {blocks:?}");
+        };
+        assert_eq!(rows[1].len(), 3);
+        assert_eq!(text(&rows[1][2]), "9 EUR");
+    }
+
+    #[test]
+    fn hidden_preheaders_are_skipped() {
+        let blocks = parse(
+            "<div style=\"display: none; max-height:0\">Preheader <div>nested</div> text</div>\
+             <p>Visible</p><span hidden>secret</span><p style=\"mso-hide:all\">mso</p>\
+             <img style=\"display:none\" src=\"https://x/y.png\"><p>End</p>",
+        );
+        assert_eq!(text(&blocks), "Visible\n\nEnd");
     }
 
     #[test]

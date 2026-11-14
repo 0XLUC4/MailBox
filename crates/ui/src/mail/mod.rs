@@ -13,11 +13,13 @@ mod message_menu;
 mod message_window;
 mod ops;
 mod reading_pane;
+mod remote_images;
 
 pub use folder_pane::FolderPaneView;
 pub use message_list::MessageListView;
+pub use message_menu::{open_category_dialog, open_move_dialog};
 pub use message_window::open as open_message_window;
-pub use ops::ComposeKind;
+pub use ops::{ComposeKind, compose_from};
 pub use reading_pane::{PaneSource, ReadingPaneView};
 
 use gpui::*;
@@ -82,18 +84,16 @@ fn bind_keys(cx: &mut App) {
     ]);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ReadingPanePosition {
-    #[default]
-    Right,
-    Bottom,
-    Off,
+pub use mailbox_core::settings::ReadingPane as ReadingPanePosition;
+
+/// Reading pane position, from the stored settings (View tab, list toolbar, Settings).
+pub fn pane_position(cx: &App) -> ReadingPanePosition {
+    crate::settings::prefs(cx).reading_pane
 }
 
-/// Layout preferences shared by the mail panes (UI state, not persisted yet).
+/// Layout state shared by the mail panes that is not worth persisting.
 #[derive(Debug, Default)]
 pub struct MailPrefs {
-    pub reading_pane: ReadingPanePosition,
     pub folders_collapsed: bool,
 }
 
@@ -153,6 +153,7 @@ pub struct MailView {
 impl MailView {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         bind_keys(cx);
+        remote_images::install(cx);
         let prefs = cx.new(|_| MailPrefs::default());
         let subscription = cx.observe(&prefs, |_, _, cx| cx.notify());
         Self {
@@ -171,7 +172,7 @@ impl Render for MailView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let prefs = self.prefs.read(cx);
-        let position = prefs.reading_pane;
+        let position = pane_position(cx);
         let folders_width = if prefs.folders_collapsed {
             px(48.)
         } else {

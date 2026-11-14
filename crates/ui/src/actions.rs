@@ -1,24 +1,32 @@
 //! App-wide GPUI actions: the catalog (labels, icons, shortcuts) used by the ribbon and the
 //! command palette, the key bindings, and the shell-level handlers.
 //!
-//! Modules handle the actions they own on their root element (e.g. the mail view handles
-//! [`Reply`]); the handlers installed here on the shell root only run when nothing closer to the
-//! focus handled the action, so they act as the default implementation. Actions owned by other
-//! modules get an app-level "not available yet" toast ([`register_fallbacks`]).
+//! Views may handle an action closer to the focus (e.g. the message list acts on its whole
+//! multi-selection); the handlers installed here on the shell root run otherwise, so they are the
+//! default implementation. Calendar, People and Tasks actions are routed to those views through
+//! [`ModuleViews`].
 
-use gpui::{Action, App, Entity, InteractiveElement, KeyBinding, SharedString, Window};
+use chrono::{Duration, Timelike as _, Utc};
+use gpui::{
+    Action, App, Entity, Global, InteractiveElement, KeyBinding, SharedString, WeakEntity, Window,
+};
 use mailbox_core::settings::{Density, ReadingPane, RibbonMode, ThemePreference};
 use mailbox_core::{Command, FolderRole, Message, rules};
 
 pub use crate::SendReceive; // defined with the sync bridge
 use crate::app_state::{AppState, Module};
+use crate::calendar::{CalendarView, EditorTarget};
 use crate::components::IconName;
+use crate::compose::{ComposeRequest, open_compose};
 use crate::everyday::{
     ExportMailbox, ImportMailbox, MuteConversation, OpenAutoReply, OpenReadReceipts, PrintMessage,
     SaveAllAttachments, SaveMessageAs, SetDefaultMailApp, SnoozeMessage,
 };
+use crate::mail::ComposeKind;
+use crate::people::PeopleView;
 use crate::search::SearchView;
 use crate::settings::{prefs, update_settings};
+use crate::tasks::TasksView;
 use crate::{GoToCalendar, GoToMail, GoToPeople, GoToSettings, GoToTasks, Redo, Undo, dialogs};
 
 gpui::actions!(
@@ -230,6 +238,54 @@ pub fn install<E: InteractiveElement>(
         };
         window.dispatch_action(action, cx);
     });
+    let element = handle::<_, NewMail>(element, &state, |state, window, cx| {
+        open_compose(state, ComposeRequest::New, window, cx)
+    });
+    let element = handle::<_, Reply>(element, &state, |state, window, cx| {
+        respond(state, ComposeKind::Reply, window, cx)
+    });
+    let element = handle::<_, ReplyAll>(element, &state, |state, window, cx| {
+        respond(state, ComposeKind::ReplyAll, window, cx)
+    });
+    let element = handle::<_, Forward>(element, &state, |state, window, cx| {
+        respond(state, ComposeKind::Forward, window, cx)
+    });
+    let element = handle::<_, NewEvent>(element, &state, new_event);
+    let element = handle::<_, CalendarToday>(element, &state, |state, _, cx| {
+        with_calendar(state, cx, |calendar, cx| calendar.action_today(cx))
+    });
+    let element = handle::<_, CalendarDayView>(element, &state, |state, _, cx| {
+        with_calendar(state, cx, |calendar, cx| calendar.action_show("day", cx))
+    });
+    let element = handle::<_, CalendarWeekView>(element, &state, |state, _, cx| {
+        with_calendar(state, cx, |calendar, cx| calendar.action_show("week", cx))
+    });
+    let element = handle::<_, CalendarMonthView>(element, &state, |state, _, cx| {
+        with_calendar(state, cx, |calendar, cx| calendar.action_show("month", cx))
+    });
+    let element = handle::<_, NewContact>(element, &state, |state, window, cx| {
+        go_to(state, Module::People, cx);
+        if let Some(people) = views(cx).and_then(|views| views.people.upgrade()) {
+            people.update(cx, |people, cx| people.action_new_contact(window, cx));
+        }
+    });
+    let element = handle::<_, NewTask>(element, &state, |state, window, cx| {
+        go_to(state, Module::Tasks, cx);
+        if let Some(tasks) = views(cx).and_then(|views| views.tasks.upgrade()) {
+            tasks.update(cx, |tasks, cx| tasks.action_new_task(window, cx));
+        }
+    });
+    let element = handle::<_, CompleteTask>(element, &state, |state, _, cx| {
+        let done = views(cx)
+            .and_then(|views| views.tasks.upgrade())
+            .is_some_and(|tasks| tasks.update(cx, |tasks, cx| tasks.action_complete(cx)));
+        if !done {
+            state.update(cx, |state, cx| state.notify_info("Select a task first", cx));
+        }
+    });
+    let element = handle::<_, OpenSignatures>(element, &state, |state, window, cx| {
+        crate::signatures::open(state.clone(), window, cx)
+    });
     let element = handle::<_, DeleteSelection>(element, &state, delete_selection);
     let element = handle::<_, Archive>(element, &state, |state, _, cx| {
         move_selection_to_role(state, FolderRole::Archive, cx)
@@ -251,13 +307,13 @@ pub fn install<E: InteractiveElement>(
         let Some(message) = selected_message(state, cx) else {
             return no_selection(state, cx);
         };
-        dialogs::pick_folder(state.clone(), message.id, window, cx);
+        crate::mail::open_move_dialog(state.clone(), vec![message.id], window, cx);
     });
     let element = handle::<_, Categorize>(element, &state, |state, window, cx| {
         let Some(message) = selected_message(state, cx) else {
             return no_selection(state, cx);
         };
-        dialogs::pick_category(state.clone(), message.id, window, cx);
+        crate::mail::open_category_dialog(state.clone(), vec![message.id], window, cx);
     });
     let element = handle::<_, OpenRules>(element, &state, |state, window, cx| {
         dialogs::rules::open(state.clone(), window, cx)
@@ -322,25 +378,6 @@ pub fn install<E: InteractiveElement>(
     })
 }
 
-/// App-level fallbacks for actions owned by other modules (compose, calendar, tasks, sync).
-/// Global listeners run after every element handler, so they never shadow a module's handler;
-/// they only explain why nothing happened. Call once (the ribbon does).
-pub fn register_fallbacks(state: &Entity<AppState>, cx: &mut App) {
-    unavailable::<NewMail>(state, "New mail", cx);
-    unavailable::<NewEvent>(state, "New event", cx);
-    unavailable::<NewContact>(state, "New contact", cx);
-    unavailable::<NewTask>(state, "New task", cx);
-    unavailable::<Reply>(state, "Reply", cx);
-    unavailable::<ReplyAll>(state, "Reply all", cx);
-    unavailable::<Forward>(state, "Forward", cx);
-    unavailable::<CalendarToday>(state, "Calendar views", cx);
-    unavailable::<CalendarDayView>(state, "Calendar views", cx);
-    unavailable::<CalendarWeekView>(state, "Calendar views", cx);
-    unavailable::<CalendarMonthView>(state, "Calendar views", cx);
-    unavailable::<CompleteTask>(state, "Completing tasks", cx);
-    unavailable::<OpenSignatures>(state, "Signatures", cx);
-}
-
 type Handler = fn(&Entity<AppState>, &mut Window, &mut App);
 
 fn handle<E: InteractiveElement, A: Action>(
@@ -352,15 +389,68 @@ fn handle<E: InteractiveElement, A: Action>(
     element.on_action(move |_: &A, window, cx| handler(&state, window, cx))
 }
 
-fn unavailable<A: Action>(state: &Entity<AppState>, what: &'static str, cx: &mut App) {
-    let state = state.downgrade();
-    cx.on_action(move |_: &A, cx| {
-        if let Some(state) = state.upgrade() {
-            state.update(cx, |state, cx| {
-                state.notify_info(format!("{what} is not available here yet"), cx)
-            });
-        }
-    });
+// ---------- module routing ----------
+
+/// Weak handles to the module views, set by the shell, so ribbon and palette actions can reach
+/// them even when the focus is elsewhere.
+pub struct ModuleViews {
+    pub calendar: WeakEntity<CalendarView>,
+    pub people: WeakEntity<PeopleView>,
+    pub tasks: WeakEntity<TasksView>,
+}
+
+impl Global for ModuleViews {}
+
+fn views(cx: &App) -> Option<&ModuleViews> {
+    cx.try_global::<ModuleViews>()
+}
+
+fn go_to(state: &Entity<AppState>, module: Module, cx: &mut App) {
+    state.update(cx, |state, cx| state.set_module(module, cx));
+}
+
+/// Shows the calendar and runs `run` on it.
+fn with_calendar(
+    state: &Entity<AppState>,
+    cx: &mut App,
+    run: impl FnOnce(&mut CalendarView, &mut gpui::Context<CalendarView>),
+) {
+    go_to(state, Module::Calendar, cx);
+    if let Some(calendar) = views(cx).and_then(|views| views.calendar.upgrade()) {
+        calendar.update(cx, run);
+    }
+}
+
+/// New event: in the calendar at its anchor day, elsewhere at the next half hour.
+fn new_event(state: &Entity<AppState>, _window: &mut Window, cx: &mut App) {
+    if state.read(cx).module() == Module::Calendar
+        && let Some(calendar) = views(cx).and_then(|views| views.calendar.upgrade())
+    {
+        return calendar.update(cx, |calendar, cx| calendar.action_new_event(cx));
+    }
+    let now = Utc::now();
+    let start = now + Duration::minutes(30 - i64::from(now.minute()) % 30)
+        - Duration::seconds(i64::from(now.second()))
+        - Duration::nanoseconds(i64::from(now.nanosecond()));
+    crate::calendar::open_event_editor(
+        state.clone(),
+        EditorTarget::New {
+            start,
+            end: start + Duration::minutes(30),
+            all_day: false,
+            calendar_id: None,
+            title: String::new(),
+        },
+        cx,
+    );
+}
+
+/// Reply / Reply all / Forward to the message in the reading pane.
+fn respond(state: &Entity<AppState>, kind: ComposeKind, window: &mut Window, cx: &mut App) {
+    match selected_message(state, cx) {
+        Some(message) => crate::mail::compose_from(state, message.id, kind, window, cx),
+        None => no_selection(state, cx),
+    }
 }
 
 // ---------- default mail handlers ----------
@@ -457,10 +547,30 @@ fn move_selection_to_role(state: &Entity<AppState>, role: FolderRole, cx: &mut A
 }
 
 fn delete_selection(state: &Entity<AppState>, window: &mut Window, cx: &mut App) {
-    if state.read(cx).module() != Module::Mail {
-        return state.update(cx, |state, cx| {
-            state.notify_info("Delete is handled by the active view", cx)
-        });
+    match state.read(cx).module() {
+        Module::Mail => {}
+        Module::People => {
+            let deleted = views(cx)
+                .and_then(|views| views.people.upgrade())
+                .is_some_and(|people| people.update(cx, |people, cx| people.action_delete(cx)));
+            if !deleted {
+                state.update(cx, |state, cx| {
+                    state.notify_info("Select a contact first", cx)
+                });
+            }
+            return;
+        }
+        Module::Tasks => {
+            let deleted = views(cx)
+                .and_then(|views| views.tasks.upgrade())
+                .is_some_and(|tasks| tasks.update(cx, |tasks, cx| tasks.action_delete(cx)));
+            if !deleted {
+                state.update(cx, |state, cx| state.notify_info("Select a task first", cx));
+            }
+            return;
+        }
+        // Calendar deletes the selected event with its own Delete key handling.
+        Module::Calendar | Module::Settings => return,
     }
     let Some(message) = selected_message(state, cx) else {
         return no_selection(state, cx);

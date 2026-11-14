@@ -1396,3 +1396,24 @@ impl Render for CalendarView {
             .when_some(prompt, |el, prompt| el.child(prompt))
     }
 }
+
+/// Ribbon / command palette entry points (routed by `crate::actions`).
+impl CalendarView {
+    pub(crate) fn action_today(&mut self, cx: &mut Context<Self>) {
+        self.today(cx);
+    }
+
+    pub(crate) fn action_new_event(&mut self, cx: &mut Context<Self>) {
+        self.new_event(cx);
+    }
+
+    /// `"day"`, `"week"` or `"month"`.
+    pub(crate) fn action_show(&mut self, view: &str, cx: &mut Context<Self>) {
+        let kind = match view {
+            "day" => ViewKind::Day,
+            "month" => ViewKind::Month,
+            _ => ViewKind::Week,
+        };
+        self.set_kind(kind, cx);
+    }
+}

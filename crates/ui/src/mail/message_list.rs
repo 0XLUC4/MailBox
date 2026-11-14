@@ -11,6 +11,7 @@ use gpui::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, P
 use gpui::component::{Sizable as _, VirtualListScrollHandle, v_virtual_list};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use mailbox_core::settings::Density;
 use mailbox_core::{Folder, FolderRole, Id, Importance, Message, mail_ops};
 
 use super::list_model::{BuildContext, Filter, Grouping, ListOptions, Row, SortKey, build_rows};
@@ -20,8 +21,10 @@ use super::{
     SelectAllMessages, SelectNext, SelectPrevious, ToggleFlag, folder_pane::folder_name,
     message_menu, message_window, ops,
 };
+use crate::actions;
 use crate::app_state::AppState;
 use crate::components::{Avatar, Badge, EmptyState, Icon, IconButton, IconName};
+use crate::settings::{prefs, update_settings};
 use crate::theme::{
     ICON_SIZE_SM, RADIUS_FULL, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD,
     TEXT_SM, TEXT_XS, Theme, hex, theme,
@@ -32,6 +35,9 @@ const SEARCH_LIMIT: usize = 500;
 const HEADER_HEIGHT: f32 = 30.;
 const ROW_HEIGHT: f32 = 80.;
 const CHILD_ROW_HEIGHT: f32 = 58.;
+/// Compact density: no preview line.
+const COMPACT_ROW_HEIGHT: f32 = 58.;
+const COMPACT_CHILD_ROW_HEIGHT: f32 = 36.;
 
 /// "14:05" today, "Mon" this week, "03 Nov" otherwise.
 pub fn short_date(date: DateTime<Utc>) -> String {
@@ -70,6 +76,8 @@ pub struct MessageListView {
     /// Selected message ids (order of selection) and the last clicked one.
     selection: Vec<Id>,
     anchor: Option<Id>,
+    /// Compact density (from the settings).
+    compact: bool,
     // Cache, rebuilt on store/selection changes.
     source: (Option<Id>, String),
     title: String,
@@ -102,6 +110,7 @@ impl MessageListView {
             expanded: HashSet::new(),
             selection: Vec::new(),
             anchor: None,
+            compact: false,
             source: (None, String::new()),
             title: String::new(),
             messages: Vec::new(),
@@ -181,11 +190,31 @@ impl MessageListView {
         if self.anchor.is_some_and(|id| !self.selection.contains(&id)) {
             self.anchor = self.selection.last().copied();
         }
+        self.sync_settings(cx);
         self.rebuild_rows();
         if source_changed && !self.rows.is_empty() {
             self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
         }
         cx.notify();
+    }
+
+    /// Follows the stored "conversations" and density settings; true when they changed.
+    fn sync_settings(&mut self, cx: &App) -> bool {
+        let settings = prefs(cx);
+        let compact = settings.density == Density::Compact;
+        let changed = self.options.threaded != settings.conversations || self.compact != compact;
+        self.options.threaded = settings.conversations;
+        self.compact = compact;
+        changed
+    }
+
+    fn row_height(&self, child: bool) -> f32 {
+        match (self.compact, child) {
+            (false, false) => ROW_HEIGHT,
+            (false, true) => CHILD_ROW_HEIGHT,
+            (true, false) => COMPACT_ROW_HEIGHT,
+            (true, true) => COMPACT_CHILD_ROW_HEIGHT,
+        }
     }
 
     fn rebuild_rows(&mut self) {
@@ -201,8 +230,7 @@ impl MessageListView {
             .map(|row| {
                 let height = match row {
                     Row::Header { .. } => HEADER_HEIGHT,
-                    Row::Message { child: true, .. } => CHILD_ROW_HEIGHT,
-                    Row::Message { .. } => ROW_HEIGHT,
+                    Row::Message { child, .. } => self.row_height(*child),
                 };
                 size(px(1.), px(height))
             })
@@ -259,9 +287,30 @@ impl MessageListView {
             && unread
             && let Some(id) = primary
         {
-            ops::set_read(&self.state, vec![id], true, cx);
+            self.mark_read_later(id, cx);
         }
         cx.notify();
+    }
+
+    /// Marks an opened message read now, after the configured delay, or never (Settings).
+    fn mark_read_later(&mut self, id: Id, cx: &mut Context<Self>) {
+        match prefs(cx).mark_read_after_secs {
+            None => {}
+            Some(0) => ops::set_read(&self.state, vec![id], true, cx),
+            Some(secs) => {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(u64::from(secs)))
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.state.read(cx).selected_message() == Some(id) {
+                            ops::set_read(&this.state, vec![id], true, cx);
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
     }
 
     fn click(&mut self, id: Id, modifiers: Modifiers, cx: &mut Context<Self>) {
@@ -303,10 +352,41 @@ impl MessageListView {
     /// Ids a context-menu or drag acts on: the selection when `id` is part of it.
     fn targets_for(&self, id: Id) -> Vec<Id> {
         if self.selection.contains(&id) {
-            self.selection.clone()
+            self.selected_targets()
         } else {
-            vec![id]
+            self.with_conversations(&[id])
         }
+    }
+
+    /// The messages the selection acts on: a conversation's top row stands for all of it.
+    fn selected_targets(&self) -> Vec<Id> {
+        self.with_conversations(&self.selection)
+    }
+
+    /// `ids` plus, for each conversation top row among them, the rest of the conversation.
+    fn with_conversations(&self, ids: &[Id]) -> Vec<Id> {
+        let heads: HashSet<&str> = self
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Message {
+                    index,
+                    child: false,
+                    thread_len,
+                    ..
+                } if *thread_len > 1 => self.messages.get(*index),
+                _ => None,
+            })
+            .filter(|m| ids.contains(&m.id))
+            .map(|m| m.thread_id.as_str())
+            .collect();
+        let mut targets = ids.to_vec();
+        for message in &self.messages {
+            if heads.contains(message.thread_id.as_str()) && !targets.contains(&message.id) {
+                targets.push(message.id);
+            }
+        }
+        targets
     }
 
     fn step(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
@@ -356,12 +436,29 @@ impl MessageListView {
             .and_then(|last| ids[last + 1..].iter().find(|id| !selected.contains(id)))
             .or_else(|| ids.iter().rev().find(|id| !selected.contains(id)))
             .copied();
-        remove(&self.state, self.selection.clone(), window, cx);
+        let targets = self.selected_targets();
+        let removed: HashSet<Id> = targets.iter().copied().collect();
+        let next = next.filter(|id| !removed.contains(id));
+        remove(&self.state, targets, window, cx);
         self.refresh(cx);
         if self.selection.is_empty()
             && let Some(next) = next.filter(|id| self.message(*id).is_some())
         {
             self.set_selection(vec![next], Some(next), cx);
+        }
+    }
+
+    /// Runs `run` on the selection, or lets the shell's default handler run when it is empty.
+    fn selection_or_propagate(
+        &mut self,
+        cx: &mut Context<Self>,
+        run: impl FnOnce(&mut Self, Vec<Id>, &mut Context<Self>),
+    ) {
+        if self.selection.is_empty() {
+            cx.propagate();
+        } else {
+            let targets = self.selected_targets();
+            run(self, targets, cx);
         }
     }
 
@@ -456,8 +553,16 @@ impl MessageListView {
             format!("{} messages", drag_ids.len()).into()
         };
 
+        // A collapsed conversation row marks the whole conversation read / unread.
+        let thread_ids = if child {
+            vec![id]
+        } else {
+            self.with_conversations(&[id])
+        };
+
         // Quick actions (visible on hover).
         let quick = {
+            let thread_ids = thread_ids.clone();
             let (s1, s2, s3) = (self.state.clone(), self.state.clone(), list.clone());
             div()
                 .absolute()
@@ -492,7 +597,7 @@ impl MessageListView {
                     })
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
-                        ops::set_read(&s1, vec![id], unread, cx);
+                        ops::set_read(&s1, thread_ids.clone(), unread, cx);
                     }),
                 )
                 .child(
@@ -526,6 +631,7 @@ impl MessageListView {
 
         // Left edge: unread marker, click toggles read.
         let edge_state = self.state.clone();
+        let edge_ids = thread_ids.clone();
         let edge = div()
             .id(("read-edge", id as u64))
             .absolute()
@@ -547,7 +653,7 @@ impl MessageListView {
             )
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
-                ops::set_read(&edge_state, vec![id], unread, cx);
+                ops::set_read(&edge_state, edge_ids.clone(), unread, cx);
             });
 
         let icons = div()
@@ -679,7 +785,9 @@ impl MessageListView {
                         message.subject.clone()
                     }),
             )
-            .when_some(flag_view, |el, flag| el.child(flag));
+            .when_some(flag_view, |el, flag| el.child(flag))
+            // Compact rows have no preview line: categories move up here.
+            .when(self.compact, |el| el.children(self.category_chips(message)));
 
         let preview_line = div()
             .flex()
@@ -697,26 +805,15 @@ impl MessageListView {
             )
             .children(self.category_chips(message));
 
-        let body = if child {
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w(px(0.))
-                .gap(px(2.))
-                .child(first_line)
-                .child(preview_line)
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w(px(0.))
-                .gap(px(2.))
-                .child(first_line)
-                .child(subject_line)
-                .child(preview_line)
-        };
+        let body = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(px(0.))
+            .gap(px(2.))
+            .child(first_line)
+            .when(!child, |el| el.child(subject_line))
+            .when(!self.compact, |el| el.child(preview_line));
 
         div()
             .id(("message", id as u64))
@@ -727,7 +824,7 @@ impl MessageListView {
             .items_start()
             .gap(SPACE_3)
             .w_full()
-            .h(px(if child { CHILD_ROW_HEIGHT } else { ROW_HEIGHT }))
+            .h(px(self.row_height(child)))
             .pl(if child { px(52.) } else { SPACE_3 })
             .pr(SPACE_3)
             .py(SPACE_2)
@@ -775,8 +872,11 @@ impl MessageListView {
                 |dragged, _, _, cx| cx.new(|_| dragged.clone()),
             )
             .context_menu(move |menu, window, cx| {
-                let ids = list.read(cx).targets_for(id);
-                message_menu::build(menu, &menu_state, ids, window, cx)
+                let view = list.read(cx);
+                let ids = view.targets_for(id);
+                let single =
+                    (view.selection.len() <= 1 || !view.selection.contains(&id)).then_some(id);
+                message_menu::build(menu, &menu_state, ids, single, window, cx)
             })
             .into_any_element()
     }
@@ -897,27 +997,22 @@ impl MessageListView {
                     }),
             );
         }
-        let thread_list = list;
+        let state = self.state.clone();
         menu.separator().item(
             PopupMenuItem::new("Show as conversations")
                 .icon(IconName::MessagesSquare)
                 .checked(options.threaded)
                 .on_click(move |_, _, cx| {
-                    set(
-                        &thread_list,
-                        ListOptions {
-                            threaded: !options.threaded,
-                            ..options
-                        },
-                        cx,
-                    )
+                    update_settings(&state, cx, |settings| {
+                        settings.conversations = !options.threaded
+                    })
                 }),
         )
     }
 
     fn layout_menu(
         menu: PopupMenu,
-        prefs: Entity<MailPrefs>,
+        state: Entity<AppState>,
         current: ReadingPanePosition,
     ) -> PopupMenu {
         let mut menu = menu.min_w(px(180.)).label("Reading pane");
@@ -926,16 +1021,13 @@ impl MessageListView {
             (ReadingPanePosition::Bottom, "Bottom", IconName::PanelBottom),
             (ReadingPanePosition::Off, "Off", IconName::EyeOff),
         ] {
-            let prefs = prefs.clone();
+            let state = state.clone();
             menu = menu.item(
                 PopupMenuItem::new(label)
                     .icon(icon)
                     .checked(current == position)
                     .on_click(move |_, _, cx| {
-                        prefs.update(cx, |prefs, cx| {
-                            prefs.reading_pane = position;
-                            cx.notify();
-                        });
+                        update_settings(&state, cx, |settings| settings.reading_pane = position);
                     }),
             );
         }
@@ -945,10 +1037,10 @@ impl MessageListView {
     fn render_toolbar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let prefs = self.prefs.read(cx);
         let folders_collapsed = prefs.folders_collapsed;
-        let pane_position = prefs.reading_pane;
+        let pane_position = super::pane_position(cx);
         let unread = self.messages.iter().filter(|m| !m.flags.read).count();
         let list = cx.entity();
-        let prefs_handle = self.prefs.clone();
+        let layout_state = self.state.clone();
         let expand_prefs = self.prefs.clone();
 
         div()
@@ -1016,7 +1108,7 @@ impl MessageListView {
                     })
                     .tooltip("Reading pane")
                     .dropdown_menu(move |menu, _, _| {
-                        Self::layout_menu(menu, prefs_handle.clone(), pane_position)
+                        Self::layout_menu(menu, layout_state.clone(), pane_position)
                     }),
             )
     }
@@ -1079,8 +1171,8 @@ impl MessageListView {
         if self.selection.len() < 2 {
             return None;
         }
-        let ids = self.selection.clone();
-        let count = ids.len();
+        let count = self.selection.len();
+        let ids = self.selected_targets();
         let (read_ids, flag_ids) = (ids.clone(), ids.clone());
         let (s1, s2) = (self.state.clone(), self.state.clone());
         Some(
@@ -1154,6 +1246,9 @@ impl Focusable for MessageListView {
 
 impl Render for MessageListView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.sync_settings(cx) {
+            self.rebuild_rows();
+        }
         let t = theme(cx).clone();
         let toolbar = self.render_toolbar(&t, cx);
         let filters = self.render_filters(&t, cx);
@@ -1227,13 +1322,53 @@ impl Render for MessageListView {
                 })
             }))
             .on_action(cx.listener(|this, _: &MarkRead, _, cx| {
-                ops::set_read(&this.state, this.selection.clone(), true, cx)
+                ops::set_read(&this.state, this.selected_targets(), true, cx)
             }))
             .on_action(cx.listener(|this, _: &MarkUnread, _, cx| {
-                ops::set_read(&this.state, this.selection.clone(), false, cx)
+                ops::set_read(&this.state, this.selected_targets(), false, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleFlag, _, cx| {
                 ops::toggle_flag(&this.state, this.selection.clone(), cx)
+            }))
+            // App actions (ribbon, palette, shortcuts) act on the whole selection here.
+            .on_action(
+                cx.listener(|this, _: &actions::DeleteSelection, window, cx| {
+                    this.selection_or_propagate(cx, |this, _, cx| {
+                        this.remove_selection(window, cx, ops::delete)
+                    })
+                }),
+            )
+            .on_action(cx.listener(|this, _: &actions::Archive, window, cx| {
+                this.selection_or_propagate(cx, |this, _, cx| {
+                    this.remove_selection(window, cx, |s, ids, _, cx| {
+                        ops::move_to_role(s, ids, FolderRole::Archive, cx)
+                    })
+                })
+            }))
+            .on_action(cx.listener(|this, _: &actions::ToggleFlag, _, cx| {
+                this.selection_or_propagate(cx, |this, ids, cx| {
+                    ops::toggle_flag(&this.state, ids, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &actions::MarkRead, _, cx| {
+                this.selection_or_propagate(cx, |this, ids, cx| {
+                    ops::set_read(&this.state, ids, true, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &actions::MarkUnread, _, cx| {
+                this.selection_or_propagate(cx, |this, ids, cx| {
+                    ops::set_read(&this.state, ids, false, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &actions::MoveToFolder, window, cx| {
+                this.selection_or_propagate(cx, |this, ids, cx| {
+                    message_menu::open_move_dialog(this.state.clone(), ids, window, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &actions::Categorize, window, cx| {
+                this.selection_or_propagate(cx, |this, ids, cx| {
+                    message_menu::open_category_dialog(this.state.clone(), ids, window, cx)
+                })
             }))
             .on_action(cx.listener(|this, _: &OpenSelected, _, cx| {
                 if let Some(id) = this.anchor {

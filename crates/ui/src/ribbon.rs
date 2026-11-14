@@ -228,7 +228,6 @@ pub struct RibbonView {
 
 impl RibbonView {
     pub fn new(state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        crate::actions::register_fallbacks(&state, cx);
         let subscription = cx.observe(&state, |_, _, cx| cx.notify());
         Self {
             state,
@@ -518,8 +517,11 @@ impl Render for RibbonView {
             .bg(t.surface)
             .border_b_1()
             .border_color(t.border_subtle)
+            // Clicking a button must not move the focus to the ribbon: actions dispatch from
+            // the focused view (e.g. the message list acts on its whole selection).
             .child(
                 div()
+                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .flex()
                     .flex_row()
                     .items_center()
@@ -532,6 +534,7 @@ impl Render for RibbonView {
             )
             .child(
                 div()
+                    .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .flex()
                     .flex_row()
                     .items_center()

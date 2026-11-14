@@ -80,13 +80,22 @@ impl Shell {
             },
         ));
 
+        let calendar = cx.new(|cx| CalendarView::new(state.clone(), window, cx));
+        let tasks = cx.new(|cx| TasksView::new(state.clone(), window, cx));
+        // Lets ribbon / palette actions reach the module views.
+        cx.set_global(crate::actions::ModuleViews {
+            calendar: calendar.downgrade(),
+            people: people.downgrade(),
+            tasks: tasks.downgrade(),
+        });
+
         Self {
             ribbon: cx.new(|cx| RibbonView::new(state.clone(), window, cx)),
             search: cx.new(|cx| SearchView::new(state.clone(), window, cx)),
             mail: cx.new(|cx| MailView::new(state.clone(), window, cx)),
-            calendar: cx.new(|cx| CalendarView::new(state.clone(), window, cx)),
+            calendar,
             people,
-            tasks: cx.new(|cx| TasksView::new(state.clone(), window, cx)),
+            tasks,
             settings: cx.new(|cx| SettingsView::new(state.clone(), window, cx)),
             state,
             focus_handle,
@@ -185,7 +194,12 @@ impl Shell {
 }
 
 impl Render for Shell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // After a dialog opened from a menu closes, the focus is left on an element that no
+        // longer exists: take it back so shortcuts (Ctrl+Z, Ctrl+K, Delete...) keep working.
+        if !window.has_active_dialog(cx) && !self.focus_handle.contains_focused(window, cx) {
+            self.focus_handle.focus(window, cx);
+        }
         let t = theme(cx).clone();
         let active = self.state.read(cx).module();
         // First run: no account yet → onboarding (Settings stays reachable).
