@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
   <!-- Hand-tuned 16 px app icon (pixel-aligned version of icon.svg). -->
-  <rect x="0" y="0" width="16" height="16" rx="3.5" fill="#1c1d21"/>
+  <rect x="0" y="0" width="16" height="16" rx="3.5" fill="#060607"/>
   <rect x="2" y="4" width="12" height="8" rx="1" fill="#f2f3f5"/>
-  <path d="M2.5 4.5 L8 8.6 L13.5 4.5" fill="none" stroke="#1c1d21" stroke-width="1.1" stroke-linejoin="round"/>
+  <path d="M2.5 4.5 L8 8.6 L13.5 4.5" fill="none" stroke="#060607" stroke-width="1.1" stroke-linejoin="round"/>
 </svg>

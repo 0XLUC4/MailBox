@@ -4,8 +4,8 @@
        icon-16/24/32.svg (regenerate with the make_icon example of the mailbox crate). -->
   <defs>
     <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2c2e33"/>
-      <stop offset="1" stop-color="#0d0d0f"/>
+      <stop offset="0" stop-color="#111113"/>
+      <stop offset="1" stop-color="#000000"/>
     </linearGradient>
     <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#eceef2"/>
