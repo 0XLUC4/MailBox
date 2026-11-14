@@ -1,90 +1,203 @@
-//! Selected message: header, actions and plain-text body. Minimal reference implementation.
+//! Reading pane: action bar, subject header, and the conversation as stacked message cards
+//! (selected message expanded, others collapsible). Bodies go through the safe HTML renderer;
+//! remote pictures stay blocked until "Show pictures".
+
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use chrono::Local;
+use gpui::component::Sizable as _;
+use gpui::component::button::{Button as KitButton, ButtonVariants as _};
+use gpui::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use mailbox_core::{Command, FolderRole, Message};
+use mailbox_core::{Address, Attachment, Folder, FolderRole, Id, Importance, Message, mail_ops};
 
+use super::html::{self, Block, RenderContext};
+use super::{ComposeKind, message_menu, message_window, ops};
 use crate::app_state::AppState;
 use crate::components::{
-    Avatar, Badge, EmptyState, IconButton, IconName, Toolbar, avatar_color, toolbar_separator,
+    Avatar, Badge, Button, EmptyState, Icon, IconButton, IconName, avatar_color, toolbar_separator,
 };
-use crate::theme::{SPACE_1, SPACE_2, SPACE_3, SPACE_6, TEXT_MD, TEXT_SM, TEXT_XL, theme};
+use crate::theme::{
+    ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_MD,
+    TEXT_SM, TEXT_XL, TEXT_XS, Theme, hex, theme,
+};
+
+/// Which message the pane shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneSource {
+    /// Follows the selection in `AppState` (main window).
+    Selected,
+    /// A fixed message (pop-out window).
+    Fixed(Id),
+}
 
 pub struct ReadingPaneView {
     state: Entity<AppState>,
+    source: PaneSource,
+    /// Messages whose remote pictures the user allowed.
+    show_pictures: HashSet<Id>,
+    /// Conversation messages the user expanded (the shown one is always expanded).
+    expanded: HashSet<Id>,
+    /// Parsed bodies by message id, with the body length used to detect edits.
+    bodies: HashMap<Id, (usize, Rc<Vec<Block>>)>,
     _subscription: Subscription,
 }
 
+fn human_size(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1_048_576 => format!("{:.1} MB", b as f64 / 1_048_576.),
+        b if b >= 1024 => format!("{} KB", b / 1024),
+        b => format!("{b} B"),
+    }
+}
+
+fn attachment_icon(attachment: &Attachment) -> IconName {
+    if attachment.mime.starts_with("image/") {
+        IconName::Image
+    } else if attachment.mime.contains("pdf") || attachment.mime.starts_with("text/") {
+        IconName::FileText
+    } else {
+        IconName::File
+    }
+}
+
+fn addresses(list: &[Address]) -> String {
+    list.iter()
+        .map(|a| a.display().to_owned())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl ReadingPaneView {
-    pub fn new(state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        state: Entity<AppState>,
+        source: PaneSource,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscription = cx.observe(&state, |_, _, cx| cx.notify());
         Self {
             state,
+            source,
+            show_pictures: HashSet::new(),
+            expanded: HashSet::new(),
+            bodies: HashMap::new(),
             _subscription: subscription,
         }
     }
 
-    fn run(&mut self, command: Command, cx: &mut Context<Self>) {
-        self.state.update(cx, |state, cx| {
-            state.run(command, cx);
-        });
+    fn current_id(&self, cx: &App) -> Option<Id> {
+        match self.source {
+            PaneSource::Selected => self.state.read(cx).selected_message(),
+            PaneSource::Fixed(id) => Some(id),
+        }
     }
 
-    /// Soft delete: move to the account's Trash folder.
-    fn trash(&mut self, message: &Message, cx: &mut Context<Self>) {
-        let trash = self
-            .state
-            .read(cx)
-            .store()
-            .folder_by_role(message.account_id, FolderRole::Trash);
+    fn blocks(&mut self, message: &Message) -> Rc<Vec<Block>> {
+        let source = message.body_html.as_deref().unwrap_or(&message.body_text);
+        if let Some((len, blocks)) = self.bodies.get(&message.id)
+            && *len == source.len()
+        {
+            return blocks.clone();
+        }
+        let blocks = Rc::new(match &message.body_html {
+            Some(body) if !body.trim().is_empty() => html::parse(body),
+            _ => html::parse_plain(&message.body_text),
+        });
+        self.bodies
+            .insert(message.id, (source.len(), blocks.clone()));
+        blocks
+    }
+
+    fn action_bar(
+        &self,
+        message: &Message,
+        in_role: Option<FolderRole>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let id = message.id;
-        self.state.update(cx, |state, cx| match trash {
-            Ok(Some(folder)) => {
-                if state.run(
-                    Command::MoveMessages {
-                        ids: vec![id],
-                        folder_id: folder.id,
-                    },
-                    cx,
-                ) {
-                    state.select_message(None, cx);
-                }
-            }
-            Ok(None) => state.report_error("This account has no Trash folder", cx),
-            Err(err) => state.report_error(err, cx),
-        });
-    }
-
-    fn toolbar(&self, message: &Message, cx: &mut Context<Self>) -> Toolbar {
         let flagged = message.flags.flagged;
         let read = message.flags.read;
-        let id = message.id;
-        let to_trash = message.clone();
-        Toolbar::new()
-            .child(IconButton::new("reply", IconName::Reply).tooltip("Reply"))
-            .child(IconButton::new("reply-all", IconName::ReplyAll).tooltip("Reply all"))
-            .child(IconButton::new("forward", IconName::Forward).tooltip("Forward"))
-            .child(toolbar_separator(cx))
+        let compose = |kind: ComposeKind, state: Entity<AppState>| {
+            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                ops::compose_from(&state, id, kind, window, cx)
+            }
+        };
+        let (s_flag, s_read, s_archive, s_delete, s_more) = (
+            self.state.clone(),
+            self.state.clone(),
+            self.state.clone(),
+            self.state.clone(),
+            self.state.clone(),
+        );
+        let text_state = self.state.clone();
+        let popout_state = self.state.clone();
+        let show_popout = self.source == PaneSource::Selected;
+
+        div()
+            .flex()
+            .flex_row()
+            .flex_shrink_0()
+            .items_center()
+            .gap(SPACE_1)
+            .h(px(44.))
+            .px(SPACE_3)
+            .border_b_1()
+            .border_color(theme(cx).border_subtle)
             .child(
-                IconButton::new("flag", IconName::Flag)
+                Button::new("reply")
+                    .ghost()
+                    .compact()
+                    .icon(IconName::Reply)
+                    .label("Reply")
+                    .on_click(compose(ComposeKind::Reply, self.state.clone())),
+            )
+            .child(
+                Button::new("reply-all")
+                    .ghost()
+                    .compact()
+                    .icon(IconName::ReplyAll)
+                    .label("Reply all")
+                    .on_click(compose(ComposeKind::ReplyAll, self.state.clone())),
+            )
+            .child(
+                Button::new("forward")
+                    .ghost()
+                    .compact()
+                    .icon(IconName::Forward)
+                    .label("Forward")
+                    .on_click(compose(ComposeKind::Forward, self.state.clone())),
+            )
+            .child(toolbar_separator(cx))
+            .when(in_role != Some(FolderRole::Archive), |el| {
+                el.child(
+                    IconButton::new("pane-archive", IconName::Archive)
+                        .tooltip("Archive")
+                        .on_click(move |_, _, cx| {
+                            ops::move_to_role(&s_archive, vec![id], FolderRole::Archive, cx)
+                        }),
+                )
+            })
+            .child(
+                IconButton::new("pane-delete", IconName::Trash)
+                    .tooltip(if in_role == Some(FolderRole::Trash) {
+                        "Delete permanently"
+                    } else {
+                        "Delete"
+                    })
+                    .on_click(move |_, window, cx| ops::delete(&s_delete, vec![id], window, cx)),
+            )
+            .child(
+                IconButton::new("pane-flag", IconName::Flag)
                     .active(flagged)
-                    .tooltip(if flagged { "Unflag" } else { "Flag" })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run(
-                            Command::SetMessageFlags {
-                                ids: vec![id],
-                                read: None,
-                                flagged: Some(!flagged),
-                                pinned: None,
-                            },
-                            cx,
-                        );
-                    })),
+                    .tooltip(if flagged { "Clear flag" } else { "Flag" })
+                    .on_click(move |_, _, cx| ops::set_flag(&s_flag, vec![id], !flagged, cx)),
             )
             .child(
                 IconButton::new(
-                    "unread",
+                    "pane-read",
                     if read {
                         IconName::Mail
                     } else {
@@ -96,133 +209,479 @@ impl ReadingPaneView {
                 } else {
                     "Mark as read"
                 })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.run(
-                        Command::SetMessageFlags {
-                            ids: vec![id],
-                            read: Some(!read),
-                            flagged: None,
-                            pinned: None,
-                        },
-                        cx,
-                    );
-                })),
+                .on_click(move |_, _, cx| ops::set_read(&s_read, vec![id], !read, cx)),
             )
             .child(
-                IconButton::new("trash", IconName::Trash)
-                    .tooltip("Delete")
-                    .on_click(cx.listener(move |this, _, _, cx| this.trash(&to_trash, cx))),
+                KitButton::new("pane-more")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Ellipsis)
+                    .tooltip("More actions")
+                    .dropdown_menu(move |menu, window, cx| {
+                        let state = text_state.clone();
+                        let menu = menu.item(
+                            PopupMenuItem::new("Copy text")
+                                .icon(IconName::Copy)
+                                .on_click(move |_, _, cx| {
+                                    let text = state
+                                        .read(cx)
+                                        .store()
+                                        .get::<Message>(id)
+                                        .ok()
+                                        .flatten()
+                                        .map(|message| match &message.body_html {
+                                            Some(body) => html::to_text(&html::parse(body)),
+                                            None => message.body_text,
+                                        });
+                                    if let Some(text) = text {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                    }
+                                }),
+                        );
+                        message_menu::build(menu, &s_more, vec![id], window, cx)
+                    }),
             )
+            .child(div().flex_1())
+            .when(show_popout, |el| {
+                el.child(
+                    IconButton::new("pane-popout", IconName::SquareArrowOutUpRight)
+                        .tooltip("Open in new window")
+                        .on_click(move |_, _, cx| {
+                            message_window::open(popout_state.clone(), id, cx)
+                        }),
+                )
+            })
+    }
+
+    fn subject_header(&self, message: &Message, t: &Theme, cx: &App) -> Div {
+        let store = self.state.read(cx).store();
+        let colors: HashMap<String, u32> = store
+            .list_categories()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| (c.name, c.color))
+            .collect();
+        let due = mail_ops::flag_due(store, message.id).ok().flatten();
+        div()
+            .flex()
+            .flex_col()
+            .gap(SPACE_2)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap(SPACE_2)
+                    .when(message.importance == Importance::High, |el| {
+                        el.child(
+                            div().pt(px(5.)).child(
+                                Icon::new(IconName::CircleAlert)
+                                    .size(px(16.))
+                                    .text_color(t.danger),
+                            ),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_size(TEXT_XL)
+                            .line_height(px(26.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(if message.subject.is_empty() {
+                                "(no subject)".to_owned()
+                            } else {
+                                message.subject.clone()
+                            }),
+                    ),
+            )
+            .when(
+                !message.categories.is_empty() || message.flags.flagged || message.flags.pinned,
+                |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(SPACE_1)
+                            .when(message.flags.pinned, |el| {
+                                el.child(Badge::new("Pinned").color(t.accent))
+                            })
+                            .when(message.flags.flagged, |el| {
+                                let label = match due {
+                                    Some(due) => format!("Follow up · {}", due.format("%a %d %b")),
+                                    None => "Follow up".into(),
+                                };
+                                el.child(Badge::new(label).color(t.danger))
+                            })
+                            .children(message.categories.iter().map(|name| {
+                                let color = colors
+                                    .get(name)
+                                    .map_or_else(|| avatar_color(name), |c| hex(*c));
+                                Badge::new(name.clone()).color(color)
+                            })),
+                    )
+                },
+            )
+    }
+
+    fn pictures_bar(&self, id: Id, t: &Theme, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SPACE_2)
+            .px(SPACE_3)
+            .py(SPACE_2)
+            .rounded(RADIUS_MD)
+            .bg(t.warning.alpha(if t.is_dark { 0.14 } else { 0.1 }))
+            .border_1()
+            .border_color(t.warning.alpha(0.3))
+            .text_size(TEXT_SM)
+            .child(
+                Icon::new(IconName::ShieldAlert)
+                    .size(ICON_SIZE_SM)
+                    .text_color(t.warning),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(t.text_muted)
+                    .child("Pictures were blocked to protect your privacy."),
+            )
+            .child(
+                Button::new(("show-pictures", id as u64))
+                    .compact()
+                    .icon(IconName::Image)
+                    .label("Show pictures")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.show_pictures.insert(id);
+                        cx.notify();
+                    })),
+            )
+    }
+
+    fn attachments(&self, message: &Message, t: &Theme) -> Div {
+        div().flex().flex_row().flex_wrap().gap(SPACE_2).children(
+            message
+                .attachments
+                .iter()
+                .enumerate()
+                .map(|(index, attachment)| {
+                    let key = (message.id as u64) * 1000 + index as u64;
+                    let (open_state, save_state) = (self.state.clone(), self.state.clone());
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(SPACE_2)
+                        .h(px(44.))
+                        .pl(SPACE_2)
+                        .pr(SPACE_1)
+                        .rounded(RADIUS_LG)
+                        .border_1()
+                        .border_color(t.border)
+                        .bg(t.elevated)
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size(px(28.))
+                                .rounded(RADIUS_MD)
+                                .bg(t.accent_subtle)
+                                .text_color(t.accent)
+                                .child(Icon::new(attachment_icon(attachment)).size(ICON_SIZE_SM)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .max_w(px(180.))
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(TEXT_SM)
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(attachment.name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(TEXT_XS)
+                                        .text_color(t.text_subtle)
+                                        .child(human_size(attachment.size)),
+                                ),
+                        )
+                        .child(
+                            IconButton::new(("att-open", key), IconName::ExternalLink)
+                                .size(px(24.))
+                                .icon_size(px(13.))
+                                .tooltip("Open")
+                                .on_click(move |_, _, cx| {
+                                    open_state.update(cx, |state, cx| {
+                                        state
+                                            .notify_info("This attachment isn't downloaded yet", cx)
+                                    })
+                                }),
+                        )
+                        .child(
+                            IconButton::new(("att-save", key), IconName::Download)
+                                .size(px(24.))
+                                .icon_size(px(13.))
+                                .tooltip("Save")
+                                .on_click(move |_, _, cx| {
+                                    save_state.update(cx, |state, cx| {
+                                        state
+                                            .notify_info("This attachment isn't downloaded yet", cx)
+                                    })
+                                }),
+                        )
+                }),
+        )
+    }
+
+    /// One message of the conversation. Collapsed cards show a one-line summary.
+    fn message_card(
+        &mut self,
+        message: &Message,
+        expanded: bool,
+        is_current: bool,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = message.id;
+        let date = message
+            .date
+            .with_timezone(&Local)
+            .format("%a %d %b %Y, %H:%M")
+            .to_string();
+
+        let header = div()
+            .id(("card-header", id as u64))
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap(SPACE_3)
+            .when(!is_current, |el| el.cursor_pointer())
+            .child(Avatar::new(message.from.display().to_owned()).size(px(36.)))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(SPACE_2)
+                            .text_size(TEXT_MD)
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(message.from.display().to_owned()),
+                            )
+                            .when(!message.from.name.is_empty(), |el| {
+                                el.child(
+                                    div()
+                                        .min_w(px(0.))
+                                        .truncate()
+                                        .text_size(TEXT_SM)
+                                        .text_color(t.text_subtle)
+                                        .child(message.from.email.clone()),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(TEXT_SM)
+                            .text_color(t.text_muted)
+                            .child(if expanded {
+                                let mut line = format!("To: {}", addresses(&message.to));
+                                if !message.cc.is_empty() {
+                                    line.push_str(&format!("   Cc: {}", addresses(&message.cc)));
+                                }
+                                line
+                            } else {
+                                message.preview.clone()
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(SPACE_1)
+                    .text_size(TEXT_SM)
+                    .text_color(t.text_subtle)
+                    .when(!message.attachments.is_empty(), |el| {
+                        el.child(Icon::new(IconName::Paperclip).size(px(12.)))
+                    })
+                    .child(date),
+            )
+            .when(!is_current, |el| {
+                el.on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.expanded.remove(&id) {
+                        this.expanded.insert(id);
+                    }
+                    cx.notify();
+                }))
+            });
+
+        let mut card = div()
+            .flex()
+            .flex_col()
+            .gap(SPACE_3)
+            .p(SPACE_4)
+            .rounded(RADIUS_LG)
+            .border_1()
+            .border_color(t.border_subtle)
+            .bg(t.background)
+            .child(header);
+
+        if expanded {
+            let blocks = self.blocks(message);
+            let remote = html::has_remote_images(&blocks);
+            let allowed = self.show_pictures.contains(&id);
+            let link_state = self.state.clone();
+            let ctx = RenderContext {
+                theme: t.clone(),
+                show_images: allowed,
+                on_link: Rc::new(move |href, window, cx| {
+                    ops::open_link(&link_state, href, window, cx)
+                }),
+            };
+            if remote && !allowed {
+                card = card.child(self.pictures_bar(id, t, cx));
+            }
+            card = card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_3)
+                    .text_color(t.text)
+                    .children(html::render_blocks(&format!("body-{id}"), &blocks, &ctx)),
+            );
+            if !message.attachments.is_empty() {
+                card = card.child(self.attachments(message, t));
+            }
+            if !is_current {
+                let state = self.state.clone();
+                card = card.child(
+                    div().flex().flex_row().gap(SPACE_1).child(
+                        Button::new(("card-reply", id as u64))
+                            .compact()
+                            .icon(IconName::Reply)
+                            .label("Reply")
+                            .on_click(move |_, window, cx| {
+                                ops::compose_from(&state, id, ComposeKind::Reply, window, cx)
+                            }),
+                    ),
+                );
+            }
+        }
+        card.into_any_element()
     }
 }
 
 impl Render for ReadingPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
-        let state = self.state.read(cx);
-        let message = state
-            .selected_message()
-            .and_then(|id| state.store().get::<Message>(id).ok().flatten());
+        let id = self.current_id(cx);
+        let store = self.state.read(cx).store();
+        let message = id.and_then(|id| store.get::<Message>(id).ok().flatten());
         let Some(message) = message else {
-            return div().size_full().child(
-                EmptyState::new(IconName::MailOpen, "No message selected")
-                    .description("Pick a message in the list to read it here."),
-            );
+            let (title, description) = match self.source {
+                PaneSource::Selected => (
+                    "No message selected",
+                    "Pick a message in the list to read it here.",
+                ),
+                PaneSource::Fixed(_) => ("Message unavailable", "It was deleted or moved away."),
+            };
+            return div()
+                .size_full()
+                .bg(t.background)
+                .child(EmptyState::new(IconName::MailOpen, title).description(description))
+                .into_any_element();
         };
-
-        let recipients = message
-            .to
-            .iter()
-            .map(|a| a.display().to_owned())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let date = message
-            .date
-            .with_timezone(&Local)
-            .format("%A %d %B %Y, %H:%M")
-            .to_string();
-        let toolbar = self.toolbar(&message, cx);
-
-        div().size_full().flex().flex_col().child(toolbar).child(
-            div()
-                .id("reading-body")
-                .flex_1()
-                .min_h(px(0.))
-                .overflow_y_scroll()
-                .px(SPACE_6)
-                .py(SPACE_3)
-                .flex()
-                .flex_col()
-                .gap(SPACE_3)
-                .child(
-                    div()
-                        .text_size(TEXT_XL)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(message.subject.clone()),
-                )
-                .when(!message.categories.is_empty(), |el| {
-                    el.child(
-                        div().flex().flex_row().gap(SPACE_1).children(
-                            message
-                                .categories
-                                .iter()
-                                .map(|name| Badge::new(name.clone()).color(avatar_color(name))),
-                        ),
+        let role_of = |folder_id: Id| {
+            store
+                .get::<Folder>(folder_id)
+                .ok()
+                .flatten()
+                .map(|folder| folder.role)
+        };
+        let in_role = role_of(message.folder_id);
+        // Conversation: newest first, deleted/junk messages only when viewing those folders.
+        let mut thread: Vec<Message> = store
+            .list_thread(&message.thread_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| {
+                m.id == message.id
+                    || !matches!(
+                        role_of(m.folder_id),
+                        Some(FolderRole::Trash | FolderRole::Junk)
                     )
-                })
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(SPACE_3)
-                        .child(Avatar::new(message.from.display().to_owned()).size(px(40.)))
-                        .child(
+                    || role_of(m.folder_id) == in_role
+            })
+            .collect();
+        thread.reverse();
+        if !thread.iter().any(|m| m.id == message.id) {
+            thread.insert(0, message.clone());
+        }
+
+        let action_bar = self.action_bar(&message, in_role, cx);
+        let subject = self.subject_header(&message, &t, cx);
+        let others = thread.len().saturating_sub(1);
+        let cards: Vec<AnyElement> = thread
+            .iter()
+            .map(|m| {
+                let is_current = m.id == message.id;
+                let expanded = is_current || self.expanded.contains(&m.id);
+                self.message_card(m, expanded, is_current, &t, cx)
+            })
+            .collect();
+
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(t.surface)
+            .child(action_bar)
+            .child(
+                div()
+                    .id(("reading-body", message.id as u64))
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .px(SPACE_6)
+                    .py(SPACE_4)
+                    .gap(SPACE_3)
+                    .child(subject)
+                    .when(others > 0, |el| {
+                        el.child(
                             div()
                                 .flex()
-                                .flex_col()
-                                .flex_1()
-                                .min_w(px(0.))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .gap(SPACE_2)
-                                        .text_size(TEXT_MD)
-                                        .child(
-                                            div()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child(message.from.display().to_owned()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_color(t.text_muted)
-                                                .child(format!("<{}>", message.from.email)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(TEXT_SM)
-                                        .text_color(t.text_muted)
-                                        .child(format!("To: {recipients}")),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(TEXT_SM)
+                                .flex_row()
+                                .items_center()
+                                .gap(SPACE_1)
+                                .text_size(TEXT_XS)
                                 .text_color(t.text_subtle)
-                                .child(date),
-                        ),
-                )
-                .child(div().h(px(1.)).bg(t.border_subtle))
-                .child(
-                    div()
-                        .text_size(TEXT_MD)
-                        .line_height(px(21.))
-                        .child(message.body_text.clone()),
-                ),
-        )
+                                .child(Icon::new(IconName::MessagesSquare).size(px(12.)))
+                                .child(format!("{} messages in this conversation", others + 1)),
+                        )
+                    })
+                    .children(cards),
+            )
+            .into_any_element()
     }
 }
