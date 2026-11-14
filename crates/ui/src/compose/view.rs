@@ -434,13 +434,9 @@ impl ComposeView {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(860.), px(780.)), cx)),
             window_min_size: Some(size(px(560.), px(480.))),
-            titlebar: Some(TitlebarOptions {
-                title: Some(self.title(cx)),
-                ..Default::default()
-            }),
-            ..Default::default()
+            ..crate::titlebar::window_options(self.title(cx))
         };
-        let opened = gpui::open_window(options, cx, move |window, cx| {
+        let opened = crate::titlebar::open_window(options, cx, move |window, cx| {
             cx.new(|cx| ComposeView::new(state, draft, Host::Window, window, cx))
         });
         match opened {

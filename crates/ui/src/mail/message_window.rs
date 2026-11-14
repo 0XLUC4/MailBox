@@ -37,14 +37,10 @@ pub fn open(state: Entity<AppState>, id: Id, cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(860.), px(760.)), cx)),
         window_min_size: Some(size(px(480.), px(360.))),
-        titlebar: Some(TitlebarOptions {
-            title: Some(title.into()),
-            ..Default::default()
-        }),
-        ..Default::default()
+        ..crate::titlebar::window_options(title)
     };
     let pane_state = state.clone();
-    let opened = gpui::open_window(options, cx, move |window, cx| {
+    let opened = crate::titlebar::open_window(options, cx, move |window, cx| {
         let pane = cx.new(|cx| ReadingPaneView::new(pane_state, PaneSource::Fixed(id), window, cx));
         cx.new(|_| MessageWindow { pane })
     });

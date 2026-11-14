@@ -60,15 +60,11 @@ pub fn open_event_editor(state: Entity<AppState>, target: EditorTarget, cx: &mut
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(820.), px(780.)), cx)),
             window_min_size: Some(size(px(640.), px(520.))),
-            titlebar: Some(TitlebarOptions {
-                title: Some(title.into()),
-                ..Default::default()
-            }),
             focus: true,
-            ..Default::default()
+            ..crate::titlebar::window_options(title)
         };
         let for_window = state.clone();
-        let opened = gpui::open_window(options, cx, move |window, cx| {
+        let opened = crate::titlebar::open_window(options, cx, move |window, cx| {
             cx.new(|cx| EventEditor::new(for_window, target, window, cx))
         });
         if let Err(err) = opened {

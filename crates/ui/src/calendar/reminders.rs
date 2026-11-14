@@ -112,19 +112,15 @@ impl ReminderService {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(440.), px(360.)), cx)),
                 window_min_size: Some(size(px(360.), px(220.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Reminders".into()),
-                    ..Default::default()
-                }),
                 focus: true,
-                ..Default::default()
+                ..crate::titlebar::window_options("Reminders")
             };
             let for_window = service.clone();
-            let opened = gpui::open_window(options, cx, move |window, cx| {
+            let opened = crate::titlebar::open_window(options, cx, move |window, cx| {
                 cx.new(|cx| ReminderWindow::new(for_window, window, cx))
             });
             service.update(cx, |service, cx| match opened {
-                Ok((handle, _)) => service.window = Some(handle),
+                Ok(handle) => service.window = Some(handle),
                 Err(err) => service.state.update(cx, |state, cx| {
                     state.report_error(format!("Could not open reminders: {err}"), cx)
                 }),
