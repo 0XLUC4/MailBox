@@ -32,12 +32,15 @@ fn home_dir() -> PathBuf {
         .unwrap_or_default()
 }
 
-/// Plain text of a message (HTML bodies are flattened).
+/// Plain text of a message: the HTML body flattened by the reading-pane parser (keeps
+/// paragraphs and table rows, which senders' own text parts often lose), else the text part.
 fn body_text(message: &Message) -> String {
-    match &message.body_html {
-        Some(body) if message.body_text.trim().is_empty() => html::to_text(&html::parse(body)),
-        _ => message.body_text.clone(),
-    }
+    let from_html = message
+        .body_html
+        .as_deref()
+        .map(|body| html::to_text(&html::parse(body)))
+        .filter(|text| !text.trim().is_empty());
+    from_html.unwrap_or_else(|| message.body_text.clone())
 }
 
 /// Writes a printable page to the temp folder and opens it (the page calls `window.print()`).

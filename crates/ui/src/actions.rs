@@ -652,7 +652,8 @@ pub fn run_rules(state: &Entity<AppState>, cx: &mut App) {
         match result {
             Ok((Some(command), changed)) => {
                 if state.run(command, cx) {
-                    state.notify_info(format!("Rules updated {changed} message(s)"), cx);
+                    let noun = if changed == 1 { "message" } else { "messages" };
+                    state.notify_info(format!("Rules updated {changed} {noun}"), cx);
                 }
             }
             Ok((None, _)) => state.notify_info("No message matched your rules", cx),

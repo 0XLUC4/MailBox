@@ -30,6 +30,9 @@ pub fn folder_icon(folder: &Folder) -> IconName {
         FolderRole::Trash => IconName::Trash,
         FolderRole::Junk => IconName::OctagonAlert,
         FolderRole::Custom if folder.name.eq_ignore_ascii_case("outbox") => IconName::Clock,
+        FolderRole::Custom if folder.name == mailbox_core::later::SNOOZED_FOLDER => {
+            IconName::AlarmClock
+        }
         FolderRole::Custom => IconName::Folder,
     }
 }
@@ -448,6 +451,7 @@ impl FolderPaneView {
             .id(ElementId::Name(format!("{prefix}-{folder_id}").into()))
             .flex()
             .flex_row()
+            .flex_shrink_0()
             .items_center()
             .gap(SPACE_1)
             .h(px(30.))
@@ -507,6 +511,7 @@ impl FolderPaneView {
             .id(id)
             .flex()
             .flex_row()
+            .flex_shrink_0()
             .items_center()
             .gap(SPACE_1)
             .h(px(28.))

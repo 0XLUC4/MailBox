@@ -87,6 +87,8 @@ pub struct MessageListView {
     dues: HashMap<Id, NaiveDate>,
     category_colors: HashMap<String, u32>,
     mention_tokens: Vec<String>,
+    /// Muted conversations (thread ids).
+    muted: HashSet<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -119,6 +121,7 @@ impl MessageListView {
             dues: HashMap::new(),
             category_colors: HashMap::new(),
             mention_tokens: Vec::new(),
+            muted: HashSet::new(),
             _subscriptions: subscriptions,
         };
         view.refresh(cx);
@@ -167,6 +170,9 @@ impl MessageListView {
                 (!first.is_empty()).then(|| first.to_lowercase())
             })
             .collect();
+        self.muted = mailbox_core::later::Later::load(store)
+            .map(|later| later.muted_threads.into_iter().collect())
+            .unwrap_or_default();
         let selected = state.selected_message();
 
         let source_changed = source != self.source;
@@ -276,27 +282,32 @@ impl MessageListView {
             self.scroll_handle
                 .scroll_to_item(row, ScrollStrategy::Nearest);
         }
-        let unread = primary
-            .and_then(|id| self.message(id))
-            .is_some_and(|m| !m.flags.read);
+        // The reading pane shows a collapsed conversation whole: opening it reads all of it.
+        let unread: Vec<Id> = primary
+            .map(|id| self.with_conversations(&[id]))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| self.message(*id).is_some_and(|m| !m.flags.read))
+            .collect();
         let single = self.selection.len() == 1;
         self.state.update(cx, |state, cx| {
             state.select_message(primary, cx);
         });
         if single
-            && unread
+            && !unread.is_empty()
             && let Some(id) = primary
         {
-            self.mark_read_later(id, cx);
+            self.mark_read_later(id, unread, cx);
         }
         cx.notify();
     }
 
-    /// Marks an opened message read now, after the configured delay, or never (Settings).
-    fn mark_read_later(&mut self, id: Id, cx: &mut Context<Self>) {
+    /// Marks `ids` (the opened message `id`, or its conversation) read now, after the
+    /// configured delay while `id` is still open, or never (Settings).
+    fn mark_read_later(&mut self, id: Id, ids: Vec<Id>, cx: &mut Context<Self>) {
         match prefs(cx).mark_read_after_secs {
             None => {}
-            Some(0) => ops::set_read(&self.state, vec![id], true, cx),
+            Some(0) => ops::set_read(&self.state, ids, true, cx),
             Some(secs) => {
                 cx.spawn(async move |this, cx| {
                     cx.background_executor()
@@ -304,7 +315,7 @@ impl MessageListView {
                         .await;
                     let _ = this.update(cx, |this, cx| {
                         if this.state.read(cx).selected_message() == Some(id) {
-                            ops::set_read(&this.state, vec![id], true, cx);
+                            ops::set_read(&this.state, ids, true, cx);
                         }
                     });
                 })
@@ -665,6 +676,13 @@ impl MessageListView {
             .when(message.flags.pinned, |el| {
                 el.child(Icon::new(IconName::Pin).size(px(12.)).text_color(t.accent))
             })
+            .when(self.muted.contains(&message.thread_id), |el| {
+                el.child(
+                    Icon::new(IconName::BellOff)
+                        .size(px(12.))
+                        .text_color(t.text_subtle),
+                )
+            })
             .when(message.importance == Importance::High, |el| {
                 el.child(
                     Icon::new(IconName::CircleAlert)
@@ -946,7 +964,6 @@ impl MessageListView {
                 } else {
                     "Descending"
                 })
-                .icon(IconName::ArrowDown)
                 .checked(options.descending)
                 .on_click(move |_, _, cx| {
                     set(
@@ -965,7 +982,6 @@ impl MessageListView {
                 } else {
                     "Ascending"
                 })
-                .icon(IconName::ArrowUp)
                 .checked(!options.descending)
                 .on_click(move |_, _, cx| {
                     set(
@@ -999,8 +1015,8 @@ impl MessageListView {
         }
         let state = self.state.clone();
         menu.separator().item(
+            // No icon: it would replace the check mark.
             PopupMenuItem::new("Show as conversations")
-                .icon(IconName::MessagesSquare)
                 .checked(options.threaded)
                 .on_click(move |_, _, cx| {
                     update_settings(&state, cx, |settings| {
