@@ -66,6 +66,10 @@ pub enum Command {
         flagged: bool,
         due: Option<chrono::NaiveDate>,
     },
+    /// Contacts with details, groups, merge (see [`crate::people`]).
+    People(crate::people::PeopleCommand),
+    /// Tasks with details and lists (see [`crate::todo`]).
+    Todo(crate::todo::TaskCommand),
 }
 
 impl Command {
@@ -149,6 +153,8 @@ impl Command {
                     count(ids)
                 )
             }
+            Self::People(command) => command.label(),
+            Self::Todo(command) => command.label(),
         }
     }
 }
@@ -262,6 +268,8 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
         Command::FlagMessages { ids, flagged, due } => {
             crate::mail_ops::apply_flag(store, &ids, flagged, due)
         }
+        Command::People(command) => crate::people::apply(store, command),
+        Command::Todo(command) => crate::todo::apply(store, command),
     }
 }
 

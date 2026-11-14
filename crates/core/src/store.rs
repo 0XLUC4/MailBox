@@ -118,6 +118,8 @@ CREATE TABLE message_flag_due (
     due TEXT NOT NULL
 );
 "#,
+    crate::people::MIGRATION,
+    crate::todo::MIGRATION,
 ];
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.
