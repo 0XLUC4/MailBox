@@ -52,6 +52,8 @@ fn open_store(args: &Args) -> Result<Store, String> {
 }
 
 fn main() -> ExitCode {
+    // After an in-app update: wait for the previous version to exit, delete its old exe.
+    mailbox_updater::finish_pending_update();
     let args = match parse_args(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(message) => {

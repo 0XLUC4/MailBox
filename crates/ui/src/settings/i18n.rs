@@ -17,6 +17,55 @@ const FR: &[(&str, &str)] = &[
     ("People", "Contacts"),
     ("Tasks", "Tâches"),
     ("Settings", "Paramètres"),
+    // updates (updater.rs, mailbox-updater)
+    ("Updates", "Mises à jour"),
+    ("Update available", "Mise à jour disponible"),
+    ("You're up to date", "Vous êtes à jour"),
+    ("Checking for updates…", "Recherche de mises à jour…"),
+    (
+        "Could not check for updates",
+        "Impossible de vérifier les mises à jour",
+    ),
+    ("Check for updates", "Rechercher des mises à jour"),
+    ("What's new", "Nouveautés"),
+    ("Update and restart", "Mettre à jour et redémarrer"),
+    ("Updating…", "Mise à jour…"),
+    (
+        "Offline: could not reach GitHub",
+        "Hors connexion : GitHub est injoignable",
+    ),
+    (
+        "GitHub rate limit reached, try again later",
+        "Limite de requêtes GitHub atteinte, réessayez plus tard",
+    ),
+    (
+        "No release published yet",
+        "Aucune version publiée pour l'instant",
+    ),
+    (
+        "Unexpected answer from GitHub",
+        "Réponse inattendue de GitHub",
+    ),
+    (
+        "This release has no Windows package",
+        "Cette version n'a pas de paquet Windows",
+    ),
+    (
+        "The download is damaged (checksum mismatch)",
+        "Le téléchargement est endommagé (somme de contrôle incorrecte)",
+    ),
+    (
+        "Development build: updates are installed only in a release build",
+        "Version de développement : les mises à jour s'installent seulement dans une version publiée",
+    ),
+    (
+        "Updates are installed automatically only on Windows",
+        "Les mises à jour automatiques ne sont disponibles que sous Windows",
+    ),
+    (
+        "Could not install the update",
+        "Impossible d'installer la mise à jour",
+    ),
     ("Home", "Accueil"),
     ("Send / Receive", "Envoyer / Recevoir"),
     ("View", "Affichage"),

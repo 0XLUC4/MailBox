@@ -18,6 +18,7 @@ use crate::theme::{
     RAIL_WIDTH, SPACE_1, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TOP_BAR_HEIGHT, Theme, theme,
 };
 use crate::titlebar;
+use crate::updater::Updater;
 use crate::{GoToCalendar, GoToMail, GoToPeople, GoToSettings, GoToTasks, Redo, Undo};
 
 pub struct Shell {
@@ -30,6 +31,7 @@ pub struct Shell {
     people: Entity<PeopleView>,
     tasks: Entity<TasksView>,
     settings: Entity<SettingsView>,
+    updater: Entity<Updater>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -88,6 +90,9 @@ impl Shell {
             tasks: tasks.downgrade(),
         });
 
+        let updater = cx.new(Updater::new);
+        subscriptions.push(cx.observe(&updater, |_, _, cx| cx.notify()));
+
         Self {
             ribbon: cx.new(|cx| RibbonView::new(state.clone(), window, cx)),
             search: cx.new(|cx| SearchView::new(state.clone(), window, cx)),
@@ -96,6 +101,7 @@ impl Shell {
             people,
             tasks,
             settings: cx.new(|cx| SettingsView::new(state.clone(), window, cx)),
+            updater,
             state,
             focus_handle,
             _subscriptions: subscriptions,
@@ -156,6 +162,7 @@ impl Shell {
             .border_color(t.border_subtle)
             .children(Module::MAIN.map(&rail_item))
             .child(div().flex_1())
+            .child(crate::updater::rail_button(&self.updater, cx))
             .child(rail_item(Module::Settings))
     }
 

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/sync", "crates/ui", "crates/devserver", "crates/window-handle", "apps/mailbox"]
+members = ["crates/core", "crates/sync", "crates/ui", "crates/devserver", "crates/window-handle", "crates/updater", "apps/mailbox"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ mailbox-sync = { path = "crates/sync" }
 mailbox-ui = { path = "crates/ui" }
 mailbox-devserver = { path = "crates/devserver" }
 mailbox-window-handle = { path = "crates/window-handle" }
+mailbox-updater = { path = "crates/updater" }
 
 # Exact versions are pinned by Cargo.lock; GPUI is pinned exactly because its crates move together.
 chrono = { version = "0.4.45", features = ["serde"] }
@@ -32,6 +33,8 @@ oauth2 = { version = "5", default-features = false, features = ["ureq"] }
 # CalDAV/CardDAV (HTTP + WebDAV XML).
 roxmltree = "0.21"
 ureq = "2.12"
+# Update package checksums (already in the lock file via deps).
+sha2 = "0.10.9"
 url = "2.5"
 # Windows integration (notifications, mailto handler); already in the lock file via deps.
 tauri-winrt-notification = "0.8.1"

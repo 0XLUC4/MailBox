@@ -12,6 +12,8 @@ mailbox-core.workspace = true
 mailbox-sync.workspace = true
 # Remote pictures in mail ("Show pictures"), see mail/remote_images.rs.
 ureq.workspace = true
+# In-app updates (GitHub Releases), see updater.rs.
+mailbox-updater.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification.workspace = true
