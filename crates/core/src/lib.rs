@@ -3,6 +3,7 @@
 //! Every mutation goes through [`Command`] + [`History::run`]; reads go straight to [`Store`].
 
 pub mod command;
+pub mod compose;
 pub mod error;
 pub mod mail_ops;
 pub mod model;

@@ -2,10 +2,9 @@
 //! Owner: mail agent (this folder). Selection lives in `AppState` so panes stay decoupled;
 //! layout preferences shared by the panes live in [`MailPrefs`].
 //!
-//! Compose integration: Reply / Reply all / Forward call [`request_compose`] with a
-//! [`ComposeRequest`]; the compose module registers its handler with [`set_compose_handler`].
+//! Compose integration: Reply / Reply all / Forward / mailto links call
+//! [`crate::compose::open_compose`] (see [`ops::compose_from`]).
 
-mod compose_request;
 mod folder_pane;
 mod html;
 mod list_model;
@@ -15,7 +14,7 @@ mod message_window;
 mod ops;
 mod reading_pane;
 
-pub use compose_request::{ComposeKind, ComposeRequest, request_compose, set_compose_handler};
+pub use ops::ComposeKind;
 pub use folder_pane::FolderPaneView;
 pub use message_list::MessageListView;
 pub use message_window::open as open_message_window;

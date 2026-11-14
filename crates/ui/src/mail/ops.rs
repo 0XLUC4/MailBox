@@ -9,8 +9,8 @@ use gpui::*;
 use mailbox_core::mail_ops::{self, Deletion, FlagPreset};
 use mailbox_core::{Command, FolderRole, Id, Message};
 
-use super::compose_request::{ComposeRequest, request_compose};
 use crate::app_state::AppState;
+use crate::compose::{ComposeRequest, open_compose};
 
 /// Runs a built command, or reports the error that prevented building it.
 pub fn run(state: &Entity<AppState>, command: mailbox_core::Result<Command>, cx: &mut App) -> bool {
@@ -193,53 +193,41 @@ pub fn delete(state: &Entity<AppState>, ids: Vec<Id>, window: &mut Window, cx: &
     }
 }
 
-/// Opens compose for a reply / reply all / forward of `id`.
+/// What a mail action asks compose for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposeKind {
+    New,
+    Reply,
+    ReplyAll,
+    Forward,
+}
+
+/// Opens compose for a reply / reply all / forward of `id` (New writes to its sender).
 pub fn compose_from(
     state: &Entity<AppState>,
     id: Id,
-    kind: super::ComposeKind,
+    kind: ComposeKind,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let store = state.read(cx).store();
-    let Some(message) = store.get::<Message>(id).ok().flatten() else {
-        return;
-    };
-    let me = store
-        .list_accounts()
-        .unwrap_or_default()
-        .into_iter()
-        .find(|account| account.id == message.account_id)
-        .map(|account| account.email)
-        .unwrap_or_default();
     let request = match kind {
-        super::ComposeKind::Reply => ComposeRequest::reply(&message, &me, false),
-        super::ComposeKind::ReplyAll => ComposeRequest::reply(&message, &me, true),
-        super::ComposeKind::Forward => ComposeRequest::forward(&message),
-        super::ComposeKind::New => ComposeRequest::new_to(message.from.clone()),
+        ComposeKind::Reply => ComposeRequest::Reply(id),
+        ComposeKind::ReplyAll => ComposeRequest::ReplyAll(id),
+        ComposeKind::Forward => ComposeRequest::Forward(id),
+        ComposeKind::New => {
+            let Some(message) = state.read(cx).store().get::<Message>(id).ok().flatten() else {
+                return;
+            };
+            ComposeRequest::To(vec![message.from])
+        }
     };
-    send_to_compose(state, request, window, cx);
-}
-
-pub fn send_to_compose(
-    state: &Entity<AppState>,
-    request: ComposeRequest,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    if !request_compose(request, window, cx) {
-        state.update(cx, |state, cx| {
-            state.notify_info("Compose isn't available yet", cx)
-        });
-    }
+    open_compose(state, request, window, cx);
 }
 
 /// Opens a sanitized link: web links in the browser, `mailto:` in compose.
 pub fn open_link(state: &Entity<AppState>, href: &str, window: &mut Window, cx: &mut App) {
-    if let Some(address) = href.strip_prefix("mailto:") {
-        let email = address.split('?').next().unwrap_or(address).to_owned();
-        let request = ComposeRequest::new_to(mailbox_core::Address::new("", email));
-        send_to_compose(state, request, window, cx);
+    if href.starts_with("mailto:") {
+        open_compose(state, ComposeRequest::Mailto(href.to_owned()), window, cx);
     } else {
         cx.open_url(href);
     }
