@@ -31,6 +31,17 @@ compose Send ──▶ <data>/outbox/<id>.json (Bcc, In-Reply-To, References, re
 - Tests: `crates/sync/tests/fake_servers.rs` runs the real backend against in-process fake IMAP
   and SMTP servers on 127.0.0.1.
 
+## Calendar and tasks without an account
+
+- Calendars and tasks with `account_id = 0` (`calendar::LOCAL_ACCOUNT`) live on this computer;
+  a first run gets a local "Calendar" and the default "Tasks" list, and both modules stay
+  usable before any account exists. Tasks are always local (removing an account keeps them).
+- Meeting invitations (iMIP): saving a meeting the user organizes queues a `METHOD:REQUEST`
+  mail in the Outbox (`dav_bridge::send_invitation`, or the CalDAV server schedules it).
+  The reading pane calls `calendar::invitation_bar(&state, message_id, cx) -> Option<AnyElement>`
+  for Accept / Tentative / Decline (REPLY/CANCEL: update the calendar); answering imports the
+  event and queues a `METHOD:REPLY` (`calendar::respond_to_invitation` without UI).
+
 ## Data flow
 
 ```

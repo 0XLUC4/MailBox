@@ -188,7 +188,8 @@ impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let active = self.state.read(cx).module();
-        // First run: no account yet → onboarding (Settings stays reachable).
+        // First run: no account yet → onboarding (Settings, the local calendar and tasks
+        // stay reachable).
         let has_account = self
             .state
             .read(cx)
@@ -196,7 +197,9 @@ impl Render for Shell {
             .list_accounts()
             .is_ok_and(|accounts| !accounts.is_empty());
         let content = match active {
-            _ if !has_account && active != Module::Settings => {
+            _ if !has_account
+                && !matches!(active, Module::Settings | Module::Calendar | Module::Tasks) =>
+            {
                 crate::onboarding::onboarding(self.state.clone(), cx).into_any_element()
             }
             Module::Mail => self.mail.clone().into_any_element(),

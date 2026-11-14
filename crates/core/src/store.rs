@@ -129,6 +129,8 @@ CREATE TABLE IF NOT EXISTS settings (
 "#,
     crate::compose::SCHEMA,
     crate::calendar::MIGRATION,
+    crate::calendar::LOCAL_MIGRATION,
+    crate::todo::POSITION_MIGRATION,
 ];
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.
@@ -170,7 +172,16 @@ impl Store {
         Ok(store)
     }
 
+    /// Foreign keys are off while migrating (they cannot change inside a transaction), so a
+    /// migration can rebuild a referenced table.
     fn migrate(&self) -> Result<()> {
+        self.conn.pragma_update(None, "foreign_keys", false)?;
+        let result = self.run_migrations();
+        self.conn.pragma_update(None, "foreign_keys", true)?;
+        result
+    }
+
+    fn run_migrations(&self) -> Result<()> {
         let version: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;

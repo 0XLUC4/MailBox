@@ -6,6 +6,7 @@
 //! Writes go through `Command::Todo` / `Command::SetMessageFlags` (undoable).
 
 mod detail;
+mod reorder;
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -17,7 +18,8 @@ use gpui::*;
 use mailbox_core::todo::{self, DueBucket, SmartList, TaskCard, TaskList, TaskSort};
 use mailbox_core::{Command, Id, Message, TaskCommand};
 
-use crate::app_state::AppState;
+use crate::actions;
+use crate::app_state::{AppState, Module};
 use crate::components::{EmptyState, Icon, IconButton, IconName};
 use crate::theme::{
     ACCENTS, ICON_SIZE, ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1,
@@ -38,6 +40,11 @@ enum Selection {
 
 pub struct TasksView {
     state: Entity<AppState>,
+    focus: FocusHandle,
+    /// Focus the view on its next render (the module was just opened).
+    needs_focus: bool,
+    /// "New task" from the ribbon: focus the add-task input on the next render.
+    focus_new_task: bool,
     list: SmartList,
     selected: Option<Selection>,
     sort: TaskSort,
@@ -51,6 +58,7 @@ pub struct TasksView {
     /// Inline rename of the open custom list.
     rename: Option<(Entity<InputState>, Subscription)>,
     detail: Option<TaskDetail>,
+    _reminders: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -59,7 +67,10 @@ impl TasksView {
         let new_task = cx.new(|cx| InputState::new(window, cx).placeholder("Add a task"));
         let new_list = cx.new(|cx| InputState::new(window, cx).placeholder("New list"));
         let subscriptions = vec![
-            cx.observe_in(&state, window, |this, _, window, cx| {
+            cx.observe_in(&state, window, |this, state, window, cx| {
+                if state.read(cx).module() != Module::Tasks {
+                    this.needs_focus = true;
+                }
                 this.sync_detail(window, cx);
                 cx.notify();
             }),
@@ -88,8 +99,33 @@ impl TasksView {
                 },
             ),
         ];
+        let view = cx.entity().downgrade();
+        crate::calendar::module_action::<actions::NewTask, _>(
+            &view,
+            &state,
+            Module::Tasks,
+            cx,
+            |this, cx| {
+                this.focus_new_task = true;
+                cx.notify();
+            },
+        );
+        crate::calendar::module_action::<actions::CompleteTask, _>(
+            &view,
+            &state,
+            Module::Tasks,
+            cx,
+            |this, cx| {
+                if let Some(selection) = this.selected {
+                    this.check(selection, cx);
+                }
+            },
+        );
         Self {
             state,
+            focus_new_task: false,
+            focus: cx.focus_handle(),
+            needs_focus: true,
             list: SmartList::MyDay,
             selected: None,
             sort: TaskSort::default(),
@@ -101,6 +137,7 @@ impl TasksView {
             new_list,
             rename: None,
             detail: None,
+            _reminders: Self::start_reminders(cx),
             _subscriptions: subscriptions,
         }
     }
@@ -127,19 +164,8 @@ impl TasksView {
     }
 
     fn add_task(&mut self, title: &str, cx: &mut Context<Self>) -> bool {
-        let account_id = self
-            .state
-            .read(cx)
-            .store()
-            .list_accounts()
-            .ok()
-            .and_then(|accounts| accounts.first().map(|account| account.id));
-        let Some(account_id) = account_id else {
-            self.state.update(cx, |state, cx| {
-                state.report_error("Add an account first", cx)
-            });
-            return false;
-        };
+        // Tasks are not synced: keep them on this computer so removing an account keeps them.
+        let account_id = mailbox_core::calendar::LOCAL_ACCOUNT;
         let card = self
             .list
             .new_task(account_id, title, Self::today(), Utc::now());
@@ -650,6 +676,25 @@ impl TasksView {
                     })),
             )
             .on_click(cx.listener(move |this, _, window, cx| this.open(selection, window, cx)));
+        // Manual order: drag a row onto another to move it there.
+        let row = if !completed && self.can_reorder() {
+            let accent = t.accent;
+            row.on_drag(
+                reorder::DraggedTask {
+                    id,
+                    title: card.task.title.clone().into(),
+                },
+                |dragged, _, _, cx| cx.new(|_| dragged.clone()),
+            )
+            .drag_over::<reorder::DraggedTask>(move |style, _, _, _| {
+                style.border_color(accent).border_t_2()
+            })
+            .on_drop(cx.listener(
+                move |this, dragged: &reorder::DraggedTask, _, cx| this.reorder(dragged.id, id, cx),
+            ))
+        } else {
+            row
+        };
 
         if completing {
             row.with_animation(
@@ -820,8 +865,17 @@ impl TasksView {
 }
 
 impl Render for TasksView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
+        // Ribbon actions (New task, Mark complete, Delete) dispatch from the focused element:
+        // take focus each time the module is opened.
+        if std::mem::take(&mut self.needs_focus) {
+            self.focus.focus(window, cx);
+        }
+        if std::mem::take(&mut self.focus_new_task) {
+            self.new_task
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
         let today = Self::today();
         let store = self.state.read(cx).store();
         let cards = todo::list_task_cards(store).unwrap_or_default();
@@ -867,7 +921,7 @@ impl Render for TasksView {
             .filter(|card| card.is_in(self.list, today))
             .partition(|card| !card.task.completed);
         todo::sort_tasks(&mut open, self.sort);
-        done.sort_by(|a, b| b.details.completed_at.cmp(&a.details.completed_at));
+        done.sort_by_key(|card| std::cmp::Reverse(card.details.completed_at));
         let show_flags = self.list == SmartList::Flagged;
         let title = self.list_title(&lists);
 
@@ -990,6 +1044,13 @@ impl Render for TasksView {
         let sidebar = self.render_sidebar(&counts, &lists, &t, cx);
         let header = self.render_header(title, &t, cx);
         div()
+            .id("tasks")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &actions::DeleteSelection, _, cx| {
+                if let Some(Selection::Task(id)) = this.selected {
+                    this.delete_task(id, cx);
+                }
+            }))
             .flex()
             .flex_row()
             .size_full()

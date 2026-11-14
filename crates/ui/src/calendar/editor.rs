@@ -363,12 +363,26 @@ impl EventEditor {
                         .collect::<Vec<_>>()
                 })
                 .collect();
-            let categories = store
+            let mut categories: Vec<(String, u32)> = store
                 .list_categories()
                 .unwrap_or_default()
                 .into_iter()
                 .map(|category| (category.name, category.color))
                 .collect();
+            if categories.is_empty() {
+                // Outlook's colour categories until the user defines their own.
+                categories = [
+                    ("Red category", 0xef4444),
+                    ("Orange category", 0xf97316),
+                    ("Yellow category", 0xeab308),
+                    ("Green category", 0x22c55e),
+                    ("Blue category", 0x3b82f6),
+                    ("Purple category", 0xa855f7),
+                ]
+                .into_iter()
+                .map(|(name, color)| (name.to_owned(), color))
+                .collect();
+            }
             (
                 event,
                 details,
@@ -513,16 +527,66 @@ impl EventEditor {
             .any(|mine| mine.eq_ignore_ascii_case(email))
     }
 
-    /// The user's own address on this event's calendar.
+    /// The user's own address on this event's calendar (first account for a local one).
     fn my_address(&self, cx: &App) -> Option<Address> {
         let calendar = self.calendars.iter().find(|c| c.id == self.calendar_id)?;
         let store = self.state.read(cx).store();
-        let account = store
-            .list_accounts()
+        let account = super::invitations::sending_account(store, calendar.account_id)?;
+        Some(Address::new(account.name, account.email))
+    }
+
+    /// A meeting the user organizes: saving sends the invitation to the attendees.
+    fn sends_invitations(&self) -> bool {
+        self.invitation().is_none()
+            && self
+                .details
+                .organizer
+                .as_ref()
+                .is_none_or(|organizer| self.is_mine(&organizer.email))
+            && self
+                .attendees
+                .iter()
+                .any(|attendee| !self.is_mine(&attendee.address.email))
+    }
+
+    /// Id of the saved event (after `save`), to send its invitation.
+    fn saved_event_id(&self, uid: &str, cx: &App) -> Option<Id> {
+        let recurrence_id = match &self.target {
+            EditorTarget::Event { id } => return Some(*id),
+            EditorTarget::Occurrence { occurrence } => {
+                Some(occurrence.series_start.unwrap_or(occurrence.event.start))
+            }
+            _ => None,
+        };
+        cal::details_by_uid(self.state.read(cx).store(), uid)
             .ok()?
             .into_iter()
-            .find(|account| account.id == calendar.account_id)?;
-        Some(Address::new(account.name, account.email))
+            .find(|row| row.recurrence_id == recurrence_id)
+            .map(|row| row.event_id)
+    }
+
+    /// Queues the invitation mail (or lets the CalDAV server schedule it).
+    fn send_invitation(&self, uid: &str, cx: &mut App) {
+        let no_account = self
+            .state
+            .read(cx)
+            .store()
+            .list_accounts()
+            .is_ok_and(|accounts| accounts.is_empty());
+        if no_account {
+            self.state.update(cx, |state, cx| {
+                state.report_error("Saved. Add a mail account to send invitations", cx)
+            });
+            return;
+        }
+        let Some(id) = self.saved_event_id(uid, cx) else {
+            return;
+        };
+        if crate::dav_bridge::send_invitation(id, cx).is_some() {
+            self.state.update(cx, |state, cx| {
+                state.notify_info("Invitation sent to the Outbox", cx)
+            });
+        }
     }
 
     /// Invited by someone else: (organizer, my attendee entry).
@@ -669,6 +733,8 @@ impl EventEditor {
                 return;
             }
         };
+        let uid = details.uid.clone();
+        let sends = self.sends_invitations();
         let command = match &self.target {
             EditorTarget::Occurrence { occurrence } if !occurrence.is_exception() => {
                 CalendarCommand::SaveOccurrence {
@@ -689,9 +755,13 @@ impl EventEditor {
         let ok = self
             .state
             .update(cx, |state, cx| state.run(command.into_command(), cx));
-        if ok {
-            window.remove_window();
+        if !ok {
+            return;
         }
+        if sends {
+            self.send_invitation(&uid, cx);
+        }
+        window.remove_window();
     }
 
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1009,6 +1079,7 @@ impl EventEditor {
             self.target,
             EditorTarget::New { .. } | EditorTarget::Meeting { .. }
         );
+        let sends = self.sends_invitations();
         div()
             .flex()
             .flex_row()
@@ -1048,8 +1119,12 @@ impl EventEditor {
             .child(
                 Button::new("editor-save")
                     .primary()
-                    .icon(IconName::Check)
-                    .label("Save")
+                    .icon(if sends {
+                        IconName::Send
+                    } else {
+                        IconName::Check
+                    })
+                    .label(if sends { "Send" } else { "Save" })
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
             )
     }

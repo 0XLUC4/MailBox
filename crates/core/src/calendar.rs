@@ -34,6 +34,40 @@ CREATE INDEX event_details_master ON event_details(master_id);
 CREATE INDEX event_details_uid ON event_details(uid);
 "#;
 
+/// Local calendars and tasks (no account, `account_id = 0`): rebuilds `calendars` and
+/// `tasks` without the foreign key to `accounts`. Appended to `store::MIGRATIONS`, which
+/// runs with foreign keys off so the tables can be swapped.
+pub const LOCAL_MIGRATION: &str = r#"
+CREATE TABLE calendars_new (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    color INTEGER NOT NULL
+);
+INSERT INTO calendars_new (id, account_id, name, color)
+    SELECT id, account_id, name, color FROM calendars;
+DROP TABLE calendars;
+ALTER TABLE calendars_new RENAME TO calendars;
+CREATE TABLE tasks_new (
+    id INTEGER PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    notes TEXT NOT NULL,
+    due TEXT,
+    completed INTEGER NOT NULL,
+    importance TEXT NOT NULL,
+    categories_json TEXT NOT NULL,
+    created TEXT NOT NULL
+);
+INSERT INTO tasks_new (id, account_id, title, notes, due, completed, importance, categories_json, created)
+    SELECT id, account_id, title, notes, due, completed, importance, categories_json, created FROM tasks;
+DROP TABLE tasks;
+ALTER TABLE tasks_new RENAME TO tasks;
+"#;
+
+/// Account id of calendars and tasks kept on this computer only.
+pub const LOCAL_ACCOUNT: Id = 0;
+
 /// How an event shows on free/busy (Outlook "Show as").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -991,6 +1025,43 @@ mod tests {
         };
         store.save(&mut calendar).unwrap();
         calendar
+    }
+
+    #[test]
+    fn local_calendar_and_task_need_no_account() {
+        let store = store();
+        let mut local = Calendar {
+            id: 0,
+            account_id: LOCAL_ACCOUNT,
+            name: "Calendar".into(),
+            color: 0x3b82f6,
+        };
+        store.save(&mut local).unwrap();
+        let mut history = History::new();
+        let mut ev = event(local.id, utc(2026, 11, 16, 9, 0), None);
+        ev.attendees.clear();
+        history
+            .run(
+                &store,
+                CalendarCommand::Save {
+                    event: Box::new(ev),
+                    details: Box::new(EventDetails::default_for(0)),
+                }
+                .into_command(),
+            )
+            .unwrap();
+        assert_eq!(store.query::<CalendarEvent>("", []).unwrap().len(), 1);
+        let mut task = crate::todo::TaskCard::new(LOCAL_ACCOUNT, "Local task", Utc::now());
+        history
+            .run(
+                &store,
+                Command::Todo(crate::todo::TaskCommand::SaveTask(Box::new(task.clone()))),
+            )
+            .unwrap();
+        task = crate::todo::list_task_cards(&store).unwrap().remove(0);
+        assert_eq!(task.task.account_id, LOCAL_ACCOUNT);
+        // Events still reference their calendar.
+        assert!(store.delete::<Calendar>(local.id).is_err());
     }
 
     fn event(calendar_id: Id, start: DateTime<Utc>, recurrence: Option<&str>) -> CalendarEvent {
