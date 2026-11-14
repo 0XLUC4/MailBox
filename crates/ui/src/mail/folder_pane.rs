@@ -1,17 +1,20 @@
-//! Folder pane: Favorites, then each account with its nested, collapsible folders.
+//! Folder pane: Favorites (stored, drag to reorder), smart folders (All inboxes, Unread,
+//! Flagged, All drafts, All sent), then each account with its nested, collapsible folders.
 //! Unread badges, drop target for dragged messages (Ctrl = copy), folder create/rename/delete,
-//! and a compact rail when collapsed.
+//! Empty Deleted Items / Junk, and a compact rail when collapsed.
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::component::WindowExt as _;
+use gpui::component::button::ButtonVariant;
 use gpui::component::input::{Input, InputEvent, InputState};
 use gpui::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use mailbox_core::{Account, Folder, FolderRole, Id, mail_ops};
+use mailbox_core::smart_folder::{self, SmartFolder};
+use mailbox_core::{Account, Command, Folder, FolderRole, Id, mail_ops};
 
 use super::{DraggedMessages, MailPrefs, ops};
 use crate::app_state::AppState;
@@ -134,6 +137,91 @@ pub fn prompt_text(
     });
 }
 
+/// Icon of a smart folder.
+fn smart_icon(smart: SmartFolder) -> IconName {
+    match smart {
+        SmartFolder::AllInboxes => IconName::Inbox,
+        SmartFolder::Unread => IconName::Mail,
+        SmartFolder::Flagged => IconName::Flag,
+        SmartFolder::AllDrafts => IconName::SquarePen,
+        SmartFolder::AllSent => IconName::Send,
+    }
+}
+
+/// Display name of a folder id: a smart folder's name, else the folder's.
+pub fn folder_label(store: &mailbox_core::Store, folder_id: Id) -> Option<String> {
+    match SmartFolder::from_id(folder_id) {
+        Some(smart) => Some(smart.name().to_owned()),
+        None => store
+            .get::<Folder>(folder_id)
+            .ok()
+            .flatten()
+            .map(|folder| folder_name(&folder)),
+    }
+}
+
+/// What a row shows: a real folder or a smart folder (All inboxes, Unread…).
+#[derive(Clone)]
+enum Entry {
+    Folder(Folder),
+    Smart(SmartFolder),
+}
+
+impl Entry {
+    fn id(&self) -> Id {
+        match self {
+            Self::Folder(folder) => folder.id,
+            Self::Smart(smart) => smart.id(),
+        }
+    }
+
+    fn icon(&self) -> IconName {
+        match self {
+            Self::Folder(folder) => folder_icon(folder),
+            Self::Smart(smart) => smart_icon(*smart),
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Self::Folder(folder) => folder_name(folder),
+            Self::Smart(smart) => smart.name().to_owned(),
+        }
+    }
+
+    /// Inboxes get an accent badge.
+    fn accent_badge(&self) -> bool {
+        match self {
+            Self::Folder(folder) => folder.role == FolderRole::Inbox,
+            Self::Smart(smart) => *smart == SmartFolder::AllInboxes,
+        }
+    }
+}
+
+/// Payload of a favorite dragged to a new place in Favorites.
+#[derive(Debug, Clone)]
+struct DraggedFavorite {
+    id: Id,
+    label: SharedString,
+}
+
+impl Render for DraggedFavorite {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
+        div()
+            .px(SPACE_3)
+            .py(SPACE_1)
+            .rounded(RADIUS_MD)
+            .bg(t.elevated)
+            .border_1()
+            .border_color(t.accent)
+            .shadow_lg()
+            .text_size(TEXT_MD)
+            .text_color(t.text)
+            .child(self.label.clone())
+    }
+}
+
 pub struct FolderPaneView {
     state: Entity<AppState>,
     prefs: Entity<MailPrefs>,
@@ -141,8 +229,7 @@ pub struct FolderPaneView {
     collapsed: HashSet<Id>,
     collapsed_accounts: HashSet<Id>,
     favorites_collapsed: bool,
-    /// `None` until first render, then each account's Inbox by default.
-    favorites: Option<Vec<Id>>,
+    smart_collapsed: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -169,19 +256,15 @@ impl FolderPaneView {
             collapsed: HashSet::new(),
             collapsed_accounts: HashSet::new(),
             favorites_collapsed: false,
-            favorites: None,
+            smart_collapsed: false,
             _subscriptions: subscriptions,
         }
     }
 
-    fn toggle_favorite(&mut self, folder_id: Id, cx: &mut Context<Self>) {
-        let favorites = self.favorites.get_or_insert_with(Vec::new);
-        if let Some(index) = favorites.iter().position(|&id| id == folder_id) {
-            favorites.remove(index);
-        } else {
-            favorites.push(folder_id);
-        }
-        cx.notify();
+    /// Adds or removes a favorite; stored in the settings and undoable.
+    fn toggle_favorite(state: &Entity<AppState>, folder_id: Id, cx: &mut App) {
+        let command = smart_folder::toggle_favorite(state.read(cx).store(), folder_id);
+        ops::run(state, command, cx);
     }
 
     fn set_collapsed(prefs: &Entity<MailPrefs>, collapsed: bool, cx: &mut App) {
@@ -237,7 +320,7 @@ impl FolderPaneView {
                 .description("Its subfolders are deleted too and its messages move to Deleted Items. You can undo this.")
                 .confirm()
                 .ok_text("Delete")
-                .ok_variant(gpui::component::button::ButtonVariant::Danger)
+                .ok_variant(ButtonVariant::Danger)
                 .on_ok(move |_, _, cx| {
                     let command = mail_ops::delete_folder(state.read(cx).store(), folder_id);
                     if ops::run(&state, command, cx) {
@@ -246,6 +329,41 @@ impl FolderPaneView {
                                 state.select_folder(None, cx);
                             }
                         });
+                    }
+                    true
+                })
+        });
+    }
+
+    /// "Empty folder" (Deleted Items, Junk): deletes every message permanently after confirmation.
+    fn empty_dialog(state: Entity<AppState>, folder: &Folder, window: &mut Window, cx: &mut App) {
+        let folder_id = folder.id;
+        let name = folder_name(folder);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let state = state.clone();
+            alert
+                .title(format!("Empty \"{name}\"?"))
+                .description("Every message in this folder will be deleted permanently.")
+                .confirm()
+                .ok_text("Empty folder")
+                .ok_variant(ButtonVariant::Danger)
+                .on_ok(move |_, _, cx| {
+                    let ids: Vec<Id> = state
+                        .read(cx)
+                        .store()
+                        .list_messages(folder_id)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|message| message.id)
+                        .collect();
+                    if ids.is_empty() {
+                        return true;
+                    }
+                    let selected = state.read(cx).selected_message();
+                    if ops::run(&state, Ok(Command::DeleteMessages { ids: ids.clone() }), cx)
+                        && selected.is_some_and(|id| ids.contains(&id))
+                    {
+                        state.update(cx, |state, cx| state.select_message(None, cx));
                     }
                     true
                 })
@@ -347,15 +465,44 @@ impl FolderPaneView {
         });
     }
 
+    fn menu_item(label: &str, icon: IconName) -> PopupMenuItem {
+        PopupMenuItem::new(label.to_owned()).icon(icon)
+    }
+
+    /// "Mark all as read" and "Add to / Remove from Favorites", shared by every row.
+    fn common_items(
+        menu: PopupMenu,
+        state: &Entity<AppState>,
+        folder_id: Id,
+        is_favorite: bool,
+    ) -> PopupMenu {
+        let s = state.clone();
+        let mark_read =
+            Self::menu_item("Mark all as read", IconName::MailOpen).on_click(move |_, _, cx| {
+                let command = mail_ops::mark_folder_read(s.read(cx).store(), folder_id);
+                ops::run(&s, command, cx);
+            });
+        let s = state.clone();
+        let favorite = Self::menu_item(
+            if is_favorite {
+                "Remove from Favorites"
+            } else {
+                "Add to Favorites"
+            },
+            IconName::Star,
+        )
+        .on_click(move |_, _, cx| Self::toggle_favorite(&s, folder_id, cx));
+        menu.item(mark_read).item(favorite)
+    }
+
     fn folder_menu(
         menu: PopupMenu,
-        pane: &Entity<Self>,
         state: &Entity<AppState>,
         folder: &Folder,
         is_favorite: bool,
     ) -> PopupMenu {
         let custom = folder.role == FolderRole::Custom;
-        let item = |label: &str, icon: IconName| PopupMenuItem::new(label.to_owned()).icon(icon);
+        let item = Self::menu_item;
 
         let (s, f) = (state.clone(), folder.clone());
         let new_sub = item("New subfolder", IconName::FolderPlus).on_click(move |_, window, cx| {
@@ -373,36 +520,94 @@ impl FolderPaneView {
         let delete = item("Delete folder", IconName::FolderX)
             .disabled(!custom)
             .on_click(move |_, window, cx| Self::delete_dialog(s.clone(), &f, window, cx));
-        let (s, id) = (state.clone(), folder.id);
-        let mark_read = item("Mark all as read", IconName::MailOpen).on_click(move |_, _, cx| {
-            let command = mail_ops::mark_folder_read(s.read(cx).store(), id);
-            ops::run(&s, command, cx);
-        });
-        let (p, id) = (pane.clone(), folder.id);
-        let favorite = item(
-            if is_favorite {
-                "Remove from Favorites"
-            } else {
-                "Add to Favorites"
-            },
-            IconName::Star,
-        )
-        .on_click(move |_, _, cx| p.update(cx, |pane, cx| pane.toggle_favorite(id, cx)));
 
-        menu.item(new_sub)
+        let menu = menu
+            .item(new_sub)
             .item(rename)
             .item(move_to)
             .item(delete)
-            .separator()
-            .item(mark_read)
-            .item(favorite)
+            .separator();
+        let menu = Self::common_items(menu, state, folder.id, is_favorite);
+        if matches!(folder.role, FolderRole::Trash | FolderRole::Junk) {
+            let (s, f) = (state.clone(), folder.clone());
+            menu.separator().item(
+                item("Empty folder", IconName::Trash)
+                    .on_click(move |_, window, cx| Self::empty_dialog(s.clone(), &f, window, cx)),
+            )
+        } else {
+            menu
+        }
     }
 
+    /// A clickable row (selects `entry`) with chevron slot, icon, label and badge.
     #[allow(clippy::too_many_arguments)]
-    fn folder_row(
+    fn row_base(
         &self,
         prefix: &'static str,
-        folder: &Folder,
+        entry: &Entry,
+        label: String,
+        depth: usize,
+        chevron: AnyElement,
+        info: &RowInfo,
+        t: &Theme,
+    ) -> Stateful<Div> {
+        let folder_id = entry.id();
+        let selected = info.selected;
+        let state = self.state.clone();
+        div()
+            .id(ElementId::Name(format!("{prefix}{folder_id}").into()))
+            .flex()
+            .flex_row()
+            .flex_shrink_0()
+            .items_center()
+            .gap(SPACE_1)
+            .h(px(30.))
+            .pl(px(4. + depth as f32 * 14.))
+            .pr(SPACE_2)
+            .rounded(RADIUS_MD)
+            .cursor_pointer()
+            .text_size(TEXT_MD)
+            .when(selected, |el| {
+                el.bg(t.accent_subtle)
+                    .text_color(t.accent)
+                    .font_weight(FontWeight::MEDIUM)
+            })
+            .when(!selected, |el| {
+                el.text_color(t.text).hover(|s| s.bg(t.hover))
+            })
+            .child(chevron)
+            .child(
+                Icon::new(entry.icon())
+                    .size(ICON_SIZE)
+                    .text_color(if selected { t.accent } else { t.text_muted }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .ml(SPACE_1)
+                    .truncate()
+                    .child(label),
+            )
+            .when(info.count > 0, |el| {
+                el.child(if selected || entry.accent_badge() {
+                    Badge::count(info.count).accent()
+                } else {
+                    Badge::count(info.count)
+                })
+            })
+            .on_click(move |_, _, cx| {
+                state.update(cx, |state, cx| state.select_folder(Some(folder_id), cx));
+            })
+    }
+
+    /// A row for a smart folder or a real folder (drop target for messages, folder menu).
+    /// `decorate` adds handlers before the context menu wraps the row.
+    #[allow(clippy::too_many_arguments)]
+    fn entry_row(
+        &self,
+        prefix: &'static str,
+        entry: &Entry,
         label: String,
         depth: usize,
         has_children: bool,
@@ -410,19 +615,12 @@ impl FolderPaneView {
         is_favorite: bool,
         t: &Theme,
         cx: &mut Context<Self>,
+        decorate: impl FnOnce(Stateful<Div>) -> Stateful<Div>,
     ) -> AnyElement {
-        let folder_id = folder.id;
-        let selected = info.selected;
-        let collapsed = self.collapsed.contains(&folder_id);
-        let state = self.state.clone();
-        let drop_state = self.state.clone();
-        let pane = cx.entity();
+        let folder_id = entry.id();
         let menu_state = self.state.clone();
-        let menu_folder = folder.clone();
-        let accent_subtle = t.accent_subtle;
-        let accent = t.accent;
-
         let chevron = if has_children {
+            let collapsed = self.collapsed.contains(&folder_id);
             div()
                 .id((prefix, folder_id as u64))
                 .flex()
@@ -451,64 +649,63 @@ impl FolderPaneView {
         } else {
             div().size(px(16.)).into_any_element()
         };
-
-        div()
-            .id(ElementId::Name(format!("{prefix}-{folder_id}").into()))
-            .flex()
-            .flex_row()
-            .flex_shrink_0()
-            .items_center()
-            .gap(SPACE_1)
-            .h(px(30.))
-            .pl(px(4. + depth as f32 * 14.))
-            .pr(SPACE_2)
-            .rounded(RADIUS_MD)
-            .cursor_pointer()
-            .text_size(TEXT_MD)
-            .when(selected, |el| {
-                el.bg(t.accent_subtle)
-                    .text_color(t.accent)
-                    .font_weight(FontWeight::MEDIUM)
-            })
-            .when(!selected, |el| {
-                el.text_color(t.text).hover(|s| s.bg(t.hover))
-            })
-            .child(chevron)
-            .child(
-                Icon::new(folder_icon(folder))
-                    .size(ICON_SIZE)
-                    .text_color(if selected { t.accent } else { t.text_muted }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .ml(SPACE_1)
-                    .truncate()
-                    .child(label),
-            )
-            .when(info.count > 0, |el| {
-                el.child(if selected || folder.role == FolderRole::Inbox {
-                    Badge::count(info.count).accent()
-                } else {
-                    Badge::count(info.count)
+        let row = decorate(self.row_base(prefix, entry, label, depth, chevron, info, t));
+        match entry {
+            Entry::Smart(_) => row
+                .context_menu(move |menu, _, _| {
+                    Self::common_items(menu, &menu_state, folder_id, is_favorite)
                 })
-            })
-            .on_click(move |_, _, cx| {
-                state.update(cx, |state, cx| state.select_folder(Some(folder_id), cx));
-            })
-            .drag_over::<DraggedMessages>(move |style, _, _, _| {
-                style.bg(accent_subtle).border_1().border_color(accent)
-            })
-            .on_drop(move |dragged: &DraggedMessages, window, cx| {
-                let modifiers = window.modifiers();
-                let copy = modifiers.control || modifiers.platform;
-                ops::move_to(&drop_state, dragged.ids.clone(), folder_id, copy, cx);
-            })
-            .context_menu(move |menu, _, _| {
-                Self::folder_menu(menu, &pane, &menu_state, &menu_folder, is_favorite)
-            })
-            .into_any_element()
+                .into_any_element(),
+            Entry::Folder(folder) => {
+                let drop_state = self.state.clone();
+                let menu_folder = folder.clone();
+                let (accent_subtle, accent) = (t.accent_subtle, t.accent);
+                row.drag_over::<DraggedMessages>(move |style, _, _, _| {
+                    style.bg(accent_subtle).border_1().border_color(accent)
+                })
+                .on_drop(move |dragged: &DraggedMessages, window, cx| {
+                    let modifiers = window.modifiers();
+                    let copy = modifiers.control || modifiers.platform;
+                    ops::move_to(&drop_state, dragged.ids.clone(), folder_id, copy, cx);
+                })
+                .context_menu(move |menu, _, _| {
+                    Self::folder_menu(menu, &menu_state, &menu_folder, is_favorite)
+                })
+                .into_any_element()
+            }
+        }
+    }
+
+    /// A Favorites row: also draggable onto another favorite to reorder (stored, undoable).
+    fn favorite_row(
+        &self,
+        entry: &Entry,
+        label: String,
+        info: &RowInfo,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let folder_id = entry.id();
+        let state = self.state.clone();
+        let accent = t.accent;
+        let dragged = DraggedFavorite {
+            id: folder_id,
+            label: label.clone().into(),
+        };
+        let decorate = move |row: Stateful<Div>| {
+            row.on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
+                .drag_over::<DraggedFavorite>(move |style, _, _, _| {
+                    style.border_t_2().border_color(accent)
+                })
+                .on_drop(move |dragged: &DraggedFavorite, _, cx| {
+                    if dragged.id != folder_id {
+                        let store = state.read(cx).store();
+                        let command = smart_folder::move_favorite(store, dragged.id, folder_id);
+                        ops::run(&state, command, cx);
+                    }
+                })
+        };
+        self.entry_row("fav-", entry, label, 0, false, info, true, t, cx, decorate)
     }
 
     fn section_header(id: ElementId, label: String, collapsed: bool, t: &Theme) -> Stateful<Div> {
@@ -541,7 +738,7 @@ impl FolderPaneView {
 
     fn render_collapsed(
         &self,
-        favorites: &[(Folder, i64)],
+        favorites: &[(Entry, i64)],
         selected: Option<Id>,
         t: &Theme,
     ) -> AnyElement {
@@ -559,20 +756,21 @@ impl FolderPaneView {
                     .on_click(move |_, _, cx| Self::set_collapsed(&prefs, false, cx)),
             )
             .child(div().w(px(20.)).h(px(1.)).my(SPACE_1).bg(t.border_subtle))
-            .children(favorites.iter().map(|(folder, unread)| {
+            .children(favorites.iter().map(|(entry, unread)| {
                 let state = self.state.clone();
-                let folder_id = folder.id;
+                let folder_id = entry.id();
                 div()
                     .relative()
                     .child(
-                        IconButton::new(("folder-mini", folder_id as u64), folder_icon(folder))
-                            .active(selected == Some(folder_id))
-                            .tooltip(folder_name(folder))
-                            .on_click(move |_, _, cx| {
-                                state.update(cx, |state, cx| {
-                                    state.select_folder(Some(folder_id), cx)
-                                });
-                            }),
+                        IconButton::new(
+                            ElementId::Name(format!("folder-mini{folder_id}").into()),
+                            entry.icon(),
+                        )
+                        .active(selected == Some(folder_id))
+                        .tooltip(entry.name())
+                        .on_click(move |_, _, cx| {
+                            state.update(cx, |state, cx| state.select_folder(Some(folder_id), cx));
+                        }),
                     )
                     .when(*unread > 0, |el| {
                         el.child(
@@ -606,66 +804,69 @@ impl Render for FolderPaneView {
                 (account, folders)
             })
             .collect();
+        // Badges: unread, or the total for drafts and flags. Keyed by (smart) folder id.
         let mut counts: HashMap<Id, i64> = HashMap::new();
         for (_, folders) in &folders_by_account {
             for folder in folders {
                 let count = if folder.role == FolderRole::Drafts {
-                    store
-                        .list_messages(folder.id)
-                        .map(|messages| messages.len() as i64)
-                        .unwrap_or(0)
+                    store.message_count(folder.id)
                 } else {
-                    store.unread_count(folder.id).unwrap_or(0)
+                    store.unread_count(folder.id)
                 };
-                counts.insert(folder.id, count);
+                counts.insert(folder.id, count.unwrap_or(0));
+            }
+        }
+        let has_accounts = !folders_by_account.is_empty();
+        if has_accounts {
+            for smart in SmartFolder::ALL {
+                let count = if smart.counts_all() {
+                    store.message_count(smart.id())
+                } else {
+                    store.unread_count(smart.id())
+                };
+                counts.insert(smart.id(), count.unwrap_or(0));
             }
         }
         let multi_account = folders_by_account.len() > 1;
 
-        let favorite_ids = self
-            .favorites
-            .get_or_insert_with(|| {
-                folders_by_account
-                    .iter()
-                    .flat_map(|(_, folders)| folders.iter())
-                    .filter(|folder| folder.role == FolderRole::Inbox)
-                    .map(|folder| folder.id)
-                    .collect()
-            })
-            .clone();
-        let favorites: Vec<(Folder, String)> = favorite_ids
+        let favorite_ids = smart_folder::favorites(store).unwrap_or_default();
+        let favorites: Vec<(Entry, String)> = favorite_ids
             .iter()
-            .filter_map(|id| {
+            .filter_map(|&id| {
+                if let Some(smart) = SmartFolder::from_id(id) {
+                    return has_accounts.then(|| (Entry::Smart(smart), smart.name().to_owned()));
+                }
                 folders_by_account.iter().find_map(|(account, folders)| {
-                    folders.iter().find(|f| f.id == *id).map(|folder| {
+                    folders.iter().find(|f| f.id == id).map(|folder| {
                         let name = folder_name(folder);
                         let label = if multi_account && folder.role != FolderRole::Custom {
                             format!("{name} - {}", account.name)
                         } else {
                             name
                         };
-                        (folder.clone(), label)
+                        (Entry::Folder(folder.clone()), label)
                     })
                 })
             })
             .collect();
+        let count_of = |id: Id| counts.get(&id).copied().unwrap_or(0);
 
         if self.prefs.read(cx).folders_collapsed {
-            let mini: Vec<(Folder, i64)> = favorites
+            let mini: Vec<(Entry, i64)> = favorites
                 .iter()
-                .map(|(folder, _)| (folder.clone(), counts.get(&folder.id).copied().unwrap_or(0)))
+                .map(|(entry, _)| (entry.clone(), count_of(entry.id())))
                 .collect();
             return self.render_collapsed(&mini, selected, &t);
         }
 
-        let info = |folder: &Folder| RowInfo {
-            count: counts.get(&folder.id).copied().unwrap_or(0),
-            selected: selected == Some(folder.id),
+        let info = |id: Id| RowInfo {
+            count: count_of(id),
+            selected: selected == Some(id),
         };
 
         let mut content: Vec<AnyElement> = Vec::new();
 
-        // Favorites.
+        // Favorites (drag a row onto another to reorder).
         if !favorites.is_empty() {
             content.push(
                 Self::section_header(
@@ -681,17 +882,41 @@ impl Render for FolderPaneView {
                 .into_any_element(),
             );
             if !self.favorites_collapsed {
-                for (folder, label) in &favorites {
-                    let row = self.folder_row(
-                        "fav",
-                        folder,
-                        label.clone(),
+                for (entry, label) in &favorites {
+                    let row = self.favorite_row(entry, label.clone(), &info(entry.id()), &t, cx);
+                    content.push(row);
+                }
+            }
+        }
+
+        // Smart folders: every account at once.
+        if has_accounts {
+            content.push(
+                Self::section_header(
+                    "smart-header".into(),
+                    "SMART FOLDERS".into(),
+                    self.smart_collapsed,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.smart_collapsed = !this.smart_collapsed;
+                    cx.notify();
+                }))
+                .into_any_element(),
+            );
+            if !self.smart_collapsed {
+                for smart in SmartFolder::ALL {
+                    let row = self.entry_row(
+                        "smart-",
+                        &Entry::Smart(smart),
+                        smart.name().to_owned(),
                         0,
                         false,
-                        &info(folder),
-                        true,
+                        &info(smart.id()),
+                        favorite_ids.contains(&smart.id()),
                         &t,
                         cx,
+                        |row| row,
                     );
                     content.push(row);
                 }
@@ -744,17 +969,17 @@ impl Render for FolderPaneView {
                 if self.collapsed.contains(&folder.id) {
                     hidden_below = Some(depth);
                 }
-                let is_favorite = favorite_ids.contains(&folder.id);
-                let row = self.folder_row(
-                    "folder",
-                    folder,
+                let row = self.entry_row(
+                    "folder-",
+                    &Entry::Folder(folder.clone()),
                     folder_name(folder),
                     depth,
                     has_children.contains(&folder.id),
-                    &info(folder),
-                    is_favorite,
+                    &info(folder.id),
+                    favorite_ids.contains(&folder.id),
                     &t,
                     cx,
+                    |row| row,
                 );
                 content.push(row);
             }

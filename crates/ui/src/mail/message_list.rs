@@ -12,13 +12,13 @@ use gpui::component::{Sizable as _, VirtualListScrollHandle, v_virtual_list};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::settings::Density;
-use mailbox_core::{Folder, FolderRole, Id, Importance, Message, mail_ops};
+use mailbox_core::{FolderRole, Id, Importance, Message, mail_ops};
 
 use super::list_model::{BuildContext, Filter, Grouping, ListOptions, Row, SortKey, build_rows};
 use super::{
     ArchiveSelected, ClearSelection, CollapseThread, DeleteSelected, DraggedMessages, ExpandThread,
     ExtendNext, ExtendPrevious, MailPrefs, MarkRead, MarkUnread, OpenSelected, ReadingPanePosition,
-    SelectAllMessages, SelectNext, SelectPrevious, ToggleFlag, folder_pane::folder_name,
+    SelectAllMessages, SelectNext, SelectPrevious, ToggleFlag, folder_pane::folder_label,
     message_menu, message_window, ops,
 };
 use crate::actions;
@@ -137,7 +137,6 @@ impl MessageListView {
         let query = state.search_query().trim().to_owned();
         let folder_id = state.selected_folder();
         let source = (folder_id, query.clone());
-        let folder = folder_id.and_then(|id| store.get::<Folder>(id).ok().flatten());
 
         self.messages = if !query.is_empty() {
             store
@@ -149,7 +148,9 @@ impl MessageListView {
             Vec::new()
         };
         self.title = if query.is_empty() {
-            folder.as_ref().map(folder_name).unwrap_or_default()
+            folder_id
+                .and_then(|id| folder_label(store, id))
+                .unwrap_or_default()
         } else {
             "Search results".into()
         };

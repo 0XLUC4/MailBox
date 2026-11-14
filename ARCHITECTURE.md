@@ -79,6 +79,10 @@ view ──Command──▶ AppState::run ──▶ History::run ──▶ comma
   add a label, add a test (apply → undo → state equals original). `Command` is serde-serializable for a future CLI/agent.
 - **UI selection** (module, folder, message, search query) lives in `AppState` (not undoable). Use the setters
   (`select_folder`, `select_message`, `set_module`, `set_search_query`); they notify.
+- **Smart folders** (All inboxes, Unread, Flagged, All drafts, All sent; `mailbox_core::smart_folder`)
+  use negative pseudo folder ids: `select_folder`, `Store::list_messages` / `unread_count`, search
+  `folder:<id>` and "Mark all as read" work on them unchanged. Favorites are an explicit id list in the
+  `mail.favorites` setting (default: All inboxes + each Inbox until first changed), changed via `SetSetting` (undoable).
 - **New tables**: append a migration to `store::MIGRATIONS` (never edit a shipped one), implement `store::Record`.
 
 ## A view

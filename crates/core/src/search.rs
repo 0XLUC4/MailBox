@@ -256,7 +256,12 @@ fn term_matches(filter: &Filter, message: &Message, folders: &FolderNames) -> bo
             .get(&message.folder_id)
             .is_some_and(|(folder, role)| folder.contains(name.as_str()) || *role == name.as_str()),
         Filter::AllFolders => true,
-        Filter::FolderId(id) => message.folder_id == *id,
+        Filter::FolderId(id) => match crate::smart_folder::SmartFolder::from_id(*id) {
+            Some(smart) => folders
+                .get(&message.folder_id)
+                .is_some_and(|(_, role)| smart.matches(message, role)),
+            None => message.folder_id == *id,
+        },
         Filter::Category(needle) => message
             .categories
             .iter()

@@ -136,7 +136,7 @@ fn folder_path(folder: &Folder, all: &[Folder]) -> String {
 
 /// Asks for `.mbox` / `.eml` files, then imports them into the selected folder.
 pub fn import_mailbox(state: &Entity<AppState>, cx: &mut App) {
-    let Some(folder_id) = state.read(cx).selected_folder() else {
+    let Some(folder_id) = state.read(cx).selected_folder().filter(|&id| id > 0) else {
         return info(state, "Select the folder to import into", cx);
     };
     let picked = cx.prompt_for_paths(PathPromptOptions {

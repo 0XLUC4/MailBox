@@ -624,7 +624,8 @@ pub fn current_account(state: &Entity<AppState>, cx: &App) -> Option<mailbox_cor
 pub fn run_rules(state: &Entity<AppState>, cx: &mut App) {
     let account = current_account(state, cx);
     state.update(cx, |state, cx| {
-        let (Some(account), Some(folder)) = (account, state.selected_folder()) else {
+        let folder = state.selected_folder().filter(|&id| id > 0);
+        let (Some(account), Some(folder)) = (account, folder) else {
             return state.notify_info("Select a folder to run rules on", cx);
         };
         let ids: Vec<_> = state
@@ -671,7 +672,9 @@ pub fn is_enabled(id: &str, state: &AppState) -> bool {
         id if crate::everyday::NEEDS_MESSAGE.contains(&id) => {
             state.module() == Module::Mail && state.selected_message().is_some()
         }
-        "mark-all-read" | "run-rules" | "import-mailbox" => state.selected_folder().is_some(),
+        "mark-all-read" => state.selected_folder().is_some(),
+        // Smart folders (negative ids) have no single account to import into or run rules for.
+        "run-rules" | "import-mailbox" => state.selected_folder().is_some_and(|id| id > 0),
         "undo" => state.history().can_undo(),
         "redo" => state.history().can_redo(),
         _ => true,

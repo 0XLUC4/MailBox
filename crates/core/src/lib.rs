@@ -20,6 +20,7 @@ pub mod vcard;
 pub mod rules;
 pub mod search;
 pub mod settings;
+pub mod smart_folder;
 
 pub mod calendar;
 pub mod ics;

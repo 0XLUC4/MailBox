@@ -325,7 +325,11 @@ impl Store {
     }
 
     /// Messages of a folder, newest first.
+    /// A negative id is a smart folder (`smart_folder::SmartFolder::id`).
     pub fn list_messages(&self, folder_id: Id) -> Result<Vec<Message>> {
+        if let Some(smart) = crate::smart_folder::SmartFolder::from_id(folder_id) {
+            return smart.list_messages(self);
+        }
         self.query(
             "WHERE folder_id = ?1 ORDER BY date DESC, id DESC",
             [folder_id],
@@ -347,11 +351,31 @@ impl Store {
     }
 
     pub fn unread_count(&self, folder_id: Id) -> Result<i64> {
-        Ok(self.conn.query_row(
-            "SELECT COUNT(*) FROM messages WHERE folder_id = ?1 AND is_read = 0",
-            [folder_id],
-            |row| row.get(0),
-        )?)
+        self.count_messages(folder_id, "AND is_read = 0")
+    }
+
+    /// Number of messages in a folder (or smart folder).
+    pub fn message_count(&self, folder_id: Id) -> Result<i64> {
+        self.count_messages(folder_id, "")
+    }
+
+    fn count_messages(&self, folder_id: Id, extra: &str) -> Result<i64> {
+        let count = |sql: String, params: &[&dyn rusqlite::ToSql]| {
+            self.conn.query_row(&sql, params, |row| row.get(0))
+        };
+        Ok(match crate::smart_folder::SmartFolder::from_id(folder_id) {
+            Some(smart) => count(
+                format!(
+                    "SELECT COUNT(*) FROM messages WHERE {} {extra}",
+                    smart.condition()
+                ),
+                &[],
+            )?,
+            None => count(
+                format!("SELECT COUNT(*) FROM messages WHERE folder_id = ?1 {extra}"),
+                &[&folder_id],
+            )?,
+        })
     }
 
     pub fn list_calendars(&self) -> Result<Vec<Calendar>> {
