@@ -314,6 +314,42 @@ html_mail(
 """,
 )
 
+# 7. Only CSS background pictures (<style>, style attribute, background attribute): the
+# "Pictures were blocked" bar must still show, and the layout keep its colours.
+html_mail(
+    "07-css-backgrounds.eml",
+    "Lumen Events <hello@lumen-events.example>",
+    "Your ticket for Lumen Night 2026",
+    "Sun, 08 Nov 2026 18:00:00 +0100",
+    f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+ .hero {{ background: #1b1f3b url("{CDN}/le/hero-stars.jpg") center / cover no-repeat; }}
+ .ticket {{ background-image: url('{CDN}/le/ticket-pattern.png'); }}
+</style></head>
+<body style="margin:0;background:#f5f3ff">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ff"><tr><td align="center" style="padding:24px">
+<table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;font-family:'Segoe UI',Arial,sans-serif">
+ <tr><td class="hero" height="180" style="height:180px;padding:32px;color:#ffffff;vertical-align:bottom">
+  <div style="font-size:13px;letter-spacing:2px;color:#c4b5fd">LUMEN NIGHT 2026</div>
+  <div style="font-size:28px;font-weight:600">Your ticket is confirmed</div>
+ </td></tr>
+ <tr><td class="ticket" style="padding:24px 32px;background-color:#ede9fe">
+  <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;color:#3b0764">
+   <tr><td style="padding:4px 0;color:#6d28d9">Date</td><td align="right">Sat 21 Nov 2026, 20:00</td></tr>
+   <tr><td style="padding:4px 0;color:#6d28d9">Venue</td><td align="right">Hall 3, Example Expo</td></tr>
+   <tr><td style="padding:4px 0;color:#6d28d9">Seat</td><td align="right"><b>Floor, standing</b></td></tr>
+  </table>
+ </td></tr>
+ <tr><td background="{CDN}/le/divider.png" style="height:8px;font-size:0;line-height:0;background-color:#c4b5fd">&nbsp;</td></tr>
+ <tr><td align="center" style="padding:28px 32px">
+  <a href="https://lumen-events.example/tickets/LN-2026-0091" style="display:inline-block;padding:12px 30px;border-radius:8px;background:#6d28d9;color:#ffffff;text-decoration:none;font-weight:600">Open my ticket</a>
+ </td></tr>
+ <tr><td style="padding:16px 32px;font-size:11px;color:#7c7c99;background:#faf9ff">Lumen Events &middot; 5 Example Square, Lille</td></tr>
+</table>
+</td></tr></table>
+</body></html>
+""",
+)
+
 # 6. Plain text: stays in the app theme.
 eml(
     "06-plain-text.eml",

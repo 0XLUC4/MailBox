@@ -45,6 +45,9 @@ pub struct ReadingPaneView {
     source: PaneSource,
     /// Messages whose remote pictures the user allowed.
     show_pictures: HashSet<Id>,
+    /// Messages whose page asked for remote content while it was blocked (from the webview).
+    #[cfg(windows)]
+    blocked: HashSet<Id>,
     /// Conversation message the user clicked to show instead of the selected one…
     viewing: Option<Id>,
     /// …while this message is selected.
@@ -111,6 +114,8 @@ impl ReadingPaneView {
             state,
             source,
             show_pictures: HashSet::new(),
+            #[cfg(windows)]
+            blocked: HashSet::new(),
             viewing: None,
             viewing_for: None,
             bodies: HashMap::new(),
@@ -780,6 +785,7 @@ impl ReadingPaneView {
                 .p(px(1.))
                 .bg(t.border)
                 .child(paper);
+            let remote = remote || self.blocked.contains(&message.id);
             return (paper.into_any_element(), remote);
         }
         #[cfg(windows)]
@@ -848,9 +854,20 @@ impl ReadingPaneView {
                 })
                 .unwrap_or(false);
             // Links clicked in the message.
-            while created && let Ok(WebEvent::OpenLink(url)) = received.recv().await {
-                cx.update(|window, cx| ops::open_link(&state, &url, window, cx))
-                    .ok();
+            while created && let Ok(event) = received.recv().await {
+                match event {
+                    WebEvent::OpenLink(url) => cx
+                        .update(|window, cx| ops::open_link(&state, &url, window, cx))
+                        .ok(),
+                    // Shows the "Pictures were blocked" bar for what the page really asked for.
+                    WebEvent::Blocked(id) => this
+                        .update(cx, |this, cx| {
+                            if this.blocked.insert(id as Id) {
+                                cx.notify();
+                            }
+                        })
+                        .ok(),
+                };
             }
         })
         .detach();
@@ -866,8 +883,9 @@ fn pictures_key(email: &str) -> String {
 /// The page served to the webview: `cid:` pictures map to the stored inline parts.
 #[cfg(windows)]
 fn web_page(message: &Message, html: &str, remote: bool) -> webview::Page {
-    let (html, cids) = webview::prepare(html);
-    let inline = cids
+    let prepared = webview::prepare(html);
+    let inline = prepared
+        .cids
         .iter()
         .enumerate()
         .map(|(nth, cid)| {
@@ -877,9 +895,12 @@ fn web_page(message: &Message, html: &str, remote: bool) -> webview::Page {
         })
         .collect();
     webview::Page {
-        html,
+        id: message.id as u64,
+        html: prepared.html,
         remote,
         inline,
+        remote_refs: prepared.remote,
+        reported: false,
     }
 }
 
