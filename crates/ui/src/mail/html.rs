@@ -1190,7 +1190,8 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Not `super::*`: it would pull in gpui's `test` macro through `use gpui::*`.
+    use super::{Block, has_remote_images, link_target, parse, parse_plain, to_text};
 
     fn text(blocks: &[Block]) -> String {
         to_text(blocks)
