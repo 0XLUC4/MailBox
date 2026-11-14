@@ -8,7 +8,6 @@
 use std::rc::Rc;
 
 use gpui::component::tooltip::Tooltip;
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::components::{Icon, IconName};
@@ -58,6 +57,23 @@ pub enum Block {
         alt: String,
     },
     Rule,
+}
+
+/// The `cid:` references of an HTML body (pictures shown inline from MIME parts), in order:
+/// `src="cid:…"`, `src=cid:…` and CSS `url(cid:…)`.
+pub fn cid_references(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    lower
+        .match_indices("cid:")
+        .filter(|(start, _)| lower[..*start].trim_end().ends_with(['"', '\'', '=', '(']))
+        .map(|(start, _)| {
+            let value = &html[start + 4..];
+            let end = value
+                .find(|c: char| matches!(c, '"' | '\'' | ')' | '>') || c.is_whitespace())
+                .unwrap_or(value.len());
+            value[..end].to_owned()
+        })
+        .collect()
 }
 
 /// True for an image that would be fetched from the network.
@@ -991,19 +1007,6 @@ pub struct RenderContext {
     pub on_link: LinkHandler,
 }
 
-/// Host shown after a link when its text doesn't already say where it goes.
-fn link_target(href: &str) -> String {
-    if let Some(address) = href.strip_prefix("mailto:") {
-        return address.split('?').next().unwrap_or(address).to_owned();
-    }
-    let without_scheme = href.split_once("://").map_or(href, |(_, rest)| rest);
-    without_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(without_scheme)
-        .to_owned()
-}
-
 fn render_spans(id: ElementId, spans: &[Span], size: Pixels, ctx: &RenderContext) -> AnyElement {
     let t = &ctx.theme;
     let mut text = String::new();
@@ -1040,21 +1043,6 @@ fn render_spans(id: ElementId, spans: &[Span], size: Pixels, ctx: &RenderContext
         }
         if style != HighlightStyle::default() && !range.is_empty() {
             highlights.push((range, style));
-        }
-        // Show where a link goes unless its text already says so.
-        if let Some(href) = &span.link {
-            let target = link_target(href);
-            if !target.is_empty() && !span.text.contains(&target) {
-                let start = text.len();
-                text.push_str(&format!(" ({target})"));
-                highlights.push((
-                    start..text.len(),
-                    HighlightStyle {
-                        color: Some(t.text_subtle),
-                        ..HighlightStyle::default()
-                    },
-                ));
-            }
         }
     }
     let styled = StyledText::new(text).with_highlights(highlights);
@@ -1151,23 +1139,15 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
                     .text_color(t.text_muted)
                     .children(render_blocks(&path, inner, ctx))
                     .into_any_element(),
+                // Mail tables are layout grids: no borders the sender didn't draw.
                 Block::Table(rows) => div()
                     .flex()
                     .flex_col()
                     .w_full()
-                    .rounded(RADIUS_MD)
-                    .border_1()
-                    .border_color(t.border_subtle)
-                    .overflow_hidden()
                     .children(rows.iter().enumerate().map(|(row_index, row)| {
                         let row_path = child_id(&path, row_index);
-                        div()
-                            .flex()
-                            .flex_row()
-                            .when(row_index > 0, |el| {
-                                el.border_t_1().border_color(t.border_subtle)
-                            })
-                            .children(row.iter().enumerate().map(|(cell_index, cell)| {
+                        div().flex().flex_row().children(row.iter().enumerate().map(
+                            |(cell_index, cell)| {
                                 div()
                                     .flex()
                                     .flex_col()
@@ -1176,15 +1156,13 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
                                     .gap(SPACE_1)
                                     .px(SPACE_2)
                                     .py(SPACE_1)
-                                    .when(cell_index > 0, |el| {
-                                        el.border_l_1().border_color(t.border_subtle)
-                                    })
                                     .children(render_blocks(
                                         &child_id(&row_path, cell_index),
                                         cell,
                                         ctx,
                                     ))
-                            }))
+                            },
+                        ))
                     }))
                     .into_any_element(),
                 Block::Preformatted(text) => div()
@@ -1265,7 +1243,13 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
 #[cfg(test)]
 mod tests {
     // Not `super::*`: it would pull in gpui's `test` macro through `use gpui::*`.
-    use super::{Block, has_remote_images, link_target, parse, parse_plain, to_text};
+    use super::{Block, cid_references, has_remote_images, parse, parse_plain, to_text};
+
+    #[test]
+    fn finds_cid_references() {
+        let html = r#"<img src="cid:logo@x"><td style="background:url(cid:bg.png)">cid: text<img src=CID:hero>"#;
+        assert_eq!(cid_references(html), ["logo@x", "bg.png", "hero"]);
+    }
 
     fn text(blocks: &[Block]) -> String {
         to_text(blocks)
@@ -1388,17 +1372,5 @@ mod tests {
                 .any(|span| span.link.as_deref() == Some("https://example.com/doc"))
         );
         assert!(matches!(&blocks[1], Block::Quote(inner) if text(inner) == "earlier\nmessage"));
-    }
-
-    #[test]
-    fn link_targets() {
-        assert_eq!(
-            link_target("https://www.example.com/a?b"),
-            "www.example.com"
-        );
-        assert_eq!(
-            link_target("mailto:ada@example.com?subject=x"),
-            "ada@example.com"
-        );
     }
 }

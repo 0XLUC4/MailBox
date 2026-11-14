@@ -1,6 +1,7 @@
-//! Reading pane: action bar, subject header, and the conversation as stacked message cards
-//! (selected message expanded, others collapsible). Bodies go through the safe HTML renderer;
-//! remote pictures stay blocked until "Show pictures".
+//! Reading pane: action bar, subject, the other messages of the conversation (collapsed, click to
+//! show one), then the shown message: header, attachments and its body filling the rest. HTML
+//! bodies are shown exactly as sent by the system web engine on Windows (see `webview`), plain
+//! text and other platforms use our renderer. Remote pictures stay blocked until "Show pictures".
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -11,9 +12,13 @@ use gpui::component::button::{Button as KitButton, ButtonVariants as _};
 use gpui::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use mailbox_core::{Address, Attachment, Folder, FolderRole, Id, Importance, Message, mail_ops};
+use mailbox_core::{
+    Address, Attachment, Command, Folder, FolderRole, Id, Importance, Message, mail_ops,
+};
 
 use super::html::{self, Block, RenderContext};
+#[cfg(windows)]
+use super::webview::{self, MailWebView, WebEvent};
 use super::{ComposeKind, message_menu, message_window, ops};
 use crate::app_state::AppState;
 use crate::components::{
@@ -23,6 +28,8 @@ use crate::theme::{
     ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_MD,
     TEXT_SM, TEXT_XL, TEXT_XS, Theme, hex, theme,
 };
+#[cfg(windows)]
+use mailbox_window_handle::ParentWindow;
 
 /// Which message the pane shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,10 +45,25 @@ pub struct ReadingPaneView {
     source: PaneSource,
     /// Messages whose remote pictures the user allowed.
     show_pictures: HashSet<Id>,
-    /// Conversation messages the user expanded (the shown one is always expanded).
-    expanded: HashSet<Id>,
+    /// Conversation message the user clicked to show instead of the selected one…
+    viewing: Option<Id>,
+    /// …while this message is selected.
+    viewing_for: Option<Id>,
     /// Parsed bodies by message id, with the body length used to detect edits.
     bodies: HashMap<Id, (usize, Rc<Vec<Block>>)>,
+    /// Attachments an HTML body shows inline (`cid:`), by message id (with the body length):
+    /// not listed again above the body.
+    inline_parts: HashMap<Id, (usize, Rc<HashSet<String>>)>,
+    /// Whether an HTML body loads remote content, by message id (with the body length).
+    #[cfg(windows)]
+    remote: HashMap<Id, (usize, bool)>,
+    #[cfg(windows)]
+    web: Option<Rc<MailWebView>>,
+    /// WebView2 could not start: HTML goes through our renderer.
+    #[cfg(windows)]
+    web_failed: bool,
+    #[cfg(windows)]
+    web_creating: bool,
     _subscription: Subscription,
 }
 
@@ -74,16 +96,33 @@ impl ReadingPaneView {
     pub fn new(
         state: Entity<AppState>,
         source: PaneSource,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let subscription = cx.observe(&state, |_, _, cx| cx.notify());
+        let subscription = cx.observe_in(&state, window, |_this, _, _window, cx| {
+            // The pane may not be drawn any more (other module, reading pane off…).
+            #[cfg(windows)]
+            if let Some(web) = &_this.web {
+                webview::hide_unless_painted(web, _window);
+            }
+            cx.notify()
+        });
         Self {
             state,
             source,
             show_pictures: HashSet::new(),
-            expanded: HashSet::new(),
+            viewing: None,
+            viewing_for: None,
             bodies: HashMap::new(),
+            inline_parts: HashMap::new(),
+            #[cfg(windows)]
+            remote: HashMap::new(),
+            #[cfg(windows)]
+            web: None,
+            #[cfg(windows)]
+            web_failed: false,
+            #[cfg(windows)]
+            web_creating: false,
             _subscription: subscription,
         }
     }
@@ -341,7 +380,8 @@ impl ReadingPaneView {
             )
     }
 
-    fn pictures_bar(&self, id: Id, t: &Theme, cx: &mut Context<Self>) -> Div {
+    fn pictures_bar(&self, id: Id, sender: &str, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let (state, key) = (self.state.clone(), pictures_key(sender));
         div()
             .flex()
             .flex_row()
@@ -374,6 +414,19 @@ impl ReadingPaneView {
                         this.show_pictures.insert(id);
                         cx.notify();
                     })),
+            )
+            .child(
+                Button::new(("always-pictures", id as u64))
+                    .compact()
+                    .ghost()
+                    .label("Always from this sender")
+                    .on_click(move |_, _, cx| {
+                        let command = Command::SetSetting {
+                            key: key.clone(),
+                            value: Some("true".into()),
+                        };
+                        state.update(cx, |state, cx| state.run(command, cx));
+                    }),
             )
     }
 
@@ -560,29 +613,27 @@ impl ReadingPaneView {
             .child(chips)
     }
 
-    /// One message of the conversation. Collapsed cards show a one-line summary.
-    fn message_card(
-        &mut self,
-        message: &Message,
-        expanded: bool,
-        is_current: bool,
-        t: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let id = message.id;
+    /// Sender, recipients (or the preview when `compact`) and date of a message.
+    fn message_header(&self, message: &Message, compact: bool, t: &Theme) -> Div {
         let date = message
             .date
             .with_timezone(&Local)
             .format("%a %d %b %Y, %H:%M")
             .to_string();
-
-        let header = div()
-            .id(("card-header", id as u64))
+        let details = if compact {
+            message.preview.clone()
+        } else {
+            let mut line = format!("To: {}", addresses(&message.to));
+            if !message.cc.is_empty() {
+                line.push_str(&format!("   Cc: {}", addresses(&message.cc)));
+            }
+            line
+        };
+        div()
             .flex()
             .flex_row()
             .items_start()
             .gap(SPACE_3)
-            .when(!is_current, |el| el.cursor_pointer())
             .child(Avatar::new(message.from.display().to_owned()).size(px(36.)))
             .child(
                 div()
@@ -619,15 +670,7 @@ impl ReadingPaneView {
                             .truncate()
                             .text_size(TEXT_SM)
                             .text_color(t.text_muted)
-                            .child(if expanded {
-                                let mut line = format!("To: {}", addresses(&message.to));
-                                if !message.cc.is_empty() {
-                                    line.push_str(&format!("   Cc: {}", addresses(&message.cc)));
-                                }
-                                line
-                            } else {
-                                message.preview.clone()
-                            }),
+                            .child(details),
                     ),
             )
             .child(
@@ -644,78 +687,220 @@ impl ReadingPaneView {
                     })
                     .child(date),
             )
-            .when(!is_current, |el| {
-                el.on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.expanded.remove(&id) {
-                        this.expanded.insert(id);
-                    }
-                    cx.notify();
-                }))
-            });
+    }
 
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap(SPACE_3)
-            .p(SPACE_4)
+    /// Another message of the conversation, collapsed; clicking shows it in full below.
+    fn other_message(&self, message: &Message, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let id = message.id;
+        let hover = t.hover;
+        div()
+            .id(("card-header", id as u64))
+            .cursor_pointer()
+            .p(SPACE_3)
             .rounded(RADIUS_LG)
             .border_1()
             .border_color(t.border_subtle)
             .bg(t.background)
-            .child(header);
+            .hover(move |el| el.bg(hover))
+            .child(self.message_header(message, true, t))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.viewing = Some(id);
+                cx.notify();
+            }))
+            .into_any_element()
+    }
 
-        if expanded {
-            let blocks = self.blocks(message);
-            let remote = html::has_remote_images(&blocks);
-            let allowed = self.show_pictures.contains(&id);
-            let link_state = self.state.clone();
-            let ctx = RenderContext {
-                theme: t.clone(),
-                show_images: allowed,
-                on_link: Rc::new(move |href, window, cx| {
-                    ops::open_link(&link_state, href, window, cx)
-                }),
-            };
-            if remote && !allowed {
-                card = card.child(self.pictures_bar(id, t, cx));
-            }
-            card = card.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(SPACE_3)
-                    .text_color(t.text)
-                    .children(html::render_blocks(&format!("body-{id}"), &blocks, &ctx)),
-            );
-            if !message.attachments.is_empty() {
-                card = card.child(self.attachments(message, t));
-            }
-            if !is_current {
-                let state = self.state.clone();
-                card = card.child(
-                    div().flex().flex_row().gap(SPACE_1).child(
-                        Button::new(("card-reply", id as u64))
-                            .compact()
-                            .icon(IconName::Reply)
-                            .label("Reply")
-                            .on_click(move |_, window, cx| {
-                                ops::compose_from(&state, id, ComposeKind::Reply, window, cx)
-                            }),
-                    ),
-                );
-            }
+    /// Names of the attachments the HTML body shows inline (referenced by `cid:`).
+    fn inline_parts(&mut self, message: &Message) -> Rc<HashSet<String>> {
+        let html = message.body_html.as_deref().unwrap_or_default();
+        if let Some((len, names)) = self.inline_parts.get(&message.id)
+            && *len == html.len()
+        {
+            return names.clone();
         }
-        card.into_any_element()
+        let names: HashSet<String> = html::cid_references(html)
+            .iter()
+            .enumerate()
+            .filter_map(|(nth, cid)| {
+                crate::attachments::cid_attachment(&message.attachments, cid, nth)
+                    .map(|attachment| attachment.name.clone())
+            })
+            .collect();
+        let names = Rc::new(names);
+        self.inline_parts
+            .insert(message.id, (html.len(), names.clone()));
+        names
+    }
+
+    /// Whether the user chose to always load pictures from this sender.
+    fn sender_allowed(&self, email: &str, cx: &App) -> bool {
+        mailbox_core::settings::get(self.state.read(cx).store(), &pictures_key(email))
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// The message body: HTML in the system web engine on a white "paper", exactly as sent;
+    /// otherwise our renderer in the app theme. Also returns "has remote content".
+    fn body(
+        &mut self,
+        message: &Message,
+        allowed: bool,
+        window: &mut Window,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> (AnyElement, bool) {
+        #[cfg(windows)]
+        if let Some(html) = message
+            .body_html
+            .as_deref()
+            .filter(|body| !body.trim().is_empty())
+            && !self.web_failed
+        {
+            let web = self.web(window, cx);
+            let remote = match self.remote.get(&message.id) {
+                Some((len, remote)) if *len == html.len() => *remote,
+                _ => {
+                    let remote = webview::has_remote_content(html);
+                    self.remote.insert(message.id, (html.len(), remote));
+                    remote
+                }
+            };
+            // Blank paper until the webview exists (it is created in the background).
+            let paper = div()
+                .size_full()
+                .bg(gpui::white())
+                .when_some(web, |el, web| {
+                    let key = format!("{}-{}-{}", message.id, u8::from(allowed), html.len());
+                    web.load(key, || web_page(message, html, allowed));
+                    el.child(webview::paper(web))
+                });
+            let paper = div()
+                .flex_1()
+                .min_h(px(0.))
+                .mx(SPACE_4)
+                .mb(SPACE_4)
+                .p(px(1.))
+                .bg(t.border)
+                .child(paper);
+            return (paper.into_any_element(), remote);
+        }
+        #[cfg(windows)]
+        if let Some(web) = &self.web {
+            web.set_visible(false);
+        }
+        let _ = (window, cx);
+
+        let blocks = self.blocks(message);
+        let link_state = self.state.clone();
+        let ctx = RenderContext {
+            theme: t.clone(),
+            show_images: allowed,
+            on_link: Rc::new(move |href, window, cx| ops::open_link(&link_state, href, window, cx)),
+        };
+        let body = div()
+            .id(("reading-body", message.id as u64))
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.))
+            .overflow_y_scroll()
+            .px(SPACE_6)
+            .pb(SPACE_4)
+            .gap(SPACE_3)
+            .text_color(t.text)
+            .children(html::render_blocks(
+                &format!("body-{}", message.id),
+                &blocks,
+                &ctx,
+            ));
+        (body.into_any_element(), html::has_remote_images(&blocks))
+    }
+
+    /// The webview once created; the first call starts creating it in the background
+    /// (`web_failed` without WebView2: our renderer is used then).
+    #[cfg(windows)]
+    fn web(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Rc<MailWebView>> {
+        if self.web.is_some() || self.web_creating || self.web_failed {
+            return self.web.clone();
+        }
+        let Ok(parent) = ParentWindow::of(window) else {
+            self.web_failed = true;
+            return None;
+        };
+        self.web_creating = true;
+        let state = self.state.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            // Outside any `update`: creating the webview runs GPUI tasks in a nested loop.
+            let (events, received) = async_channel::unbounded();
+            let web = MailWebView::new(&parent, events);
+            let created = this
+                .update(cx, |this, cx| {
+                    this.web_creating = false;
+                    match web {
+                        Ok(web) => this.web = Some(web),
+                        Err(err) => {
+                            eprintln!(
+                                "mail webview unavailable, using the built-in renderer: {err}"
+                            );
+                            this.web_failed = true;
+                        }
+                    }
+                    cx.notify();
+                    this.web.is_some()
+                })
+                .unwrap_or(false);
+            // Links clicked in the message.
+            while created && let Ok(WebEvent::OpenLink(url)) = received.recv().await {
+                cx.update(|window, cx| ops::open_link(&state, &url, window, cx))
+                    .ok();
+            }
+        })
+        .detach();
+        None
+    }
+}
+
+/// Settings key: always load remote pictures from this sender.
+fn pictures_key(email: &str) -> String {
+    format!("mail.pictures.sender.{}", email.trim().to_lowercase())
+}
+
+/// The page served to the webview: `cid:` pictures map to the stored inline parts.
+#[cfg(windows)]
+fn web_page(message: &Message, html: &str, remote: bool) -> webview::Page {
+    let (html, cids) = webview::prepare(html);
+    let inline = cids
+        .iter()
+        .enumerate()
+        .map(|(nth, cid)| {
+            let attachment = crate::attachments::cid_attachment(&message.attachments, cid, nth)?;
+            let path = crate::attachments::stored(message.id, &attachment.name)?;
+            Some((attachment.mime.clone(), path))
+        })
+        .collect();
+    webview::Page {
+        html,
+        remote,
+        inline,
     }
 }
 
 impl Render for ReadingPaneView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let id = self.current_id(cx);
+        if self.viewing_for != id {
+            self.viewing_for = id;
+            self.viewing = None;
+        }
         let store = self.state.read(cx).store();
         let message = id.and_then(|id| store.get::<Message>(id).ok().flatten());
         let Some(message) = message else {
+            #[cfg(windows)]
+            if let Some(web) = &self.web {
+                web.set_visible(false);
+            }
             let (title, description) = match self.source {
                 PaneSource::Selected => (
                     "No message selected",
@@ -755,20 +940,81 @@ impl Render for ReadingPaneView {
         if !thread.iter().any(|m| m.id == message.id) {
             thread.insert(0, message.clone());
         }
+        // Shown in full: the selected message, or the conversation message the user clicked.
+        let shown = self
+            .viewing
+            .and_then(|viewing| thread.iter().find(|m| m.id == viewing))
+            .cloned()
+            .unwrap_or(message);
+        let shown_role = role_of(shown.folder_id);
+        let allowed =
+            self.show_pictures.contains(&shown.id) || self.sender_allowed(&shown.from.email, cx);
 
-        let action_bar = self.action_bar(&message, in_role, cx);
-        let subject = self.subject_header(&message, &t, cx);
+        let action_bar = self.action_bar(&shown, shown_role, cx);
+        let subject = self.subject_header(&shown, &t, cx);
         // Meeting invitation: Accept / Tentative / Decline (calendar module).
-        let invitation = crate::calendar::invitation_bar(&self.state, message.id, cx);
-        let others = thread.len().saturating_sub(1);
-        let cards: Vec<AnyElement> = thread
+        let invitation = crate::calendar::invitation_bar(&self.state, shown.id, cx);
+        let others: Vec<AnyElement> = thread
             .iter()
-            .map(|m| {
-                let is_current = m.id == message.id;
-                let expanded = is_current || self.expanded.contains(&m.id);
-                self.message_card(m, expanded, is_current, &t, cx)
-            })
+            .filter(|m| m.id != shown.id)
+            .map(|m| self.other_message(m, &t, cx))
             .collect();
+        let (body, remote) = self.body(&shown, allowed, window, &t, cx);
+        // Real attachments only: pictures shown inside the body are not listed again.
+        let inline = self.inline_parts(&shown);
+        let listed = Message {
+            attachments: shown
+                .attachments
+                .iter()
+                .filter(|attachment| !inline.contains(&attachment.name))
+                .cloned()
+                .collect(),
+            ..shown.clone()
+        };
+
+        let header = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .px(SPACE_6)
+            .pt(SPACE_4)
+            .pb(SPACE_3)
+            .gap(SPACE_3)
+            .child(subject)
+            .children(invitation)
+            .when(!others.is_empty(), |el| {
+                el.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(SPACE_1)
+                        .text_size(TEXT_XS)
+                        .text_color(t.text_subtle)
+                        .child(Icon::new(IconName::MessagesSquare).size(px(12.)))
+                        .child(format!(
+                            "{} messages in this conversation",
+                            others.len() + 1
+                        )),
+                )
+                .child(
+                    div()
+                        .id(("conversation", shown.id as u64))
+                        .flex()
+                        .flex_col()
+                        .gap(SPACE_2)
+                        .max_h(px(150.))
+                        .overflow_y_scroll()
+                        .children(others),
+                )
+            })
+            .child(self.message_header(&shown, false, &t))
+            .when(remote && !allowed, |el| {
+                el.child(self.pictures_bar(shown.id, &shown.from.email, &t, cx))
+            })
+            .when(!listed.attachments.is_empty(), |el| {
+                el.child(self.attachments(&listed, &t))
+            });
 
         div()
             .flex()
@@ -776,34 +1022,8 @@ impl Render for ReadingPaneView {
             .size_full()
             .bg(t.surface)
             .child(action_bar)
-            .child(
-                div()
-                    .id(("reading-body", message.id as u64))
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .px(SPACE_6)
-                    .py(SPACE_4)
-                    .gap(SPACE_3)
-                    .child(subject)
-                    .children(invitation)
-                    .when(others > 0, |el| {
-                        el.child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(SPACE_1)
-                                .text_size(TEXT_XS)
-                                .text_color(t.text_subtle)
-                                .child(Icon::new(IconName::MessagesSquare).size(px(12.)))
-                                .child(format!("{} messages in this conversation", others + 1)),
-                        )
-                    })
-                    .children(cards),
-            )
+            .child(header)
+            .child(body)
             .into_any_element()
     }
 }

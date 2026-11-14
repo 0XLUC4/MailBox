@@ -1,0 +1,51 @@
+From: Accounts <no-reply@accounts.example.org>
+To: Alex Martin <alex.martin@example.com>
+Subject: Security alert: new sign-in on Windows
+Date: Tue, 10 Nov 2026 21:40:00 +0000
+Message-ID: <02-security-alert.eml@fixtures.mailbox.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="ALT"
+
+--ALT
+Content-Type: text/plain; charset=utf-8
+
+(plain text version of Security alert: new sign-in on Windows)
+
+--ALT
+Content-Type: text/html; charset=utf-8
+
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;padding:0;background:#ffffff">
+<table width="100%" style="min-width:348px" border="0" cellspacing="0" cellpadding="0" lang="en">
+<tr height="32" style="height:32px"><td></td></tr>
+<tr align="center"><td>
+ <table border="0" cellspacing="0" cellpadding="0" style="padding-bottom:20px;max-width:516px;min-width:220px">
+  <tr><td width="8" style="width:8px"></td><td>
+   <div style="border-style:solid;border-width:thin;border-color:#dadce0;border-radius:8px;padding:40px 20px" align="center">
+    <img src="https://static.cdn.example.net/acc/logo-74x24.png" width="74" height="24" aria-hidden="true" style="margin-bottom:16px" alt="Accounts">
+    <div style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;border-bottom:thin solid #dadce0;color:rgba(0,0,0,0.87);line-height:32px;padding-bottom:24px;text-align:center;word-break:break-word">
+     <div style="font-size:24px">A new sign-in on Windows</div>
+     <table align="center" style="margin-top:8px"><tr style="line-height:normal">
+      <td align="right" style="padding-right:8px"><img width="20" height="20" style="width:20px;height:20px;vertical-align:sub;border-radius:50%" src="https://static.cdn.example.net/acc/avatar-a.png" alt=""></td>
+      <td><a style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:rgba(0,0,0,0.87);font-size:14px;line-height:20px">alex.martin@example.com</a></td>
+     </tr></table>
+    </div>
+    <div style="font-family:Roboto-Regular,Helvetica,Arial,sans-serif;font-size:14px;color:rgba(0,0,0,0.87);line-height:20px;padding-top:20px;text-align:left">
+     We noticed a new sign-in to your account on a Windows device. If this was you, you don't need to do anything. If not, we'll help you secure your account.
+     <div style="padding-top:32px;text-align:center"><a href="https://accounts.example.org/AccountChooser?continue=activity" target="_blank" style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;line-height:16px;color:#ffffff;font-weight:400;text-decoration:none;font-size:14px;display:inline-block;padding:10px 24px;background-color:#4184f3;border-radius:5px;min-width:90px">Check activity</a></div>
+    </div>
+    <div style="padding-top:20px;font-size:12px;line-height:16px;color:#5f6368;letter-spacing:0.3px;text-align:center">You can also see security activity at<br><a style="color:rgba(0,0,0,0.87);text-decoration:inherit">https://accounts.example.org/notifications</a></div>
+   </div>
+   <div style="font-family:Roboto-Regular,Helvetica,Arial,sans-serif;color:rgba(0,0,0,0.54);font-size:11px;line-height:18px;padding-top:12px;text-align:center">
+    <div>You received this email to let you know about important changes to your account and services.</div>
+    <div style="direction:ltr">&copy; 2026 Example Accounts LLC, 100 Example Parkway, Mountain City</div>
+   </div>
+  </td><td width="8" style="width:8px"></td></tr>
+ </table>
+</td></tr>
+<tr height="32" style="height:32px"><td></td></tr>
+</table>
+</body></html>
+
+--ALT--

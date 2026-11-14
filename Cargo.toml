@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/sync", "crates/ui", "crates/devserver", "apps/mailbox"]
+members = ["crates/core", "crates/sync", "crates/ui", "crates/devserver", "crates/window-handle", "apps/mailbox"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ mailbox-core = { path = "crates/core" }
 mailbox-sync = { path = "crates/sync" }
 mailbox-ui = { path = "crates/ui" }
 mailbox-devserver = { path = "crates/devserver" }
+mailbox-window-handle = { path = "crates/window-handle" }
 
 # Exact versions are pinned by Cargo.lock; GPUI is pinned exactly because its crates move together.
 chrono = { version = "0.4.45", features = ["serde"] }
@@ -35,6 +36,10 @@ url = "2.5"
 # Windows integration (notifications, mailto handler); already in the lock file via deps.
 tauri-winrt-notification = "0.8.1"
 windows-registry = "0.6.1"
+# HTML mail bodies are shown in the system web engine (WebView2), see mail/webview.rs.
+wry = { version = "0.57.2", default-features = false }
+async-channel = "2.5.0"
+raw-window-handle = "0.6.2"
 # App icon: embedded in the exe (build), rendered from assets/icon.svg (examples/make_icon).
 embed-resource = "3.0.12"
 resvg = { version = "0.45.1", default-features = false }

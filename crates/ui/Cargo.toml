@@ -16,6 +16,9 @@ ureq.workspace = true
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification.workspace = true
 windows-registry.workspace = true
+wry.workspace = true
+async-channel.workspace = true
+mailbox-window-handle.workspace = true
 
 [lints]
 workspace = true
