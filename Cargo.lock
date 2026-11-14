@@ -3891,6 +3891,7 @@ dependencies = [
  "chrono",
  "gpui-kit",
  "mailbox-core",
+ "mailbox-sync",
 ]
 
 [[package]]
