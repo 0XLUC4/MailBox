@@ -32,6 +32,9 @@ compose Send ──▶ <data>/outbox/<id>.json (Bcc, In-Reply-To, References, re
   state file (`<data>/sync/<account>.json`) is saved every 2 s during a cycle and at its end.
   At startup the bridge merges duplicates left by older versions (`Store::merge_duplicate_messages`)
   and repoints sync links before the merge commits.
+- Folder names: server paths stay in IMAP modified UTF-7 wire form (sync state keys, sent back
+  unchanged); `RemoteFolder::name` is decoded (`mailbox_sync::utf7`). Special folders show the
+  app's names (`mail::folder_pane::folder_name`), whatever language Gmail uses for them.
 - `AppState::sync_summary()` (`SyncPhase`: no account / idle + last synced / syncing / offline /
   error, plus unsent count) feeds the status area; F9 = Send/Receive, Work Offline toggle.
 - A failed send stays in the Outbox with an error toast + Retry (no silent auto-retry).

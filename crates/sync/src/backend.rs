@@ -151,17 +151,28 @@ pub fn classify_folder(path: &str, attributes: &[String]) -> Option<FolderRole> 
         .unwrap_or(path)
         .to_lowercase();
     let role = match leaf.as_str() {
-        "sent" | "sent items" | "sent mail" | "sent messages" | "envoyés" | "éléments envoyés" => {
-            FolderRole::Sent
-        }
-        "drafts" | "brouillons" => FolderRole::Drafts,
+        // Localized names (Gmail names its special folders in the account's language).
+        "sent"
+        | "sent items"
+        | "sent mail"
+        | "sent messages"
+        | "envoyés"
+        | "éléments envoyés"
+        | "messages envoyés"
+        | "gesendet"
+        | "enviados"
+        | "posta inviata" => FolderRole::Sent,
+        "drafts" | "brouillons" | "entwürfe" | "borradores" | "bozze" => FolderRole::Drafts,
         "trash"
         | "deleted items"
         | "deleted messages"
         | "bin"
         | "corbeille"
-        | "éléments supprimés" => FolderRole::Trash,
-        "junk" | "spam" | "junk e-mail" | "junk email" | "courrier indésirable" => {
+        | "éléments supprimés"
+        | "papierkorb"
+        | "papelera"
+        | "cestino" => FolderRole::Trash,
+        "junk" | "spam" | "junk e-mail" | "junk email" | "courrier indésirable" | "pourriel" => {
             FolderRole::Junk
         }
         "archive" | "archives" => FolderRole::Archive,
@@ -358,6 +369,20 @@ mod tests {
 
     fn attrs(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn localized_gmail_names_without_attributes() {
+        for (path, role) in [
+            ("[Gmail]/Messages envoyés", FolderRole::Sent),
+            ("[Gmail]/Corbeille", FolderRole::Trash),
+            ("[Gmail]/Brouillons", FolderRole::Drafts),
+            ("[Gmail]/Entwürfe", FolderRole::Drafts),
+            ("[Gmail]/Papelera", FolderRole::Trash),
+            ("[Gmail]/Important", FolderRole::Custom),
+        ] {
+            assert_eq!(classify_folder(path, &[]), Some(role), "{path}");
+        }
     }
 
     #[test]

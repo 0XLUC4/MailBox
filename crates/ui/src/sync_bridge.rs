@@ -41,6 +41,7 @@ use mailbox_sync::local::store_fetched;
 use mailbox_sync::mime::preview;
 use mailbox_sync::state::LocalMessage;
 use mailbox_sync::thread::normalize_id;
+use mailbox_sync::utf7;
 use mailbox_sync::worker::BackendFactory;
 use mailbox_sync::{
     AttachmentData, MailBackend, OutgoingMessage, ParsedMail, RemoteFlags, RemoteFolder, Request,
@@ -1097,6 +1098,7 @@ impl SyncBridge {
         let merged = self.update_store(cx, |store| {
             store.transaction(|store| {
                 store.repair_previews()?;
+                decode_folder_names(store)?;
                 let merged = store.merge_duplicate_messages()?;
                 if !merged.is_empty() {
                     remap_sync_states(&sync_dir, &remote::merged_map(&merged))
@@ -1257,6 +1259,23 @@ fn account_config(
         .flatten()
         .unwrap_or_default();
     Some(AccountConfig::from_servers(&account.email, &servers, auth))
+}
+
+/// Folder names stored undecoded by older versions ("Messages envoy&AOk-s") get their real
+/// name ("Messages envoyés"). Returns how many changed.
+fn decode_folder_names(store: &Store) -> mailbox_core::Result<usize> {
+    let mut changed = 0;
+    for account in store.list_accounts()? {
+        for mut folder in store.list_folders(account.id)? {
+            let name = utf7::decode(&folder.name);
+            if name != folder.name {
+                folder.name = name;
+                store.save(&mut folder)?;
+                changed += 1;
+            }
+        }
+    }
+    Ok(changed)
 }
 
 /// Points every sync state file in `dir` at the messages that absorbed merged duplicates.
@@ -1480,6 +1499,43 @@ mod tests {
         );
         assert_eq!(created_id(&Command::DeleteFolder(9)), Some(9));
         assert_eq!(created_id(&Command::Batch(vec![])), None);
+    }
+
+    #[test]
+    fn undecoded_folder_names_are_renamed_once() {
+        let store = Store::open_in_memory().unwrap();
+        let mut account = Account {
+            id: 0,
+            name: "Me".into(),
+            email: "me@example.com".into(),
+            color: 0,
+        };
+        store.save(&mut account).unwrap();
+        for (name, role) in [
+            ("Messages envoy&AOk-s", FolderRole::Sent),
+            ("R&D", FolderRole::Custom),
+            ("Projets", FolderRole::Custom),
+        ] {
+            let mut folder = Folder {
+                id: 0,
+                account_id: account.id,
+                parent_id: None,
+                name: name.into(),
+                role,
+                position: 0,
+            };
+            store.save(&mut folder).unwrap();
+        }
+        assert_eq!(decode_folder_names(&store).unwrap(), 1);
+        let names: Vec<String> = store
+            .list_folders(account.id)
+            .unwrap()
+            .into_iter()
+            .map(|folder| folder.name)
+            .collect();
+        assert!(names.contains(&"Messages envoyés".to_owned()), "{names:?}");
+        assert!(names.contains(&"R&D".to_owned()));
+        assert_eq!(decode_folder_names(&store).unwrap(), 0);
     }
 
     fn test_message() -> Message {

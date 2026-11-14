@@ -153,6 +153,13 @@ impl Mailstore {
         self.folders.contains_key(name).then(|| name.to_owned())
     }
 
+    /// Adds an empty folder; `name` is the wire name (modified UTF-7, e.g. `Re&AOc-us`).
+    pub fn add_folder(&mut self, name: &str, special_use: &str) {
+        self.folders
+            .entry(name.to_owned())
+            .or_insert_with(|| Mailbox::new(special_use));
+    }
+
     pub fn folder(&self, name: &str) -> Option<&Mailbox> {
         self.folders.get(&self.folder_name(name)?)
     }

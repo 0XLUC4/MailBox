@@ -37,12 +37,17 @@ pub fn folder_icon(folder: &Folder) -> IconName {
     }
 }
 
-/// Display name: special folders use the familiar names.
+/// Display name: special folders use the app's names whatever the server calls them (Gmail
+/// names them in the account's language, e.g. "[Gmail]/Messages envoyés"), others their own.
 pub fn folder_name(folder: &Folder) -> String {
     match folder.role {
-        FolderRole::Trash => "Deleted Items".into(),
+        FolderRole::Inbox => "Inbox".into(),
         FolderRole::Sent => "Sent Items".into(),
-        _ => folder.name.clone(),
+        FolderRole::Drafts => "Drafts".into(),
+        FolderRole::Trash => "Deleted Items".into(),
+        FolderRole::Junk => "Junk".into(),
+        FolderRole::Archive => "Archive".into(),
+        FolderRole::Custom => folder.name.clone(),
     }
 }
 

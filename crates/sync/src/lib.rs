@@ -11,6 +11,7 @@
 //!   duplicate, even when the sync state is lost or a sync runs twice).
 //! - [`worker`]: background thread (+ optional IDLE thread) driven by channels.
 //! - [`mime`], [`thread`], [`formats`]: RFC 5322 parsing, conversation threading, .eml/.mbox.
+//! - [`utf7`]: IMAP modified UTF-7 folder names (decoded for display only).
 //! - [`config`], [`oauth`]: account server settings, OS keyring credentials, OAuth2 PKCE.
 //! - [`dav`]: CalDAV/CardDAV discovery and two-way sync of calendars and contacts.
 //!
@@ -28,6 +29,7 @@ pub mod mime;
 pub mod oauth;
 pub mod state;
 pub mod thread;
+pub mod utf7;
 pub mod worker;
 
 pub use backend::{MailBackend, MemoryBackend, RemoteFlags, RemoteFolder, Uid};

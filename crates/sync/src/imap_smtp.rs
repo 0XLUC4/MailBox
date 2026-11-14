@@ -16,7 +16,7 @@ use crate::backend::{
 };
 use crate::config::{AccountConfig, AuthConfig, Security, ServerConfig, credentials};
 use crate::oauth::{OAuthSettings, TokenProvider, xoauth2};
-use crate::{SyncError, SyncResult};
+use crate::{SyncError, SyncResult, utf7};
 
 /// UIDs per IMAP command (keeps command lines short).
 const UID_BATCH: usize = 200;
@@ -225,8 +225,11 @@ impl MailBackend for ImapSmtpBackend {
                         .iter()
                         .map(|attribute| format!("{attribute:?}"))
                         .collect();
-                    let role = classify_folder(name.name(), &attributes)?;
-                    Some(RemoteFolder::new(name.name(), name.delimiter(), role))
+                    // The path stays in wire form (sent back as is); the name is for display.
+                    let role = classify_folder(&utf7::decode(name.name()), &attributes)?;
+                    let mut folder = RemoteFolder::new(name.name(), name.delimiter(), role);
+                    folder.name = utf7::decode(&folder.name);
+                    Some(folder)
                 })
                 .collect())
         })

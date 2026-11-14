@@ -390,3 +390,34 @@ fn idle_wakes_up_when_mail_arrives() {
     assert!(changed);
     delivery.join().unwrap();
 }
+
+#[test]
+fn non_ascii_folder_names_are_decoded_for_display_and_used_as_is_on_the_wire() {
+    let (server, config) = start(false);
+    server.with_store(|store| {
+        store.add_folder("Factures &AOk-t&AOk-", "");
+        store.add_folder("&ZeVnLIqe-", "");
+        store.add_folder("Tom &- Jerry", "");
+        store.append(
+            "Factures &AOk-t&AOk-",
+            b"From: a@example.com\r\nSubject: Facture\r\nMessage-ID: <f@x>\r\n\r\nHi\r\n",
+            &[],
+        );
+    });
+    let mut backend = backend(&config);
+    backend.connect().unwrap();
+    let folders = backend.list_folders().unwrap();
+    let find = |path: &str| folders.iter().find(|f| f.path == path).unwrap();
+    assert_eq!(find("Factures &AOk-t&AOk-").name, "Factures été");
+    assert_eq!(find("&ZeVnLIqe-").name, "日本語");
+    assert_eq!(find("Tom &- Jerry").name, "Tom & Jerry");
+    assert_eq!(
+        mailbox_sync::utf7::encode(&find("Factures &AOk-t&AOk-").name),
+        "Factures &AOk-t&AOk-"
+    );
+
+    // Commands use the wire path: the message is found and fetched.
+    let events = sync(&mut backend, BTreeMap::new(), vec![]);
+    assert_eq!(subjects(&events, "Factures &AOk-t&AOk-"), vec!["Facture"]);
+    server.stop();
+}
