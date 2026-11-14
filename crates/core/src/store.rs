@@ -16,7 +16,8 @@ use crate::model::*;
 
 /// Ordered schema migrations; index + 1 is the resulting `PRAGMA user_version`.
 /// Never edit a shipped migration: append a new one.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE accounts (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -110,7 +111,14 @@ CREATE TABLE rules (
     conditions_json TEXT NOT NULL,
     actions_json TEXT NOT NULL
 );
-"#];
+"#,
+    r#"
+CREATE TABLE message_flag_due (
+    id INTEGER PRIMARY KEY,
+    due TEXT NOT NULL
+);
+"#,
+];
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.
 pub trait Record: Sized {
