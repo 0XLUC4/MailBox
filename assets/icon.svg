@@ -4,7 +4,7 @@
        icon-16/24/32.svg (regenerate with the make_icon example of the mailbox crate). -->
   <defs>
     <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#111113"/>
+      <stop offset="0" stop-color="#000000"/>
       <stop offset="1" stop-color="#000000"/>
     </linearGradient>
     <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
@@ -26,7 +26,6 @@
     </filter>
   </defs>
   <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#base)"/>
-  <rect x="17" y="17" width="478" height="478" rx="107" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"/>
   <rect x="96" y="148" width="320" height="216" rx="28" fill="url(#body)" filter="url(#drop)"/>
   <g clip-path="url(#envelope)">
     <!-- side folds meeting under the flap -->
