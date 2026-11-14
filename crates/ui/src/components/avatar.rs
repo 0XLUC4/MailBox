@@ -72,7 +72,7 @@ impl RenderOnce for Avatar {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{avatar_color, initials};
 
     #[test]
     fn initials_cover_common_shapes() {

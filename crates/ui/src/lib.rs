@@ -70,21 +70,23 @@ pub fn run(store: Store) {
         });
 }
 
-fn bind_keys(cx: &mut App) {
-    let primary = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
+/// Platform primary modifier + key, as a `&'static str` (KeyBinding keeps the borrow).
+macro_rules! primary {
+    ($key:literal) => {
+        if cfg!(target_os = "macos") { concat!("cmd-", $key) } else { concat!("ctrl-", $key) }
     };
+}
+
+fn bind_keys(cx: &mut App) {
     let context = Some("Shell");
     cx.bind_keys([
-        KeyBinding::new(&format!("{primary}-z"), Undo, context),
-        KeyBinding::new(&format!("{primary}-shift-z"), Redo, context),
-        KeyBinding::new(&format!("{primary}-y"), Redo, context),
-        KeyBinding::new(&format!("{primary}-1"), GoToMail, context),
-        KeyBinding::new(&format!("{primary}-2"), GoToCalendar, context),
-        KeyBinding::new(&format!("{primary}-3"), GoToPeople, context),
-        KeyBinding::new(&format!("{primary}-4"), GoToTasks, context),
-        KeyBinding::new(&format!("{primary}-,"), GoToSettings, context),
+        KeyBinding::new(primary!("z"), Undo, context),
+        KeyBinding::new(primary!("shift-z"), Redo, context),
+        KeyBinding::new(primary!("y"), Redo, context),
+        KeyBinding::new(primary!("1"), GoToMail, context),
+        KeyBinding::new(primary!("2"), GoToCalendar, context),
+        KeyBinding::new(primary!("3"), GoToPeople, context),
+        KeyBinding::new(primary!("4"), GoToTasks, context),
+        KeyBinding::new(primary!(","), GoToSettings, context),
     ]);
 }

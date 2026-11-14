@@ -634,7 +634,7 @@ fn seed_thread(
             flags: MessageFlags {
                 read: from_me || (age > Duration::days(2) && rng.percent(92)) || rng.percent(40),
                 flagged: !from_me && rng.percent(8),
-                pinned: !from_me && thread_index % 37 == 0,
+                pinned: !from_me && thread_index.is_multiple_of(37),
             },
             importance: if rng.percent(6) {
                 Importance::High
@@ -929,9 +929,12 @@ fn seed_calendar(
     Ok(())
 }
 
+/// (account, title, due in days, completed, importance, category).
+type TaskSeed<'a> = (Id, &'a str, Option<i64>, bool, Importance, &'a str);
+
 fn seed_tasks(store: &Store, now: DateTime<Utc>, work_id: Id, personal_id: Id) -> Result<()> {
     let today = now.date_naive();
-    let tasks: &[(Id, &str, Option<i64>, bool, Importance, &str)] = &[
+    let tasks: &[TaskSeed] = &[
         (
             work_id,
             "Review Atlas storage RFC",
