@@ -4,6 +4,7 @@
 
 pub mod command;
 pub mod error;
+pub mod mail_ops;
 pub mod model;
 pub mod people;
 pub mod sample;
