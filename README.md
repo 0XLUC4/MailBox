@@ -37,9 +37,9 @@ UI framework behind the Zed editor. No Electron, and your data stays on your com
 
 ## Install (Windows)
 
-1. Download `Mailbox-X.Y.Z-windows-x64.zip` from the
+1. Download `Mailbox-X.Y.Z-windows-x64.exe` from the
    [releases](https://github.com/0XLUC4/MailBox/releases/latest).
-2. Unzip it anywhere and run `mailbox.exe`. No installer needed.
+2. Put it anywhere and run it. No installer, nothing to unzip.
 3. Add your account: email address and password. For Gmail, use an
    [app password](https://myaccount.google.com/apppasswords).
 
@@ -59,7 +59,7 @@ Portable package:
 
 ```powershell
 cargo build --release -p mailbox
-powershell -ExecutionPolicy Bypass -File scripts\package.ps1   # dist\Mailbox-<version>-windows-x64.zip
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1   # dist\Mailbox-<version>-windows-x64.exe + dist\latest.json
 ```
 
 ## Releasing
@@ -67,13 +67,16 @@ powershell -ExecutionPolicy Bypass -File scripts\package.ps1   # dist\Mailbox-<v
 Bump `version` in `[workspace.package]` (`Cargo.toml`), commit, then:
 
 ```sh
-git tag vX.Y.Z && git push origin vX.Y.Z
+git tag -a vX.Y.Z -m "What changed" && git push origin vX.Y.Z
 ```
 
-`.github/workflows/release.yml` builds on Windows and publishes the release with
-`Mailbox-X.Y.Z-windows-x64.zip` and `SHA256SUMS.txt`. The app checks
-`https://api.github.com/repos/0XLUC4/MailBox/releases/latest` at startup and every 6 hours, verifies
-the zip's SHA-256 before replacing `mailbox.exe`, and rolls back if anything fails.
+`.github/workflows/release.yml` builds on Windows and publishes the release with two assets:
+`Mailbox-X.Y.Z-windows-x64.exe` and `latest.json` (version, date, notes from an annotated tag's
+message, plus the exe's URL, SHA-256 and size under `platforms.windows-x86_64`). The app reads
+`https://github.com/0XLUC4/MailBox/releases/latest/download/latest.json` 10 seconds after start and
+every 6 hours (a plain download, not the rate-limited GitHub API). "Update and restart" downloads the
+exe next to the running one, checks its size and SHA-256, swaps it in (the previous exe is kept as
+`<name>.old.exe` until the next start), relaunches, and rolls back if anything fails.
 
 ## Project layout
 

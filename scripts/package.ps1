@@ -1,14 +1,19 @@
-# Builds the release exe and writes the release assets to dist/ (see README, "Releases"):
-#   dist/Mailbox-<version>-windows-x64.zip   mailbox.exe + README + icon
-#   dist/SHA256SUMS.txt                       "<sha256>  <zip name>" (checked by the in-app updater)
+# Builds the release exe and writes the release assets to dist/ (see README, "Releasing"):
+#   dist/Mailbox-<version>-windows-x64.exe   the release mailbox.exe (icon embedded)
+#   dist/latest.json                          version, notes, exe URL, SHA-256 and size
+#                                             (read by the in-app updater)
 #
-#   powershell -ExecutionPolicy Bypass -File scripts/package.ps1 [-SkipBuild]
+#   powershell -ExecutionPolicy Bypass -File scripts/package.ps1 [-SkipBuild] [-Notes <text>]
 #
-# Portable means "no installer": unzip anywhere and run mailbox.exe. Data still lives in
+# Portable means "no installer": run the exe from anywhere. Data still lives in
 # %APPDATA%\mailbox (or MAILBOX_DATA_DIR / --data). Honors CARGO_TARGET_DIR. Publishes nothing.
-param([switch]$SkipBuild)
+param(
+    [switch]$SkipBuild,
+    [string]$Notes = ''
+)
 
 $ErrorActionPreference = 'Stop'
+$repo = '0XLUC4/MailBox'
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
@@ -28,23 +33,30 @@ try {
     if (-not (Test-Path $exe)) { throw "$exe not found: build first" }
 
     $dist = Join-Path $root 'dist'
-    $stage = Join-Path $dist 'Mailbox'
-    if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-    New-Item -ItemType Directory -Force $stage | Out-Null
-    Copy-Item $exe (Join-Path $stage 'mailbox.exe')
-    Copy-Item (Join-Path $root 'README.md'), (Join-Path $root 'assets\icon.ico') $stage
+    New-Item -ItemType Directory -Force $dist | Out-Null
+    $name = "Mailbox-$version-windows-x64.exe"
+    $asset = Join-Path $dist $name
+    Copy-Item $exe $asset -Force
 
-    $name = "Mailbox-$version-windows-x64.zip"
-    $zip = Join-Path $dist $name
-    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
-    Remove-Item -Recurse -Force $stage
+    $file = Get-Item $asset
+    $latest = [ordered]@{
+        version   = $version
+        pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        notes     = $Notes.Trim()
+        platforms = [ordered]@{
+            'windows-x86_64' = [ordered]@{
+                url    = "https://github.com/$repo/releases/download/v$version/$name"
+                sha256 = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLowerInvariant()
+                size   = $file.Length
+            }
+        }
+    }
+    # UTF-8 without BOM.
+    $json = $latest | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText((Join-Path $dist 'latest.json'), "$json`n")
 
-    $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-    # LF line ending, no BOM: the format of sha256sum.
-    [System.IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), "$hash  $name`n")
-
-    $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
-    Write-Output "Wrote $zip ($size MB) and SHA256SUMS.txt"
+    $size = [math]::Round($file.Length / 1MB, 1)
+    Write-Output "Wrote $asset ($size MB) and latest.json"
 }
 finally {
     Pop-Location

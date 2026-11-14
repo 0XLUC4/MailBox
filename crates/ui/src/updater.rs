@@ -1,6 +1,7 @@
 //! In-app updates: the rail button (up arrow, blue dot when a release waits) and its popover.
 //! Checks 10 s after start, then every 6 h; download, checksum and exe swap live in
-//! `mailbox-updater`. `MAILBOX_UPDATE_FEED=<file.json>` fakes the GitHub answer (tests).
+//! `mailbox-updater`. `MAILBOX_UPDATE_FEED=<latest.json path or URL>` replaces the published
+//! manifest (tests).
 
 use std::time::Duration;
 
@@ -58,7 +59,7 @@ impl Updater {
         matches!(self.status, Status::Available(_))
     }
 
-    /// Asks GitHub for the latest release (ignored while a check or an install runs).
+    /// Fetches the latest release's `latest.json` (ignored while a check or an install runs).
     pub fn check(&mut self, cx: &mut Context<Self>) {
         if self.checking || self.installing {
             return;

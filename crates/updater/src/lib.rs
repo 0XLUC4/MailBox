@@ -1,12 +1,15 @@
 //! In-app updates from the GitHub Releases of Mailbox. No UI, no personal data sent: one
-//! anonymous GET on the public "latest release" API, then the two assets.
+//! anonymous GET of the latest release's `latest.json` (a plain download that follows redirects,
+//! not the rate-limited GitHub API), then the exe it points to.
 //!
-//! Release convention (README, "Releases"): tag `vX.Y.Z`, assets
-//! `Mailbox-X.Y.Z-windows-x64.zip` (with `mailbox.exe` at its root) and `SHA256SUMS.txt`.
+//! Release convention (README, "Releasing"): tag `vX.Y.Z`, assets
+//! `Mailbox-X.Y.Z-windows-x64.exe` and `latest.json`:
+//! `{ "version", "pub_date", "notes", "platforms": { "windows-x86_64": { "url", "sha256", "size" } } }`.
 //!
-//! Test hook: `MAILBOX_UPDATE_FEED=<file.json>` replaces the GitHub answer (same JSON shape);
-//! its asset URLs may then be local file paths.
+//! Test hook: `MAILBOX_UPDATE_FEED=<path or URL of a latest.json>` replaces the GitHub manifest;
+//! its asset URL may then be a local file path.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::Read as _;
@@ -19,13 +22,14 @@ use sha2::{Digest as _, Sha256};
 
 /// Version of the running app (the workspace version).
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Points the check at a local JSON file instead of GitHub (tests, manual checks).
+/// Points the check at another `latest.json` (local path or URL) instead of GitHub.
 pub const FEED_ENV: &str = "MAILBOX_UPDATE_FEED";
+/// The `platforms` key this build installs.
+pub const PLATFORM: &str = "windows-x86_64";
 
-const LATEST_URL: &str = "https://api.github.com/repos/0XLUC4/MailBox/releases/latest";
+const MANIFEST_URL: &str = "https://github.com/0XLUC4/MailBox/releases/latest/download/latest.json";
+const RELEASE_PAGE_URL: &str = "https://github.com/0XLUC4/MailBox/releases/tag/v";
 const USER_AGENT: &str = "Mailbox-updater";
-const SUMS_NAME: &str = "SHA256SUMS.txt";
-const EXE_NAME: &str = "mailbox.exe";
 /// Set on the relaunched process so it waits for the previous one to exit.
 const AFTER_UPDATE_ENV: &str = "MAILBOX_AFTER_UPDATE";
 const MAX_DOWNLOAD: u64 = 300 * 1024 * 1024;
@@ -34,7 +38,6 @@ const MAX_DOWNLOAD: u64 = 300 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     Offline,
-    RateLimited,
     NoRelease,
     BadResponse,
     MissingAsset,
@@ -48,7 +51,6 @@ impl Error {
     pub fn message(&self) -> &'static str {
         match self {
             Error::Offline => "Offline: could not reach GitHub",
-            Error::RateLimited => "GitHub rate limit reached, try again later",
             Error::NoRelease => "No release published yet",
             Error::BadResponse => "Unexpected answer from GitHub",
             Error::MissingAsset => "This release has no Windows package",
@@ -119,9 +121,12 @@ pub struct Release {
     pub notes: String,
     /// Release page on GitHub ("What's new").
     pub page_url: String,
-    pub package_name: String,
+    /// The new exe (HTTPS, or a local path with the [`FEED_ENV`] hook).
     pub package_url: String,
-    pub sums_url: String,
+    /// Lowercase hex SHA-256 of the exe.
+    pub sha256: String,
+    /// Size of the exe in bytes.
+    pub size: u64,
 }
 
 impl Release {
@@ -142,81 +147,57 @@ impl Release {
     }
 }
 
+/// `latest.json`, written by `scripts/package.ps1` (`pub_date` is informative only).
 #[derive(Deserialize)]
-struct GithubRelease {
-    tag_name: String,
+struct Manifest {
+    version: String,
     #[serde(default)]
-    body: Option<String>,
+    notes: Option<String>,
     #[serde(default)]
-    html_url: String,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    prerelease: bool,
-    #[serde(default)]
-    assets: Vec<GithubAsset>,
+    platforms: HashMap<String, Asset>,
 }
 
 #[derive(Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
+struct Asset {
+    url: String,
+    sha256: String,
+    size: u64,
 }
 
-/// The release zip's file name for `version`.
-pub fn package_name(version: Version) -> String {
-    format!("Mailbox-{version}-windows-x64.zip")
-}
-
-/// Asks GitHub (or [`FEED_ENV`]) for the latest release: `Some` when it is newer than this app.
+/// Fetches `latest.json` (or [`FEED_ENV`]): `Some` when it announces a newer version.
 pub fn check() -> Result<Option<Release>, Error> {
-    let json = match std::env::var_os(FEED_ENV) {
-        Some(path) => fs::read_to_string(path).map_err(|_| Error::Offline)?,
-        None => get(LATEST_URL)?.into_string().map_err(|_| Error::Offline)?,
+    let json = match std::env::var(FEED_ENV) {
+        Ok(feed) if is_url(&feed) => get_text(&feed)?,
+        Ok(path) => fs::read_to_string(path).map_err(|_| Error::Offline)?,
+        Err(_) => get_text(MANIFEST_URL)?,
     };
-    parse_latest(&json, Version::current())
+    parse_manifest(&json, Version::current())
 }
 
-/// Reads a GitHub "latest release" JSON: `None` when it is not newer than `current`, a draft or
-/// a pre-release.
-pub fn parse_latest(json: &str, current: Version) -> Result<Option<Release>, Error> {
-    let release: GithubRelease = serde_json::from_str(json).map_err(|_| Error::BadResponse)?;
-    if release.draft || release.prerelease {
-        return Ok(None);
-    }
-    let version = Version::parse(&release.tag_name).ok_or(Error::BadResponse)?;
+/// Reads a `latest.json`: `None` when its version is not newer than `current`.
+pub fn parse_manifest(json: &str, current: Version) -> Result<Option<Release>, Error> {
+    // Windows PowerShell may write a BOM, which serde_json rejects.
+    let json = json.trim_start_matches('\u{feff}');
+    let manifest: Manifest = serde_json::from_str(json).map_err(|_| Error::BadResponse)?;
+    let version = Version::parse(&manifest.version).ok_or(Error::BadResponse)?;
     if version <= current {
         return Ok(None);
     }
-    let package_name = package_name(version);
-    let url_of = |name: &str| {
-        release
-            .assets
-            .iter()
-            .find(|asset| asset.name == name)
-            .map(|asset| asset.browser_download_url.clone())
-    };
-    let (Some(package_url), Some(sums_url)) = (url_of(&package_name), url_of(SUMS_NAME)) else {
-        return Err(Error::MissingAsset);
-    };
+    let mut platforms = manifest.platforms;
+    let asset = platforms.remove(PLATFORM).ok_or(Error::MissingAsset)?;
+    let sha256 = asset.sha256.trim().to_ascii_lowercase();
+    let valid_hash = sha256.len() == 64 && sha256.chars().all(|c| c.is_ascii_hexdigit());
+    if asset.url.trim().is_empty() || !valid_hash || asset.size == 0 {
+        return Err(Error::BadResponse);
+    }
     Ok(Some(Release {
         version,
-        notes: release.body.unwrap_or_default(),
-        page_url: release.html_url,
-        package_name,
-        package_url,
-        sums_url,
+        notes: manifest.notes.unwrap_or_default(),
+        page_url: format!("{RELEASE_PAGE_URL}{version}"),
+        package_url: asset.url,
+        sha256,
+        size: asset.size,
     }))
-}
-
-/// Lowercase SHA-256 of `file_name` in a `sha256sum` list (`<hex>  <name>` or `<hex> *<name>`).
-pub fn checksum_for(sums: &str, file_name: &str) -> Option<String> {
-    sums.lines().find_map(|line| {
-        let (hash, name) = line.trim().split_once(char::is_whitespace)?;
-        let name = name.trim_start().trim_start_matches('*');
-        let valid = hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit());
-        (valid && name == file_name).then(|| hash.to_ascii_lowercase())
-    })
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -224,6 +205,14 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Checks a downloaded exe against the size and SHA-256 announced by `release`.
+pub fn verify(bytes: &[u8], release: &Release) -> Result<(), Error> {
+    if bytes.len() as u64 != release.size || sha256_hex(bytes) != release.sha256 {
+        return Err(Error::Checksum);
+    }
+    Ok(())
 }
 
 /// True for an exe built by cargo (`target*/debug` or `target*/release`): never replaced.
@@ -253,44 +242,35 @@ pub fn installed_exe() -> Result<PathBuf, Error> {
     Ok(exe)
 }
 
-/// Downloads `release`, checks it against `SHA256SUMS.txt`, puts it in place of the running
-/// exe and starts it with the same arguments. On `Ok` the caller must quit right away; on any
-/// error the installed exe is left (or put back) as it was.
+/// Downloads the exe of `release`, checks its size and SHA-256, writes it next to the running
+/// exe, swaps the two and starts the new one with the same arguments. On `Ok` the caller must
+/// quit right away; on any error the installed exe is left (or put back) as it was.
 pub fn install(release: &Release) -> Result<(), Error> {
     let exe = installed_exe()?;
-    let package = fetch(&release.package_url)?;
-    let sums = String::from_utf8(fetch(&release.sums_url)?).map_err(|_| Error::BadResponse)?;
-    let expected = checksum_for(&sums, &release.package_name).ok_or(Error::Checksum)?;
-    if sha256_hex(&package) != expected {
-        return Err(Error::Checksum);
+    let bytes = fetch(&release.package_url, release.size)?;
+    verify(&bytes, release)?;
+    // Staged next to the exe so the final rename never crosses volumes.
+    let staged = staged_exe_path(&exe);
+    if let Err(err) = fs::write(&staged, &bytes) {
+        let _ = fs::remove_file(&staged);
+        return Err(err.into());
     }
-
-    let work = std::env::temp_dir().join(format!("mailbox-update-{}", release.version));
-    let _ = fs::remove_dir_all(&work);
-    fs::create_dir_all(&work)?;
-    let result = (|| {
-        let zip = work.join(&release.package_name);
-        fs::write(&zip, &package)?;
-        let unpacked = work.join("unpacked");
-        extract_zip(&zip, &unpacked)?;
-        let new_exe = unpacked.join(EXE_NAME);
-        if !new_exe.is_file() {
-            return Err(Error::MissingAsset);
-        }
-        swap_exe(&exe, &new_exe)?;
-        if let Err(err) = relaunch(&exe) {
-            let _ = rollback(&exe);
-            return Err(err);
-        }
-        Ok(())
-    })();
-    let _ = fs::remove_dir_all(&work);
-    result
+    swap_exe(&exe, &staged)?;
+    if let Err(err) = relaunch(&exe) {
+        let _ = rollback(&exe);
+        return Err(err);
+    }
+    Ok(())
 }
 
 /// Where the running exe goes during an update: `<name>.old.exe` next to it.
 pub fn old_exe_path(exe: &Path) -> PathBuf {
     sibling(exe, "old.exe")
+}
+
+/// Where the downloaded exe waits for the swap: `<name>.new.exe` next to it.
+pub fn staged_exe_path(exe: &Path) -> PathBuf {
+    sibling(exe, "new.exe")
 }
 
 fn sibling(exe: &Path, suffix: &str) -> PathBuf {
@@ -300,20 +280,18 @@ fn sibling(exe: &Path, suffix: &str) -> PathBuf {
     exe.with_file_name(format!("{stem}.{suffix}"))
 }
 
-/// Puts `new_exe` at `exe`, keeping the current one as `<name>.old.exe` (Windows lets a running
-/// exe be renamed, not overwritten). Anything that fails leaves `exe` as it was.
-pub fn swap_exe(exe: &Path, new_exe: &Path) -> Result<(), Error> {
-    let staged = sibling(exe, "new.exe");
+/// Moves `staged` (in the exe's folder) to `exe`, keeping the current one as `<name>.old.exe`
+/// (Windows lets a running exe be renamed, not overwritten). On failure `exe` is left as it was
+/// and `staged` is deleted.
+pub fn swap_exe(exe: &Path, staged: &Path) -> Result<(), Error> {
     let old = old_exe_path(exe);
-    // Staged next to the exe so the final rename never crosses volumes.
-    fs::copy(new_exe, &staged)?;
     let _ = fs::remove_file(&old);
     if let Err(err) = fs::rename(exe, &old) {
-        let _ = fs::remove_file(&staged);
+        let _ = fs::remove_file(staged);
         return Err(err.into());
     }
-    if let Err(err) = fs::rename(&staged, exe) {
-        let _ = fs::remove_file(&staged);
+    if let Err(err) = fs::rename(staged, exe) {
+        let _ = fs::remove_file(staged);
         let _ = fs::rename(&old, exe);
         return Err(err.into());
     }
@@ -358,45 +336,37 @@ fn relaunch(exe: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Unzips with the `tar.exe` shipped with Windows 10+ (it refuses paths leaving `into`).
-fn extract_zip(zip: &Path, into: &Path) -> Result<(), Error> {
-    fs::create_dir_all(into)?;
-    let system_root =
-        std::env::var_os("SystemRoot").map_or_else(|| "C:\\Windows".into(), PathBuf::from);
-    let mut command = Command::new(system_root.join("System32").join("tar.exe"));
-    command.arg("-xf").arg(zip).arg("-C").arg(into);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let status = command.status()?;
-    if !status.success() {
-        return Err(Error::Install(format!("unzip failed ({status})")));
-    }
-    Ok(())
+fn is_url(text: &str) -> bool {
+    text.starts_with("https://") || text.starts_with("http://")
 }
 
+/// GET that follows redirects (`releases/latest/download/...` answers with 302s).
 fn get(url: &str) -> Result<ureq::Response, Error> {
     ureq::AgentBuilder::new()
         .user_agent(USER_AGENT)
+        .redirects(10)
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(60))
         .build()
         .get(url)
-        .set("Accept", "application/vnd.github+json")
         .call()
         .map_err(|err| match err {
-            ureq::Error::Status(403 | 429, _) => Error::RateLimited,
             ureq::Error::Status(404, _) => Error::NoRelease,
             ureq::Error::Status(..) => Error::BadResponse,
             ureq::Error::Transport(_) => Error::Offline,
         })
 }
 
-/// Downloads `url`; with the [`FEED_ENV`] test hook, a non-HTTPS URL is a local file path.
-fn fetch(url: &str) -> Result<Vec<u8>, Error> {
+fn get_text(url: &str) -> Result<String, Error> {
+    get(url)?.into_string().map_err(|_| Error::Offline)
+}
+
+/// Downloads at most `size + 1` bytes of `url` (an oversized file then fails [`verify`]); with
+/// the [`FEED_ENV`] test hook, a non-HTTPS URL is a local file path.
+fn fetch(url: &str, size: u64) -> Result<Vec<u8>, Error> {
+    if size > MAX_DOWNLOAD {
+        return Err(Error::BadResponse);
+    }
     if !url.starts_with("https://") {
         if std::env::var_os(FEED_ENV).is_none() {
             return Err(Error::BadResponse);
@@ -406,7 +376,7 @@ fn fetch(url: &str) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     get(url)?
         .into_reader()
-        .take(MAX_DOWNLOAD)
+        .take(size + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| Error::Offline)?;
     Ok(bytes)
@@ -420,18 +390,29 @@ mod tests {
         Version::parse(text).unwrap()
     }
 
-    fn release_json(tag: &str, draft: bool, prerelease: bool, assets: &[&str]) -> String {
-        let assets: Vec<_> = assets
-            .iter()
-            .map(|name| {
-                serde_json::json!({ "name": name, "browser_download_url": format!("https://x/{name}") })
-            })
-            .collect();
+    const HASH: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    fn manifest(version: &str, platforms: serde_json::Value) -> String {
         serde_json::json!({
-            "tag_name": tag, "body": "## Fixes\n- faster sync\n", "html_url": "https://page",
-            "draft": draft, "prerelease": prerelease, "assets": assets,
+            "version": version, "pub_date": "2026-11-14T10:00:00Z",
+            "notes": "## Fixes\n- faster sync\n", "platforms": platforms,
         })
         .to_string()
+    }
+
+    fn windows_asset(url: &str, sha256: &str, size: u64) -> serde_json::Value {
+        serde_json::json!({ PLATFORM: { "url": url, "sha256": sha256, "size": size } })
+    }
+
+    fn release(sha256: &str, size: u64) -> Release {
+        Release {
+            version: v("0.2.0"),
+            notes: String::new(),
+            page_url: String::new(),
+            package_url: String::new(),
+            sha256: sha256.into(),
+            size,
+        }
     }
 
     #[test]
@@ -448,80 +429,82 @@ mod tests {
     }
 
     #[test]
-    fn finds_a_newer_release_and_its_assets() {
-        let json = release_json(
-            "v0.2.0",
-            false,
-            false,
-            &[
-                "Mailbox-0.2.0-windows-x64.zip",
-                "SHA256SUMS.txt",
-                "other.zip",
-            ],
-        );
-        let release = parse_latest(&json, v("0.1.0")).unwrap().unwrap();
+    fn parses_a_newer_manifest() {
+        let url = "https://github.com/0XLUC4/MailBox/releases/download/v0.2.0/Mailbox-0.2.0-windows-x64.exe";
+        let mut platforms = windows_asset(url, &HASH.to_ascii_uppercase(), 1234);
+        platforms["linux-x86_64"] =
+            serde_json::json!({ "url": "https://x/l", "sha256": HASH, "size": 1 });
+        let json = format!("\u{feff}{}", manifest("0.2.0", platforms));
+        let release = parse_manifest(&json, v("0.1.0")).unwrap().unwrap();
         assert_eq!(release.version, v("0.2.0"));
-        assert_eq!(release.package_name, "Mailbox-0.2.0-windows-x64.zip");
+        assert_eq!(release.package_url, url);
+        assert_eq!(release.sha256, HASH, "lowercased");
+        assert_eq!(release.size, 1234);
         assert_eq!(
-            release.package_url,
-            "https://x/Mailbox-0.2.0-windows-x64.zip"
+            release.page_url,
+            "https://github.com/0XLUC4/MailBox/releases/tag/v0.2.0"
         );
-        assert_eq!(release.sums_url, "https://x/SHA256SUMS.txt");
-        assert_eq!(release.page_url, "https://page");
         assert_eq!(release.notes_excerpt(100), "Fixes faster sync");
         assert_eq!(release.notes_excerpt(8), "Fixes f…");
     }
 
     #[test]
-    fn skips_old_draft_and_prerelease() {
-        let assets = ["Mailbox-0.2.0-windows-x64.zip", "SHA256SUMS.txt"];
-        let same = release_json("v0.2.0", false, false, &assets);
-        assert_eq!(parse_latest(&same, v("0.2.0")), Ok(None));
-        assert_eq!(parse_latest(&same, v("0.3.0")), Ok(None));
-        let draft = release_json("v0.2.0", true, false, &assets);
-        assert_eq!(parse_latest(&draft, v("0.1.0")), Ok(None));
-        let pre = release_json("v0.2.0", false, true, &assets);
-        assert_eq!(parse_latest(&pre, v("0.1.0")), Ok(None));
+    fn ignores_versions_that_are_not_newer() {
+        let same = manifest("0.2.0", windows_asset("https://x/e.exe", HASH, 1));
+        assert_eq!(parse_manifest(&same, v("0.2.0")), Ok(None));
+        assert_eq!(parse_manifest(&same, v("0.3.0")), Ok(None));
+        // An older manifest needs no Windows entry at all.
+        let old = manifest("0.1.0", serde_json::json!({}));
+        assert_eq!(parse_manifest(&old, v("0.2.0")), Ok(None));
     }
 
     #[test]
-    fn reports_missing_assets_and_bad_json() {
-        let wrong_version = release_json(
-            "v0.2.0",
-            false,
-            false,
-            &["Mailbox-0.1.9-windows-x64.zip", "SHA256SUMS.txt"],
+    fn rejects_missing_platform_and_bad_manifests() {
+        let other_only = manifest(
+            "0.2.0",
+            serde_json::json!({ "darwin-aarch64": { "url": "https://x/m", "sha256": HASH, "size": 1 } }),
         );
         assert_eq!(
-            parse_latest(&wrong_version, v("0.1.0")),
+            parse_manifest(&other_only, v("0.1.0")),
             Err(Error::MissingAsset)
         );
-        let no_sums = release_json("v0.2.0", false, false, &["Mailbox-0.2.0-windows-x64.zip"]);
-        assert_eq!(parse_latest(&no_sums, v("0.1.0")), Err(Error::MissingAsset));
-        assert_eq!(parse_latest("{}", v("0.1.0")), Err(Error::BadResponse));
-        let bad_tag = release_json("nightly", false, false, &[]);
-        assert_eq!(parse_latest(&bad_tag, v("0.1.0")), Err(Error::BadResponse));
+        let no_platforms = manifest("0.2.0", serde_json::json!({}));
+        assert_eq!(
+            parse_manifest(&no_platforms, v("0.1.0")),
+            Err(Error::MissingAsset)
+        );
+        for platforms in [
+            windows_asset("https://x/e.exe", "abc", 1),
+            windows_asset("https://x/e.exe", &"z".repeat(64), 1),
+            windows_asset("", HASH, 1),
+            windows_asset("https://x/e.exe", HASH, 0),
+        ] {
+            let json = manifest("0.2.0", platforms);
+            assert_eq!(
+                parse_manifest(&json, v("0.1.0")),
+                Err(Error::BadResponse),
+                "{json}"
+            );
+        }
+        assert_eq!(parse_manifest("{}", v("0.1.0")), Err(Error::BadResponse));
+        assert_eq!(
+            parse_manifest("not json", v("0.1.0")),
+            Err(Error::BadResponse)
+        );
+        let bad_version = manifest("nightly", windows_asset("https://x/e.exe", HASH, 1));
+        assert_eq!(
+            parse_manifest(&bad_version, v("0.1.0")),
+            Err(Error::BadResponse)
+        );
     }
 
     #[test]
-    fn parses_checksum_lists() {
-        let hash = "A".repeat(64);
-        let sums = format!(
-            "{}  other.zip\n{hash}  Mailbox-0.2.0-windows-x64.zip\n{} *star.zip\nbad  short.zip\n",
-            "0".repeat(64),
-            "b".repeat(64)
-        );
-        assert_eq!(
-            checksum_for(&sums, "Mailbox-0.2.0-windows-x64.zip"),
-            Some("a".repeat(64))
-        );
-        assert_eq!(checksum_for(&sums, "star.zip"), Some("b".repeat(64)));
-        assert_eq!(checksum_for(&sums, "short.zip"), None);
-        assert_eq!(checksum_for(&sums, "missing.zip"), None);
-        assert_eq!(
-            sha256_hex(b"abc"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
+    fn verifies_size_and_checksum() {
+        assert_eq!(sha256_hex(b"abc"), HASH);
+        assert_eq!(verify(b"abc", &release(HASH, 3)), Ok(()));
+        assert_eq!(verify(b"abc", &release(HASH, 4)), Err(Error::Checksum));
+        assert_eq!(verify(b"abd", &release(HASH, 3)), Err(Error::Checksum));
+        assert_eq!(verify(b"abcd", &release(HASH, 3)), Err(Error::Checksum));
     }
 
     #[test]
@@ -550,19 +533,19 @@ mod tests {
     fn swaps_the_exe_and_rolls_back() {
         let dir = temp_dir("swap");
         let exe = dir.join("Mailbox.exe");
-        let new_exe = dir.join("download").join("mailbox.exe");
-        fs::create_dir_all(new_exe.parent().unwrap()).unwrap();
+        let staged = staged_exe_path(&exe);
+        assert_eq!(staged, dir.join("Mailbox.new.exe"));
         fs::write(&exe, "v1").unwrap();
-        fs::write(&new_exe, "v2").unwrap();
+        fs::write(&staged, "v2").unwrap();
         fs::write(old_exe_path(&exe), "stale").unwrap();
 
-        swap_exe(&exe, &new_exe).unwrap();
+        swap_exe(&exe, &staged).unwrap();
         assert_eq!(fs::read_to_string(&exe).unwrap(), "v2");
         assert_eq!(
             fs::read_to_string(dir.join("Mailbox.old.exe")).unwrap(),
             "v1"
         );
-        assert!(!dir.join("Mailbox.new.exe").exists());
+        assert!(!staged.exists());
 
         rollback(&exe).unwrap();
         assert_eq!(fs::read_to_string(&exe).unwrap(), "v1");
@@ -576,15 +559,16 @@ mod tests {
         let dir = temp_dir("fail");
         let exe = dir.join("mailbox.exe");
         fs::write(&exe, "v1").unwrap();
-        assert!(swap_exe(&exe, &dir.join("missing.exe")).is_err());
+        assert!(swap_exe(&exe, &staged_exe_path(&exe)).is_err());
         assert_eq!(fs::read_to_string(&exe).unwrap(), "v1");
         assert!(!old_exe_path(&exe).exists());
 
-        // The exe itself is gone (cannot be renamed): the staged copy is cleaned up.
+        // The exe itself is gone (cannot be renamed): the staged download is cleaned up.
         let ghost = dir.join("ghost.exe");
-        fs::write(dir.join("new.bin"), "v2").unwrap();
-        assert!(swap_exe(&ghost, &dir.join("new.bin")).is_err());
-        assert!(!dir.join("ghost.new.exe").exists());
+        let staged = staged_exe_path(&ghost);
+        fs::write(&staged, "v2").unwrap();
+        assert!(swap_exe(&ghost, &staged).is_err());
+        assert!(!staged.exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 }

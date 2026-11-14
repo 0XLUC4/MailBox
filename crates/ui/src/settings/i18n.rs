@@ -35,10 +35,6 @@ const FR: &[(&str, &str)] = &[
         "Hors connexion : GitHub est injoignable",
     ),
     (
-        "GitHub rate limit reached, try again later",
-        "Limite de requêtes GitHub atteinte, réessayez plus tard",
-    ),
-    (
         "No release published yet",
         "Aucune version publiée pour l'instant",
     ),
