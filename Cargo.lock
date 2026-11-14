@@ -4010,6 +4010,7 @@ dependencies = [
  "embed-resource",
  "mailbox-core",
  "mailbox-ui",
+ "mailbox-updater",
  "resvg 0.45.1",
 ]
 
@@ -4061,11 +4062,22 @@ dependencies = [
  "gpui-kit",
  "mailbox-core",
  "mailbox-sync",
+ "mailbox-updater",
  "mailbox-window-handle",
  "tauri-winrt-notification",
  "ureq",
  "windows-registry 0.6.1",
  "wry",
+]
+
+[[package]]
+name = "mailbox-updater"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ureq",
 ]
 
 [[package]]

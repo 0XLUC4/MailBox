@@ -20,6 +20,7 @@ pub mod sync_bridge;
 pub mod tasks;
 pub mod theme;
 pub mod titlebar;
+pub mod updater;
 
 // App-wide actions (ribbon, command palette, shortcuts).
 pub mod actions;
