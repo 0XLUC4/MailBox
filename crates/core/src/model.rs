@@ -240,6 +240,9 @@ pub enum RuleCondition {
     FromContains(String),
     SubjectContains(String),
     ToContains(String),
+    BodyContains(String),
+    HasAttachment,
+    ImportanceIs(Importance),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,6 +252,11 @@ pub enum RuleAction {
     AddCategory(String),
     MarkRead,
     Flag,
+    SetImportance(Importance),
+    /// Moves to Trash (permanent delete when there is no Trash folder).
+    Delete,
+    /// Skip the rules after this one.
+    StopProcessing,
 }
 
 /// Mail rule: when every condition matches, run every action.
@@ -277,6 +285,9 @@ impl Rule {
                 RuleCondition::ToContains(text) => {
                     message.to.iter().any(|to| contains(&to.email, text))
                 }
+                RuleCondition::BodyContains(text) => contains(&message.body_text, text),
+                RuleCondition::HasAttachment => !message.attachments.is_empty(),
+                RuleCondition::ImportanceIs(importance) => message.importance == *importance,
             })
     }
 }

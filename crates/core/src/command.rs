@@ -66,6 +66,15 @@ pub enum Command {
         flagged: bool,
         due: Option<chrono::NaiveDate>,
     },
+    /// Contacts with details, groups, merge (see [`crate::people`]).
+    People(crate::people::PeopleCommand),
+    /// Tasks with details and lists (see [`crate::todo`]).
+    Todo(crate::todo::TaskCommand),
+    /// Key/value preference (JSON text); `None` removes the key. See [`crate::settings`].
+    SetSetting {
+        key: String,
+        value: Option<String>,
+    },
     /// Compose: save a draft message with its metadata (see `compose`).
     SaveDraft(Box<crate::compose::Draft>),
     /// Compose: delete a draft message (by message id) and its metadata.
@@ -159,6 +168,9 @@ impl Command {
                     count(ids)
                 )
             }
+            Self::People(command) => command.label(),
+            Self::Todo(command) => command.label(),
+            Self::SetSetting { .. } => "Change settings".into(),
             Self::SaveDraft(_) => "Save draft".into(),
             Self::DeleteDraft(_) => "Discard draft".into(),
             Self::QueueSend { .. } => "Send message".into(),
@@ -276,6 +288,9 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
         Command::FlagMessages { ids, flagged, due } => {
             crate::mail_ops::apply_flag(store, &ids, flagged, due)
         }
+        Command::People(command) => crate::people::apply(store, command),
+        Command::Todo(command) => crate::todo::apply(store, command),
+        Command::SetSetting { key, value } => crate::settings::apply_set(store, key, value),
         Command::SaveDraft(draft) => crate::compose::apply_save_draft(store, *draft),
         Command::DeleteDraft(id) => crate::compose::apply_delete_draft(store, id),
         Command::QueueSend {

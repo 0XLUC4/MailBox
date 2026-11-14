@@ -154,8 +154,8 @@ impl Shell {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(active.label()),
             )
-            .child(div().flex_1().min_w(px(0.)).child(self.ribbon.clone()))
-            .child(div().flex_shrink_0().w(px(320.)).child(self.search.clone()))
+            .child(div().flex_1())
+            .child(div().flex_shrink_0().w(px(420.)).child(self.search.clone()))
     }
 }
 
@@ -190,6 +190,7 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &GoToSettings, _, cx| this.go_to(Module::Settings, cx)),
             )
+            .map(|el| crate::actions::install(el, self.state.clone(), self.search.clone()))
             .flex()
             .flex_row()
             .size_full()
@@ -205,6 +206,7 @@ impl Render for Shell {
                     .min_w(px(0.))
                     .h_full()
                     .child(self.render_top_bar(active, &t))
+                    .child(self.ribbon.clone())
                     .child(
                         div()
                             .relative()

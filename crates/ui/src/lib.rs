@@ -18,6 +18,9 @@ pub mod sync_bridge;
 pub mod tasks;
 pub mod theme;
 
+// App-wide actions (ribbon, command palette, shortcuts).
+pub mod actions;
+
 use gpui::{
     App, AppContext as _, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
@@ -48,6 +51,7 @@ pub fn run(store: Store) {
         .run(move |cx: &mut App| {
             gpui::init(cx);
             bind_keys(cx);
+            actions::bind_keys(cx);
 
             let state = cx.new(|_| AppState::new(store));
             sync_bridge::init(state.clone(), cx);
