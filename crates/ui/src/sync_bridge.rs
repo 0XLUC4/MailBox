@@ -458,10 +458,23 @@ impl SyncBridge {
         }
     }
 
-    /// Hook for mail rules on newly arrived inbox messages.
-    fn on_new_mail(&mut self, _ids: Vec<Id>, _cx: &mut Context<Self>) {
-        // TODO(rules): call `mailbox_core::rules::run_on_new(store, &ids)` once the rules
-        // module lands, applying the returned commands with `self.apply`.
+    /// Runs the account's mail rules on newly arrived messages (not undoable, like sync).
+    fn on_new_mail(&mut self, ids: Vec<Id>, cx: &mut Context<Self>) {
+        let result = {
+            let store = self.state.read(cx).store();
+            let account = ids
+                .first()
+                .and_then(|id| store.get::<Message>(*id).ok().flatten())
+                .map(|message| message.account_id);
+            account.map(|account| mailbox_core::rules::run_command(store, account, &ids))
+        };
+        match result {
+            Some(Ok((Some(command), _))) => {
+                self.apply(command, cx);
+            }
+            Some(Err(err)) => self.report(err, cx),
+            _ => {}
+        }
     }
 
     // ---------- events → store ----------

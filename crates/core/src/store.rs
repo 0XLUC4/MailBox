@@ -120,6 +120,13 @@ CREATE TABLE message_flag_due (
 "#,
     crate::people::MIGRATION,
     crate::todo::MIGRATION,
+    r#"
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL UNIQUE,
+    value TEXT NOT NULL
+);
+"#,
 ];
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.
@@ -313,14 +320,10 @@ impl Store {
         )
     }
 
-    /// Simple case-insensitive search on subject, sender and preview, newest first.
+    /// Search with the query language of [`crate::search`] (`from:ada has:attachment ...`),
+    /// newest first.
     pub fn search_messages(&self, text: &str, limit: usize) -> Result<Vec<Message>> {
-        let pattern = format!("%{}%", text.trim());
-        self.query(
-            "WHERE subject LIKE ?1 OR from_name LIKE ?1 OR from_email LIKE ?1 OR preview LIKE ?1 \
-             ORDER BY date DESC LIMIT ?2",
-            params![pattern, limit as i64],
-        )
+        crate::search::search(self, &crate::search::SearchQuery::parse(text), limit)
     }
 
     pub fn unread_count(&self, folder_id: Id) -> Result<i64> {

@@ -12,6 +12,11 @@ pub mod store;
 pub mod todo;
 pub mod vcard;
 
+// Search language, rules engine, preferences.
+pub mod rules;
+pub mod search;
+pub mod settings;
+
 pub use command::{Command, History};
 pub use error::{Error, Result};
 pub use model::*;
