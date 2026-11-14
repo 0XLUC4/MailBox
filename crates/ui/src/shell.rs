@@ -9,7 +9,7 @@ use crate::app_state::{AppEvent, AppState, Module};
 use crate::calendar::CalendarView;
 use crate::components::{Icon, IconButton, IconName};
 use crate::mail::MailView;
-use crate::people::PeopleView;
+use crate::people::{PeopleEvent, PeopleView};
 use crate::ribbon::RibbonView;
 use crate::search::SearchView;
 use crate::settings::SettingsView;
@@ -34,7 +34,7 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.observe(&state, |_, _, cx| cx.notify()),
             cx.subscribe_in(
                 &state,
@@ -53,12 +53,30 @@ impl Shell {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
 
+        // People actions open compose / the event editor.
+        let people = cx.new(|cx| PeopleView::new(state.clone(), window, cx));
+        subscriptions.push(cx.subscribe_in(
+            &people,
+            window,
+            |this, _, event: &PeopleEvent, window, cx| match event {
+                PeopleEvent::Compose(recipients) => crate::compose::open_compose(
+                    &this.state,
+                    crate::compose::ComposeRequest::To(recipients.clone()),
+                    window,
+                    cx,
+                ),
+                PeopleEvent::ScheduleMeeting(attendees) => {
+                    crate::calendar::open_meeting_editor(this.state.clone(), attendees.clone(), cx)
+                }
+            },
+        ));
+
         Self {
             ribbon: cx.new(|cx| RibbonView::new(state.clone(), window, cx)),
             search: cx.new(|cx| SearchView::new(state.clone(), window, cx)),
             mail: cx.new(|cx| MailView::new(state.clone(), window, cx)),
             calendar: cx.new(|cx| CalendarView::new(state.clone(), window, cx)),
-            people: cx.new(|cx| PeopleView::new(state.clone(), window, cx)),
+            people,
             tasks: cx.new(|cx| TasksView::new(state.clone(), window, cx)),
             settings: cx.new(|cx| SettingsView::new(state.clone(), window, cx)),
             state,

@@ -85,6 +85,8 @@ pub enum Command {
         folder_id: Id,
     },
     SaveSignature(Box<crate::compose::Signature>),
+    /// Calendar operation with details and recurrence exceptions (see [`crate::calendar`]).
+    Calendar(Box<crate::calendar::CalendarCommand>),
 }
 
 impl Command {
@@ -175,6 +177,7 @@ impl Command {
             Self::DeleteDraft(_) => "Discard draft".into(),
             Self::QueueSend { .. } => "Send message".into(),
             Self::SaveSignature(_) => "Save signature".into(),
+            Self::Calendar(command) => command.label(),
         }
     }
 }
@@ -300,6 +303,7 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
         Command::SaveSignature(signature) => {
             crate::compose::apply_save_signature(store, *signature)
         }
+        Command::Calendar(command) => crate::calendar::apply(store, *command),
     }
 }
 
