@@ -30,13 +30,16 @@ use gpui::component::button::Button;
 use gpui::component::notification::{Notification, NotificationType};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use mailbox_core::settings::{self as core_settings, AccountServers};
-use mailbox_core::{Account, Address, Command, Folder, FolderRole, Id, Message, Store, command};
+use mailbox_core::{
+    Account, Address, Command, Folder, FolderRole, Id, Message, Store, command, remote,
+};
 use mailbox_sync::config::{self, AccountConfig, AuthConfig, credentials};
-use mailbox_sync::engine::{FetchedMessage, SyncInput};
+use mailbox_sync::engine::{FetchedMessage, PushOp, SyncInput};
 use mailbox_sync::formats::{self, MboxEntry, OutgoingHeaders};
 use mailbox_sync::imap_smtp::ImapSmtpBackend;
+use mailbox_sync::local::store_fetched;
 use mailbox_sync::mime::preview;
-use mailbox_sync::state::{Link, LocalMessage};
+use mailbox_sync::state::LocalMessage;
 use mailbox_sync::thread::normalize_id;
 use mailbox_sync::worker::BackendFactory;
 use mailbox_sync::{
@@ -50,6 +53,9 @@ use crate::{SendReceive, ToggleWorkOffline};
 
 /// How often worker events are applied to the store.
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
+/// During a sync the state file is saved at most this often (and at the end of the cycle), so
+/// a crash or kill loses little; the store's server identities cover the rest.
+const STATE_SAVE_INTERVAL: Duration = Duration::from_secs(2);
 /// Longest wait between retries after failures.
 const MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
 /// First sync of a folder downloads at most this many (newest) messages.
@@ -164,6 +170,9 @@ struct AccountSync {
     worker: WorkerHandle,
     sync: SyncState,
     state_path: PathBuf,
+    /// `sync` changed since it was last written to `state_path`.
+    dirty: bool,
+    saved_at: Instant,
     next_sync: Instant,
     failures: u32,
     busy: bool,
@@ -206,6 +215,7 @@ impl SyncBridge {
             last_success: None,
             _poll: poll,
         };
+        bridge.repair_store(cx);
         bridge.start_accounts(cx);
         bridge
     }
@@ -259,8 +269,8 @@ impl SyncBridge {
         let Some(config) = config else {
             return self.report("This account has no server settings", cx);
         };
-        if let Some(old) = self.accounts.remove(&account_id) {
-            self.save_state(&old, cx);
+        if let Some(mut old) = self.accounts.remove(&account_id) {
+            self.save_state(&mut old, cx);
         }
         let email = config.email.clone();
         if let Err(err) = self.start(account_id, config) {
@@ -341,6 +351,8 @@ impl SyncBridge {
                 worker,
                 sync,
                 state_path,
+                dirty: false,
+                saved_at: Instant::now(),
                 next_sync: Instant::now(),
                 failures: 0,
                 busy: false,
@@ -356,10 +368,9 @@ impl SyncBridge {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        for account in self.accounts.values() {
-            self.save_state(account, cx);
+        for (_, mut account) in std::mem::take(&mut self.accounts) {
+            self.save_state(&mut account, cx);
         }
-        self.accounts.clear();
         self.start_accounts(cx);
     }
 
@@ -420,8 +431,13 @@ impl SyncBridge {
             let Some(mut account) = self.accounts.remove(&id) else {
                 continue;
             };
+            // A drain can hold thousands of messages: save while applying, not only after.
             for event in account.worker.drain() {
+                account.dirty |= !matches!(event, SyncEvent::Progress(_));
                 self.apply_event(&mut account, event, cx);
+                if account.dirty && account.saved_at.elapsed() >= STATE_SAVE_INTERVAL {
+                    self.save_state(&mut account, cx);
+                }
             }
             if !self.offline && !account.busy && Instant::now() >= account.next_sync {
                 self.start_cycle(&mut account, cx);
@@ -489,14 +505,29 @@ impl SyncBridge {
         match event {
             SyncEvent::Progress(text) => account.progress = text,
             SyncEvent::Folders(folders) => self.map_folders(account, folders, cx),
-            SyncEvent::Pushed(op) => account.sync.apply_pushed(&op),
+            SyncEvent::Pushed(op) => {
+                // Moved away on the server: its old UID no longer identifies the local copy.
+                if let PushOp::Move { path, uid, .. } = &op
+                    && let Some(link) = account
+                        .sync
+                        .folders
+                        .get(path)
+                        .and_then(|folder| folder.messages.get(uid))
+                {
+                    let local_id = link.local_id;
+                    self.update_store(cx, |store| store.set_message_remote(local_id, None, ""));
+                }
+                account.sync.apply_pushed(&op);
+            }
             SyncEvent::FolderReset { path } => {
                 let ids = account.sync.reset_folder(&path);
                 self.delete_local(ids, cx);
             }
-            SyncEvent::NewMessages { path, messages } => {
-                self.store_new(account, &path, messages, cx);
-            }
+            SyncEvent::NewMessages {
+                path,
+                uid_validity,
+                messages,
+            } => self.store_new(account, &path, uid_validity, messages, cx),
             SyncEvent::FlagsChanged { path, changes } => {
                 let updates = account.sync.remote_flags(&path, &changes);
                 self.apply_remote_flags(updates, cx);
@@ -642,81 +673,31 @@ impl SyncBridge {
         &mut self,
         account: &mut AccountSync,
         path: &str,
+        uid_validity: u32,
         messages: Vec<FetchedMessage>,
         cx: &mut Context<Self>,
     ) {
-        let Some(folder_id) = account.sync.local_folder(path) else {
-            return;
-        };
         let is_inbox = account
             .sync
             .folders
             .get(path)
             .is_some_and(|folder| folder.role == FolderRole::Inbox);
         for fetched in messages {
-            let FetchedMessage {
-                uid,
-                flags,
-                has_body,
-                mut parsed,
-            } = fetched;
-            parsed.assign_thread(&mut account.sync.threads);
-            let attachments = std::mem::take(&mut parsed.attachments);
-            let message_id = parsed.message_id.clone();
-            let receipt_to = parsed.receipt_to.take();
-            let mut message = parsed.message;
-            message.account_id = account.account_id;
-            message.folder_id = folder_id;
-
-            let adopted = account
-                .sync
-                .take_adoption(&message_id)
-                .and_then(|id| self.existing(id, cx));
-            let local_id = match adopted {
-                Some(existing) => {
-                    message.id = existing.id;
-                    message.categories = existing.categories;
-                    message.flags.pinned = existing.flags.pinned;
-                    if !has_body {
-                        message.body_text = existing.body_text;
-                        message.body_html = existing.body_html;
-                        message.preview = existing.preview;
-                        message.attachments = existing.attachments;
-                    }
-                    self.apply(Command::SaveMessage(Box::new(message)), cx)
-                        .map(|_| existing.id)
-                }
-                None => {
-                    let unread = !message.flags.read;
-                    let id = self
-                        .apply(Command::SaveMessage(Box::new(message)), cx)
-                        .and_then(|inverse| created_id(&inverse));
-                    if let Some(id) = id
-                        && is_inbox
-                        && unread
-                    {
-                        account.new_mail.push(id);
-                    }
-                    id
-                }
-            };
-            let Some(local_id) = local_id else {
+            let account_id = account.account_id;
+            let sync = &mut account.sync;
+            let stored = self.update_store(cx, |store| {
+                store_fetched(store, sync, account_id, path, uid_validity, fetched)
+            });
+            let Some(stored) = stored.flatten() else {
                 continue;
             };
-            if let Some(to) = receipt_to.filter(|_| is_inbox) {
-                crate::receipts::note_request(&self.state, local_id, to, cx);
+            if is_inbox && stored.created && stored.unread {
+                account.new_mail.push(stored.local_id);
             }
-            account.sync.link(
-                path,
-                uid,
-                Link {
-                    local_id,
-                    flags,
-                    message_id,
-                    has_body,
-                },
-            );
-            self.write_attachments(local_id, attachments, cx);
+            if let Some(to) = stored.receipt_to.filter(|_| is_inbox && stored.created) {
+                crate::receipts::note_request(&self.state, stored.local_id, to, cx);
+            }
+            self.write_attachments(stored.local_id, stored.attachments, cx);
         }
     }
 
@@ -1080,10 +1061,76 @@ impl SyncBridge {
         })
     }
 
-    fn save_state(&self, account: &AccountSync, cx: &mut Context<Self>) {
+    fn save_state(&self, account: &mut AccountSync, cx: &mut Context<Self>) {
+        account.dirty = false;
+        account.saved_at = Instant::now();
         if let Err(err) = account.sync.save(&account.state_path) {
             self.report(format!("Cannot save sync state: {err}"), cx);
         }
+    }
+
+    /// Runs a store write outside the undo history (sync bookkeeping); toasts errors.
+    fn update_store<R>(
+        &self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&Store) -> mailbox_core::Result<R>,
+    ) -> Option<R> {
+        self.state.update(cx, |state, cx| match f(state.store()) {
+            Ok(value) => {
+                cx.notify();
+                Some(value)
+            }
+            Err(err) => {
+                state.report_error(err, cx);
+                None
+            }
+        })
+    }
+
+    /// Startup repair of what older versions left behind: the same server message stored
+    /// several times (sync state lost when the app was closed mid-sync) and list previews
+    /// made of a separator line. Duplicates are merged into the most complete copy; sync
+    /// links are pointed at it before the merge commits (a link to a deleted id would delete
+    /// the mail on the server), then the removed copies' attachment files are moved or deleted.
+    fn repair_store(&mut self, cx: &mut Context<Self>) {
+        let sync_dir = self.data_dir.join("sync");
+        let merged = self.update_store(cx, |store| {
+            store.transaction(|store| {
+                store.repair_previews()?;
+                let merged = store.merge_duplicate_messages()?;
+                if !merged.is_empty() {
+                    remap_sync_states(&sync_dir, &remote::merged_map(&merged))
+                        .map_err(|err| mailbox_core::Error::Invalid(err.to_string()))?;
+                }
+                Ok(merged)
+            })
+        });
+        let Some(merged) = merged.filter(|merged| !merged.is_empty()) else {
+            return;
+        };
+        let data_dir = self.data_dir.clone();
+        let count = merged.len();
+        self.background(
+            cx,
+            move || {
+                for merge in merged {
+                    let removed = attachments_dir(&data_dir, merge.removed);
+                    let kept = attachments_dir(&data_dir, merge.kept);
+                    // Best effort: a leftover folder only wastes space.
+                    if removed.exists() {
+                        if kept.exists() {
+                            let _ = std::fs::remove_dir_all(&removed);
+                        } else {
+                            let _ = std::fs::rename(&removed, &kept);
+                        }
+                    }
+                }
+            },
+            move |bridge, (), cx| {
+                let noun = if count == 1 { "copy" } else { "copies" };
+                bridge.info(format!("Removed {count} duplicate message {noun}"), cx);
+            },
+        );
     }
 
     fn report(&self, err: impl std::fmt::Display, cx: &mut Context<Self>) {
@@ -1210,6 +1257,25 @@ fn account_config(
         .flatten()
         .unwrap_or_default();
     Some(AccountConfig::from_servers(&account.email, &servers, auth))
+}
+
+/// Points every sync state file in `dir` at the messages that absorbed merged duplicates.
+fn remap_sync_states(dir: &Path, merged: &HashMap<Id, Id>) -> SyncResult<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            let mut state = SyncState::load(&path)?;
+            if state.remap_local_ids(merged) {
+                state.save(&path)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn state_path(data_dir: &Path, account_id: Id) -> PathBuf {

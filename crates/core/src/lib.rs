@@ -9,6 +9,7 @@ pub mod error;
 pub mod mail_ops;
 pub mod model;
 pub mod people;
+pub mod remote;
 #[cfg(any(test, feature = "dev"))]
 pub mod sample;
 pub mod store;

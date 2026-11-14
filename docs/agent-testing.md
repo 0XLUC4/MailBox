@@ -65,6 +65,8 @@ cargo build -p mailbox-devserver   # then copy target/debug/mailbox-devserver.ex
 mailbox-devserver --seed --imap-port 21143 --smtp-port 21025 --save "$TEMP/mbx-me/deliveries"
 ```
 - `--seed`: 4 recent INBOX messages (a thread, HTML, an attachment) + 1 in Archive.
+- `--bulk N`: N more INBOX notifications (text part opens with a `=====` line). A few thousand
+  make the first sync last several seconds: kill the app mid-sync to test restarts.
 - `--save DIR`: each SMTP delivery written to `DIR/delivery-N.eml` (check the exact MIME, Bcc...).
 - `--verbose`: log every IMAP/SMTP command; `--domain D`: the local domain.
 - Pick your own ports (defaults 1143/1025) so agents do not share a server.

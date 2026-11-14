@@ -81,3 +81,26 @@ pub fn seed_messages(store: &mut Mailstore) {
         store.append(folder, raw.as_bytes(), flags);
     }
 }
+
+/// Appends `count` notification-style messages to INBOX (`--bulk`): multipart mail whose
+/// text part starts with a separator line, like social network notifications. Enough of them
+/// make a first sync slow, to test closing the app mid-sync.
+pub fn bulk_messages(store: &mut Mailstore, count: usize) {
+    let domain = store.domain.clone();
+    let now = Utc::now();
+    for index in 1..=count {
+        let date = (now - Duration::minutes(index as i64 * 7)).to_rfc2822();
+        let raw = format!(
+            "From: Notifications <notification@social.example>\r\nTo: me@{domain}\r\n\
+             Subject: You have {index} new notifications\r\nDate: {date}\r\n\
+             Message-ID: <bulk-{index}@social.example>\r\nMIME-Version: 1.0\r\n\
+             Content-Type: multipart/alternative; boundary=\"n{index}\"\r\n\r\n\
+             --n{index}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n\
+             ========================================\r\n\
+             See your notifications ({index}).\r\nhttps://social.example/n/{index}\r\n\r\n\
+             --n{index}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
+             <p>See your <b>notifications</b> ({index}).</p>\r\n--n{index}--\r\n"
+        );
+        store.append("INBOX", raw.as_bytes(), &[]);
+    }
+}

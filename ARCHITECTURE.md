@@ -25,6 +25,13 @@ compose Send ──▶ <data>/outbox/<id>.json (Bcc, In-Reply-To, References, re
 ```
 
 - No account → `onboarding.rs` replaces the content area (Settings stays reachable).
+- No duplicates: each synced message stores its server identity (account + folder path +
+  UIDVALIDITY + UID, UNIQUE, and the Message-ID; `mailbox_core::remote`). New mail goes through
+  `mailbox_sync::local::store_fetched`, an upsert on that identity (or on an older copy without
+  one), so a lost sync state or two overlapping cycles never store a message twice. The sync
+  state file (`<data>/sync/<account>.json`) is saved every 2 s during a cycle and at its end.
+  At startup the bridge merges duplicates left by older versions (`Store::merge_duplicate_messages`)
+  and repoints sync links before the merge commits.
 - `AppState::sync_summary()` (`SyncPhase`: no account / idle + last synced / syncing / offline /
   error, plus unsent count) feeds the status area; F9 = Send/Receive, Work Offline toggle.
 - A failed send stays in the Outbox with an error toast + Retry (no silent auto-retry).

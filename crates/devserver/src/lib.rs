@@ -25,7 +25,7 @@ use std::thread;
 
 use chrono::{DateTime, Utc};
 
-pub use seed::seed_messages;
+pub use seed::{bulk_messages, seed_messages};
 
 /// Folders every server starts with, and their special-use attribute.
 pub const FOLDERS: [(&str, &str); 6] = [

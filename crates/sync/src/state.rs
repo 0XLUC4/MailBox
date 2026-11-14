@@ -5,7 +5,7 @@
 //! the last flags/folder seen on the server, so changes made while offline are pushed on the
 //! next successful sync (the "offline queue").
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use mailbox_core::{FolderRole, Id};
@@ -238,15 +238,38 @@ impl SyncState {
             .collect()
     }
 
-    /// Drops links of vanished UIDs; returns their local ids.
+    /// Drops links of vanished UIDs; returns the local ids no other link still uses (two
+    /// server copies merged into one local message: it stays while one copy remains).
     pub fn vanish(&mut self, path: &str, uids: &[Uid]) -> Vec<Id> {
         let Some(folder) = self.folders.get_mut(path) else {
             return Vec::new();
         };
-        uids.iter()
+        let removed: BTreeSet<Id> = uids
+            .iter()
             .filter_map(|uid| folder.messages.remove(uid))
             .map(|link| link.local_id)
+            .collect();
+        removed
+            .into_iter()
+            .filter(|id| self.find(*id).is_none())
             .collect()
+    }
+
+    /// Points links (and pending adoptions) at the message that absorbed a removed duplicate
+    /// (`removed → kept`). Returns whether anything changed.
+    pub fn remap_local_ids(&mut self, merged: &HashMap<Id, Id>) -> bool {
+        let mut changed = false;
+        let links = self
+            .folders
+            .values_mut()
+            .flat_map(|folder| folder.messages.values_mut().map(|link| &mut link.local_id));
+        for id in links.chain(self.pending_adoptions.values_mut()) {
+            if let Some(kept) = merged.get(id) {
+                *id = *kept;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Records remote flag changes; returns `(local id, flags)` to apply locally.
@@ -387,6 +410,17 @@ mod tests {
         removed.sort();
         assert_eq!(removed, vec![100, 102, 103]);
         assert_eq!(state.cursors()["INBOX"], FolderCursor::default());
+    }
+
+    #[test]
+    fn vanishing_one_of_two_server_copies_keeps_the_merged_message() {
+        let mut state = state();
+        // Duplicates 101 and 102 were merged into 100 (two server copies, one local message).
+        assert!(state.remap_local_ids(&HashMap::from([(101, 100), (102, 100)])));
+        assert!(!state.remap_local_ids(&HashMap::from([(999, 100)])));
+        assert_eq!(state.vanish("INBOX", &[2]), Vec::<Id>::new());
+        assert_eq!(state.vanish("INBOX", &[1, 3]), vec![100]);
+        assert_eq!(state.find(103).map(|(_, uid, _)| uid), Some(4));
     }
 
     #[test]

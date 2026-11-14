@@ -100,7 +100,7 @@ fn cursors(events: &[SyncEvent]) -> BTreeMap<String, FolderCursor> {
     let mut cursors: BTreeMap<String, FolderCursor> = BTreeMap::new();
     for event in events {
         match event {
-            SyncEvent::NewMessages { path, messages } => {
+            SyncEvent::NewMessages { path, messages, .. } => {
                 let cursor = cursors.entry(path.clone()).or_default();
                 for message in messages {
                     cursor.known.insert(message.uid, message.flags);
@@ -125,7 +125,7 @@ fn subjects(events: &[SyncEvent], folder: &str) -> Vec<String> {
     let mut subjects: Vec<String> = events
         .iter()
         .flat_map(|event| match event {
-            SyncEvent::NewMessages { path, messages } if path == folder => messages
+            SyncEvent::NewMessages { path, messages, .. } if path == folder => messages
                 .iter()
                 .map(|m| m.parsed.message.subject.clone())
                 .collect(),

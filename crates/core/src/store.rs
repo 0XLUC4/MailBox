@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS settings (
     crate::people::MIGRATION_LABELS,
     crate::calendar::LOCAL_MIGRATION,
     crate::todo::POSITION_MIGRATION,
+    crate::remote::MIGRATION,
 ];
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.
@@ -198,6 +199,11 @@ impl Store {
             })?;
         }
         Ok(())
+    }
+
+    /// The connection, for typed queries kept in their own module (e.g. [`crate::remote`]).
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
     }
 
     /// Current schema version.
@@ -434,7 +440,7 @@ impl Store {
 
 // ---------- column conversion helpers ----------
 
-fn timestamp(value: &DateTime<Utc>) -> String {
+pub(crate) fn timestamp(value: &DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 

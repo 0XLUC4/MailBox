@@ -232,11 +232,10 @@ pub fn subject_thread(subject: &str) -> String {
 /// Prefix of [`subject_thread`] ids.
 pub const SUBJECT_THREAD: &str = "subject:";
 
-/// First [`PREVIEW_LEN`] characters of the text with whitespace collapsed.
+/// First [`PREVIEW_LEN`] characters of the text with whitespace collapsed, separator lines
+/// ("=====") skipped (see [`mailbox_core::compose::preview_text`]).
 pub fn preview(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    mailbox_core::compose::preview_text(text)
         .chars()
         .take(PREVIEW_LEN)
         .collect()

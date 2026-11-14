@@ -1,18 +1,23 @@
 //! `mailbox-devserver [--imap-port 1143] [--smtp-port 1025] [--domain mailbox.test] [--seed]
-//! [--save DIR] [--verbose]`: local IMAP + SMTP test server for Mailbox. Runs until killed.
+//! [--bulk N] [--save DIR] [--verbose]`: local IMAP + SMTP test server for Mailbox. Runs until
+//! killed. `--bulk N` adds N notification-style messages to INBOX.
 //! `--save` writes every SMTP delivery to `DIR/delivery-N.eml` (to inspect the exact MIME).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use mailbox_devserver::{Config, DevServer, lock};
+use mailbox_devserver::{Config, DevServer, bulk_messages, lock};
 
 const USAGE: &str = "usage: mailbox-devserver [--imap-port N] [--smtp-port N] \
-                     [--domain D] [--seed] [--save DIR] [--verbose]";
+                     [--domain D] [--seed] [--bulk N] [--save DIR] [--verbose]";
 
-fn parse_args(mut args: impl Iterator<Item = String>) -> Result<(Config, Option<PathBuf>), String> {
+/// Parsed command line: server config, `--save` directory, `--bulk` count.
+type Args = (Config, Option<PathBuf>, usize);
+
+fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut save = None;
+    let mut bulk = 0;
     let mut config = Config {
         imap_port: 1143,
         smtp_port: 1025,
@@ -25,13 +30,19 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<(Config, Option<
             "--smtp-port" => config.smtp_port = port(&value("--smtp-port")?)?,
             "--domain" => config.domain = value("--domain")?,
             "--seed" => config.seed = true,
+            "--bulk" => {
+                let text = value("--bulk")?;
+                bulk = text
+                    .parse()
+                    .map_err(|_| format!("invalid count `{text}`"))?;
+            }
             "--save" => save = Some(PathBuf::from(value("--save")?)),
             "--verbose" | "-v" => config.verbose = true,
             "-h" | "--help" => return Err(USAGE.to_owned()),
             other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
         }
     }
-    Ok((config, save))
+    Ok((config, save, bulk))
 }
 
 fn port(text: &str) -> Result<u16, String> {
@@ -39,7 +50,7 @@ fn port(text: &str) -> Result<u16, String> {
 }
 
 fn main() -> ExitCode {
-    let (config, save) = match parse_args(std::env::args().skip(1)) {
+    let (config, save, bulk) = match parse_args(std::env::args().skip(1)) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("{message}");
@@ -54,6 +65,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    server.with_store(|store| bulk_messages(store, bulk));
     println!(
         "mailbox-devserver listening on 127.0.0.1\n  IMAP port {}  SMTP port {}  security: None\n  \
          any user name / password is accepted; mail to *@{domain} lands in INBOX",

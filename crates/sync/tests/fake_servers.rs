@@ -475,7 +475,7 @@ fn inbox_cursor(events: &[SyncEvent]) -> FolderCursor {
     let mut cursor = FolderCursor::default();
     for event in events {
         match event {
-            SyncEvent::NewMessages { path, messages } if path == "INBOX" => {
+            SyncEvent::NewMessages { path, messages, .. } if path == "INBOX" => {
                 for message in messages {
                     cursor.known.insert(message.uid, message.flags);
                 }
@@ -498,7 +498,7 @@ fn subjects(events: &[SyncEvent], folder: &str) -> Vec<String> {
     events
         .iter()
         .flat_map(|event| match event {
-            SyncEvent::NewMessages { path, messages } if path == folder => messages
+            SyncEvent::NewMessages { path, messages, .. } if path == folder => messages
                 .iter()
                 .map(|m| m.parsed.message.subject.clone())
                 .collect(),

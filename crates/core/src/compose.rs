@@ -377,9 +377,19 @@ pub fn parent_message_id(original: &Message) -> Option<String> {
 }
 
 /// First ~120 characters of a body, whitespace collapsed (for `Message::preview`).
+/// Separator lines and runs ("=====", "-----", "* * *", "...") carry no text and are skipped.
 pub fn preview_text(text: &str) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.chars().take(120).collect()
+    let punctuation = |part: &str| {
+        part.chars()
+            .all(|c| c.is_ascii_punctuation() || c.is_whitespace())
+    };
+    let words: Vec<&str> = text
+        .lines()
+        .filter(|line| !punctuation(line))
+        .flat_map(str::split_whitespace)
+        .filter(|word| word.chars().count() < 3 || !punctuation(word))
+        .collect();
+    words.join(" ").chars().take(120).collect()
 }
 
 /// A fresh, unique `Message-ID` on the sender's domain.
@@ -598,6 +608,20 @@ impl Record for Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn previews_skip_separator_lines() {
+        assert_eq!(
+            preview_text("========================================\r\nSee your notifications.\r\n"),
+            "See your notifications."
+        );
+        assert_eq!(
+            preview_text("Hi -- see below ...\n* * *\n----\nBye! 🎉"),
+            "Hi -- see below Bye! 🎉"
+        );
+        assert_eq!(preview_text("=====\n...\n"), "");
+    }
+
     use crate::History;
     use crate::store::tests::{account, folder, message, store};
 

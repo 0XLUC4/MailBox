@@ -95,6 +95,8 @@ pub enum SyncEvent {
     },
     NewMessages {
         path: String,
+        /// UIDVALIDITY the UIDs belong to (part of the server identity of each message).
+        uid_validity: u32,
         messages: Vec<FetchedMessage>,
     },
     FlagsChanged {
@@ -250,6 +252,7 @@ fn sync_folder(
         if !messages.is_empty() {
             emit(SyncEvent::NewMessages {
                 path: path.to_owned(),
+                uid_validity: status.uid_validity,
                 messages,
             });
         }
@@ -400,7 +403,7 @@ mod tests {
         let mut cursor = FolderCursor::default();
         for event in events {
             match event {
-                SyncEvent::NewMessages { path, messages } if path == "INBOX" => {
+                SyncEvent::NewMessages { path, messages, .. } if path == "INBOX" => {
                     for message in messages {
                         cursor.known.insert(message.uid, message.flags);
                     }

@@ -7,12 +7,15 @@
 //!   pure logic over a backend, emitting [`engine::SyncEvent`]s.
 //! - [`state`]: persisted per-account sync state (UIDVALIDITY cursors, UID ↔ local id links)
 //!   and the local→remote diff that doubles as the offline queue.
+//! - [`local`]: fetched messages → store as an upsert on their server identity (never a
+//!   duplicate, even when the sync state is lost or a sync runs twice).
 //! - [`worker`]: background thread (+ optional IDLE thread) driven by channels.
 //! - [`mime`], [`thread`], [`formats`]: RFC 5322 parsing, conversation threading, .eml/.mbox.
 //! - [`config`], [`oauth`]: account server settings, OS keyring credentials, OAuth2 PKCE.
 //! - [`dav`]: CalDAV/CardDAV discovery and two-way sync of calendars and contacts.
 //!
-//! Backends never write to the store: the UI bridge turns events into `mailbox_core::Command`s.
+//! Backends never write to the store: the UI bridge turns events into `mailbox_core::Command`s
+//! (new mail through [`local::store_fetched`]).
 
 pub mod backend;
 pub mod config;
@@ -20,6 +23,7 @@ pub mod dav;
 pub mod engine;
 pub mod formats;
 pub mod imap_smtp;
+pub mod local;
 pub mod mime;
 pub mod oauth;
 pub mod state;
