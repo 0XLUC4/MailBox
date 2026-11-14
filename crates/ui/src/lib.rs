@@ -65,7 +65,13 @@ pub fn run(store: Store) {
                 cx.quit();
                 return;
             }
-            cx.on_window_closed(|cx, _| cx.quit()).detach();
+            // Secondary windows (event editor, reminders) must not quit the app.
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
             cx.activate(true);
         });
 }
