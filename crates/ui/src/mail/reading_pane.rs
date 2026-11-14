@@ -751,10 +751,7 @@ impl ReadingPaneView {
         cx: &mut Context<Self>,
     ) -> (AnyElement, bool) {
         #[cfg(windows)]
-        if let Some(html) = message
-            .body_html
-            .as_deref()
-            .filter(|body| !body.trim().is_empty())
+        if let Some(html) = html::sent_html(message.body_html.as_deref())
             && !self.web_failed
         {
             let web = self.web(window, cx);

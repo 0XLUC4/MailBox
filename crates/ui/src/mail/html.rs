@@ -59,6 +59,17 @@ pub enum Block {
     Rule,
 }
 
+/// The sender's own HTML, if any: `None` for an empty body or for plain text the MIME parser
+/// wrapped as `<html><body>…<br/>…</body></html>` (plain text keeps the app theme).
+pub fn sent_html(html: Option<&str>) -> Option<&str> {
+    let html = html.filter(|html| !html.trim().is_empty())?;
+    let converted = html
+        .strip_prefix("<html><body>")
+        .and_then(|inner| inner.strip_suffix("</body></html>"))
+        .is_some_and(|inner| !inner.replace("<br/>", "").contains('<'));
+    (!converted).then_some(html)
+}
+
 /// The `cid:` references of an HTML body (pictures shown inline from MIME parts), in order:
 /// `src="cid:…"`, `src=cid:…` and CSS `url(cid:…)`.
 pub fn cid_references(html: &str) -> Vec<String> {
@@ -1243,7 +1254,19 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
 #[cfg(test)]
 mod tests {
     // Not `super::*`: it would pull in gpui's `test` macro through `use gpui::*`.
-    use super::{Block, cid_references, has_remote_images, parse, parse_plain, to_text};
+    use super::{Block, cid_references, has_remote_images, parse, parse_plain, sent_html, to_text};
+
+    #[test]
+    fn plain_text_wrapped_by_the_parser_is_not_html() {
+        assert_eq!(
+            sent_html(Some("<html><body>Hi &lt;3<br/>Bye</body></html>")),
+            None
+        );
+        assert_eq!(sent_html(Some("  ")), None);
+        assert_eq!(sent_html(Some("<p>Hi</p>")), Some("<p>Hi</p>"));
+        let real = "<html><body><b>Hi</b></body></html>";
+        assert_eq!(sent_html(Some(real)), Some(real));
+    }
 
     #[test]
     fn finds_cid_references() {
