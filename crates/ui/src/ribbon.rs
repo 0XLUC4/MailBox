@@ -531,8 +531,10 @@ impl Render for RibbonView {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::actions::ACTIONS;
+    // Not `super::*`: the parent's `gpui::*` would shadow `#[test]`.
+    use super::{Tab, groups};
+    use crate::actions::{ACTIONS, spec};
+    use crate::app_state::Module;
 
     #[test]
     fn every_ribbon_item_is_in_the_catalog() {

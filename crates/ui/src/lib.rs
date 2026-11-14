@@ -14,6 +14,7 @@ pub mod ribbon;
 pub mod search;
 pub mod settings;
 pub mod shell;
+pub mod sync_bridge;
 pub mod tasks;
 pub mod theme;
 
@@ -37,7 +38,9 @@ gpui::actions!(
         GoToCalendar,
         GoToPeople,
         GoToTasks,
-        GoToSettings
+        GoToSettings,
+        SendReceive,
+        ToggleWorkOffline
     ]
 );
 
@@ -51,6 +54,7 @@ pub fn run(store: Store) {
             actions::bind_keys(cx);
 
             let state = cx.new(|_| AppState::new(store));
+            sync_bridge::init(state.clone(), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1360.), px(860.)), cx)),
                 window_min_size: Some(size(px(900.), px(560.))),
@@ -92,5 +96,6 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(primary!("3"), GoToPeople, context),
         KeyBinding::new(primary!("4"), GoToTasks, context),
         KeyBinding::new(primary!(","), GoToSettings, context),
+        KeyBinding::new("f9", SendReceive, context),
     ]);
 }

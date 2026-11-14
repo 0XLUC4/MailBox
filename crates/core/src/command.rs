@@ -55,6 +55,17 @@ pub enum Command {
     DeleteRule(Id),
     /// Applied in order, atomically.
     Batch(Vec<Command>),
+    /// Duplicates messages into a folder (new ids); undo deletes the copies.
+    CopyMessages {
+        ids: Vec<Id>,
+        folder_id: Id,
+    },
+    /// Sets or clears the follow-up flag; `due` is kept only while flagged.
+    FlagMessages {
+        ids: Vec<Id>,
+        flagged: bool,
+        due: Option<chrono::NaiveDate>,
+    },
     /// Key/value preference (JSON text); `None` removes the key. See [`crate::settings`].
     SetSetting {
         key: String,
@@ -135,6 +146,14 @@ impl Command {
                 [single] => single.label(),
                 _ => format!("{} changes", commands.len()),
             },
+            Self::CopyMessages { ids, .. } => format!("Copy {}", count(ids)),
+            Self::FlagMessages { ids, flagged, .. } => {
+                format!(
+                    "{} {}",
+                    if *flagged { "Flag" } else { "Unflag" },
+                    count(ids)
+                )
+            }
             Self::SetSetting { .. } => "Change settings".into(),
         }
     }
@@ -242,6 +261,12 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
                 .collect::<Result<Vec<_>>>()?;
             inverses.reverse();
             Ok(Command::Batch(inverses))
+        }
+        Command::CopyMessages { ids, folder_id } => {
+            crate::mail_ops::apply_copy(store, &ids, folder_id)
+        }
+        Command::FlagMessages { ids, flagged, due } => {
+            crate::mail_ops::apply_flag(store, &ids, flagged, due)
         }
         Command::SetSetting { key, value } => crate::settings::apply_set(store, key, value),
     }

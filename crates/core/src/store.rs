@@ -113,6 +113,12 @@ CREATE TABLE rules (
 );
 "#,
     r#"
+CREATE TABLE message_flag_due (
+    id INTEGER PRIMARY KEY,
+    due TEXT NOT NULL
+);
+"#,
+    r#"
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY,
     key TEXT NOT NULL UNIQUE,

@@ -1,52 +1,56 @@
-//! Protocol backends. Only the [`MailBackend`] contract exists for now;
-//! IMAP/SMTP (async-imap, lettre) implementations come later.
+//! Mail sync and file formats.
 //!
-//! Backends never write to the store themselves: they return data and the caller
-//! turns it into `mailbox_core::Command`s, so sync results go through the same path as user edits.
+//! - [`backend`]: the [`MailBackend`] contract (folder path + UID addressing), an in-memory
+//!   backend for tests, folder-role detection.
+//! - [`imap_smtp`]: IMAP (imap + rustls) + SMTP (lettre) implementation, password or OAuth2.
+//! - [`engine`]: one sync cycle (push local changes, detect new/changed/vanished mail) as
+//!   pure logic over a backend, emitting [`engine::SyncEvent`]s.
+//! - [`state`]: persisted per-account sync state (UIDVALIDITY cursors, UID ↔ local id links)
+//!   and the local→remote diff that doubles as the offline queue.
+//! - [`worker`]: background thread (+ optional IDLE thread) driven by channels.
+//! - [`mime`], [`thread`], [`formats`]: RFC 5322 parsing, conversation threading, .eml/.mbox.
+//! - [`config`], [`oauth`]: account server settings, OS keyring credentials, OAuth2 PKCE.
+//!
+//! Backends never write to the store: the UI bridge turns events into `mailbox_core::Command`s.
 
-use chrono::{DateTime, Utc};
-use mailbox_core::{Folder, Id, Message, MessageFlags};
+pub mod backend;
+pub mod config;
+pub mod engine;
+pub mod formats;
+pub mod imap_smtp;
+pub mod mime;
+pub mod oauth;
+pub mod state;
+pub mod thread;
+pub mod worker;
 
-/// Errors a backend can report.
+pub use backend::{MailBackend, MemoryBackend, RemoteFlags, RemoteFolder, Uid};
+pub use config::AccountConfig;
+pub use engine::{PushOp, SyncEvent};
+pub use mime::{AttachmentData, ParsedMail};
+pub use state::SyncState;
+pub use thread::ThreadIndex;
+pub use worker::{OutgoingMessage, Request, WorkerHandle};
+
+/// Errors a backend or sync step can report.
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
     #[error("connection failed: {0}")]
     Connection(String),
-    #[error("authentication failed")]
-    Auth,
+    #[error("authentication failed: {0}")]
+    Auth(String),
     #[error("protocol error: {0}")]
     Protocol(String),
     #[error("not supported by this backend: {0}")]
     Unsupported(&'static str),
+    #[error("cannot parse message: {0}")]
+    Parse(String),
+    #[error("credentials: {0}")]
+    Credentials(String),
+    #[error("i/o error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("invalid data: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 pub type SyncResult<T> = Result<T, SyncError>;
-
-/// Remote folder reference (server-side path, e.g. `INBOX/Projects`).
-pub type RemotePath = String;
-
-/// A mail server connection for one account. Message ids are local store ids;
-/// implementations keep their own mapping to server UIDs.
-pub trait MailBackend: Send {
-    /// Opens/authenticates the connection.
-    fn connect(&mut self) -> SyncResult<()>;
-
-    /// Lists server folders, mapped to local [`Folder`]s (id 0 = not stored yet).
-    fn list_folders(&mut self) -> SyncResult<Vec<Folder>>;
-
-    /// Fetches messages of `folder` received after `since` (all when `None`).
-    fn fetch_since(
-        &mut self,
-        folder: &RemotePath,
-        since: Option<DateTime<Utc>>,
-    ) -> SyncResult<Vec<Message>>;
-
-    /// Sends a message (SMTP or equivalent).
-    fn send(&mut self, message: &Message) -> SyncResult<()>;
-
-    /// Pushes flag changes to the server.
-    fn set_flags(&mut self, ids: &[Id], flags: MessageFlags) -> SyncResult<()>;
-
-    /// Moves messages to another server folder.
-    fn move_messages(&mut self, ids: &[Id], target: &RemotePath) -> SyncResult<()>;
-}

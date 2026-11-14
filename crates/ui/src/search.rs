@@ -213,7 +213,7 @@ impl SearchView {
 
         // Complete the last (partial) token.
         // ASCII separators only, so `index + 1` is a char boundary.
-        let (head, token) = match raw.rfind(|c: char| c == ' ' || c == '\t') {
+        let (head, token) = match raw.rfind([' ', '\t']) {
             Some(index) => raw.split_at(index + 1),
             None => ("", raw.as_str()),
         };

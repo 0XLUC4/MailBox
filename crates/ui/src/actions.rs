@@ -10,6 +10,7 @@ use gpui::{Action, App, Entity, InteractiveElement, KeyBinding, SharedString, Wi
 use mailbox_core::settings::{Density, ReadingPane, RibbonMode, ThemePreference};
 use mailbox_core::{Command, FolderRole, Message, rules};
 
+pub use crate::SendReceive; // defined with the sync bridge
 use crate::app_state::{AppState, Module};
 use crate::components::IconName;
 use crate::search::SearchView;
@@ -39,7 +40,6 @@ gpui::actions!(
         MarkAllRead,
         OpenRules,
         RunRules,
-        SendReceive,
         CalendarToday,
         CalendarDayView,
         CalendarWeekView,
@@ -188,7 +188,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(primary!("/"), OpenShortcuts, shell),
         KeyBinding::new("delete", DeleteSelection, shell),
         KeyBinding::new("insert", ToggleFlag, shell),
-        KeyBinding::new("f9", SendReceive, shell),
     ]);
 }
 
@@ -316,7 +315,6 @@ pub fn register_fallbacks(state: &Entity<AppState>, cx: &mut App) {
     unavailable::<Reply>(state, "Reply", cx);
     unavailable::<ReplyAll>(state, "Reply all", cx);
     unavailable::<Forward>(state, "Forward", cx);
-    unavailable::<SendReceive>(state, "Send / receive", cx);
     unavailable::<CalendarToday>(state, "Calendar views", cx);
     unavailable::<CalendarDayView>(state, "Calendar views", cx);
     unavailable::<CalendarWeekView>(state, "Calendar views", cx);

@@ -71,7 +71,7 @@ pub fn stepper(
     cx: &App,
 ) -> Div {
     let id: SharedString = id.into();
-    let on_step: Rc<dyn Fn(i32, &mut Window, &mut App)> = Rc::new(on_step);
+    let on_step: SelectHandler<i32> = Rc::new(on_step);
     let down = on_step.clone();
     div()
         .flex()
