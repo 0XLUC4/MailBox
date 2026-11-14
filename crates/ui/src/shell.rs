@@ -182,8 +182,6 @@ impl Shell {
                     .min_w(px(0.))
                     .text_size(TEXT_LG)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .gap(px(10.))
-                    .child(titlebar::app_icon(px(18.)))
                     .child(crate::settings::tr(cx, active.label())),
             ))
             .child(div().flex_shrink_0().w(px(420.)).child(self.search.clone()))

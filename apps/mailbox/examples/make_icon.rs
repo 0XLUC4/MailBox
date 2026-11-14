@@ -1,4 +1,6 @@
 //! Renders `assets/icon.svg` to `assets/png/icon-<size>.png` and a multi-size `assets/icon.ico`.
+//! A size with its own hand-tuned `assets/icon-<size>.svg` (pixel-aligned, simplified details for
+//! 16/24/32 px) is rendered from that file instead.
 //!
 //! `cargo run -p mailbox --example make_icon` (run from anywhere: paths are relative to the
 //! workspace root). Commit the outputs; the build embeds `assets/icon.ico` (see `build.rs`).
@@ -43,15 +45,24 @@ fn ico(images: &[(u32, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+fn load(path: &Path) -> Result<resvg::usvg::Tree, String> {
+    let svg = std::fs::read(path).map_err(|err| format!("{}: {err}", path.display()))?;
+    resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default())
+        .map_err(|err| format!("{}: {err}", path.display()))
+}
+
 fn run(assets: &Path) -> Result<(), String> {
-    let svg = std::fs::read(assets.join("icon.svg")).map_err(|err| err.to_string())?;
-    let tree = resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default())
-        .map_err(|err| err.to_string())?;
+    let tree = load(&assets.join("icon.svg"))?;
     let png_dir = assets.join("png");
     std::fs::create_dir_all(&png_dir).map_err(|err| err.to_string())?;
     let mut ico_images = Vec::new();
     for size in PNG_SIZES {
-        let png = render(&tree, size)?;
+        let tuned = assets.join(format!("icon-{size}.svg"));
+        let png = if tuned.exists() {
+            render(&load(&tuned)?, size)?
+        } else {
+            render(&tree, size)?
+        };
         let path = png_dir.join(format!("icon-{size}.png"));
         std::fs::write(&path, &png).map_err(|err| format!("{}: {err}", path.display()))?;
         if ICO_SIZES.contains(&size) {
