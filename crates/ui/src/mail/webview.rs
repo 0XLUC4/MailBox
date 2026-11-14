@@ -177,6 +177,13 @@ impl MailWebView {
         }
     }
 
+    /// Gives keyboard focus back to the GPUI window. A click in the message moves the system
+    /// focus into the webview, and GPUI (one native window) never takes it back by itself:
+    /// keys (Esc in a menu, shortcuts, typing) would all go to the webview.
+    fn focus_app(&self) {
+        let _ = self.webview.focus_parent();
+    }
+
     fn place(&self, bounds: Bounds<Pixels>) {
         if self.bounds.get() == Some(bounds) {
             return;
@@ -217,6 +224,13 @@ pub fn paper(web: Rc<MailWebView>) -> impl IntoElement {
         move |bounds, hitbox, window, _| {
             web.paints.set(web.paints.get() + 1);
             web.place(bounds);
+            // Clicks in the webview never reach GPUI: any mouse press GPUI sees is on the app.
+            let pressed = web.clone();
+            window.on_mouse_event(move |_: &MouseDownEvent, phase, _, _| {
+                if phase == DispatchPhase::Capture {
+                    pressed.focus_app();
+                }
+            });
             // Checked once this frame is on screen: overlays (menus, dialogs, toasts) occlude
             // the hitbox, and they paint after this element.
             window.on_next_frame(move |window, _| {

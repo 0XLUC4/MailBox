@@ -203,8 +203,15 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // After a dialog opened from a menu closes, the focus is left on an element that no
         // longer exists: take it back so shortcuts (Ctrl+Z, Ctrl+K, Delete...) keep working.
+        // Checked once the frame is drawn: a menu that just took the focus is not in the
+        // element tree yet, and taking it back would leave it deaf to Esc and the arrows.
         if !window.has_active_dialog(cx) && !self.focus_handle.contains_focused(window, cx) {
-            self.focus_handle.focus(window, cx);
+            let shell = self.focus_handle.clone();
+            window.on_next_frame(move |window, cx| {
+                if !window.has_active_dialog(cx) && !shell.contains_focused(window, cx) {
+                    shell.focus(window, cx);
+                }
+            });
         }
         let t = theme(cx).clone();
         let active = self.state.read(cx).module();
