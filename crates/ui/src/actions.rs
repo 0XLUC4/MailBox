@@ -17,13 +17,10 @@ pub use crate::SendReceive; // defined with the sync bridge
 use crate::app_state::{AppState, Module};
 use crate::calendar::{CalendarView, EditorTarget};
 use crate::components::IconName;
-use crate::compose::{ComposeRequest, open_compose};
 use crate::everyday::{
     ExportMailbox, ImportMailbox, MuteConversation, OpenAutoReply, OpenReadReceipts, PrintMessage,
     SaveAllAttachments, SaveMessageAs, SetDefaultMailApp, SnoozeMessage,
 };
-use crate::mail::ComposeKind;
-use crate::people::PeopleView;
 use crate::search::SearchView;
 use crate::settings::{prefs, update_settings};
 use crate::tasks::TasksView;
@@ -238,18 +235,6 @@ pub fn install<E: InteractiveElement>(
         };
         window.dispatch_action(action, cx);
     });
-    let element = handle::<_, NewMail>(element, &state, |state, window, cx| {
-        open_compose(state, ComposeRequest::New, window, cx)
-    });
-    let element = handle::<_, Reply>(element, &state, |state, window, cx| {
-        respond(state, ComposeKind::Reply, window, cx)
-    });
-    let element = handle::<_, ReplyAll>(element, &state, |state, window, cx| {
-        respond(state, ComposeKind::ReplyAll, window, cx)
-    });
-    let element = handle::<_, Forward>(element, &state, |state, window, cx| {
-        respond(state, ComposeKind::Forward, window, cx)
-    });
     let element = handle::<_, NewEvent>(element, &state, new_event);
     let element = handle::<_, CalendarToday>(element, &state, |state, _, cx| {
         with_calendar(state, cx, |calendar, cx| calendar.action_today(cx))
@@ -262,12 +247,6 @@ pub fn install<E: InteractiveElement>(
     });
     let element = handle::<_, CalendarMonthView>(element, &state, |state, _, cx| {
         with_calendar(state, cx, |calendar, cx| calendar.action_show("month", cx))
-    });
-    let element = handle::<_, NewContact>(element, &state, |state, window, cx| {
-        go_to(state, Module::People, cx);
-        if let Some(people) = views(cx).and_then(|views| views.people.upgrade()) {
-            people.update(cx, |people, cx| people.action_new_contact(window, cx));
-        }
     });
     let element = handle::<_, NewTask>(element, &state, |state, window, cx| {
         go_to(state, Module::Tasks, cx);
@@ -287,6 +266,14 @@ pub fn install<E: InteractiveElement>(
         crate::signatures::open(state.clone(), window, cx)
     });
     let element = handle::<_, DeleteSelection>(element, &state, delete_selection);
+    // Reaches People whatever has focus (the ribbon takes focus when clicked).
+    let element = handle::<_, NewContact>(element, &state, |state, window, cx| {
+        if !crate::people::new_contact(window, cx) {
+            state.update(cx, |state, cx| {
+                state.report_error("Contacts are not available", cx)
+            });
+        }
+    });
     let element = handle::<_, Archive>(element, &state, |state, _, cx| {
         move_selection_to_role(state, FolderRole::Archive, cx)
     });
@@ -373,6 +360,7 @@ pub fn install<E: InteractiveElement>(
         crate::shortcuts::open(window, cx)
     });
     let element = crate::everyday::install(element, &state);
+    let element = crate::compose::install(element, &state);
     handle::<_, OpenAbout>(element, &state, |_, window, cx| {
         dialogs::open_about(window, cx)
     })
@@ -395,7 +383,6 @@ fn handle<E: InteractiveElement, A: Action>(
 /// them even when the focus is elsewhere.
 pub struct ModuleViews {
     pub calendar: WeakEntity<CalendarView>,
-    pub people: WeakEntity<PeopleView>,
     pub tasks: WeakEntity<TasksView>,
 }
 
@@ -443,14 +430,6 @@ fn new_event(state: &Entity<AppState>, _window: &mut Window, cx: &mut App) {
         },
         cx,
     );
-}
-
-/// Reply / Reply all / Forward to the message in the reading pane.
-fn respond(state: &Entity<AppState>, kind: ComposeKind, window: &mut Window, cx: &mut App) {
-    match selected_message(state, cx) {
-        Some(message) => crate::mail::compose_from(state, message.id, kind, window, cx),
-        None => no_selection(state, cx),
-    }
 }
 
 // ---------- default mail handlers ----------
@@ -550,10 +529,7 @@ fn delete_selection(state: &Entity<AppState>, window: &mut Window, cx: &mut App)
     match state.read(cx).module() {
         Module::Mail => {}
         Module::People => {
-            let deleted = views(cx)
-                .and_then(|views| views.people.upgrade())
-                .is_some_and(|people| people.update(cx, |people, cx| people.action_delete(cx)));
-            if !deleted {
+            if !crate::people::delete_selection(window, cx) {
                 state.update(cx, |state, cx| {
                     state.notify_info("Select a contact first", cx)
                 });
@@ -569,8 +545,16 @@ fn delete_selection(state: &Entity<AppState>, window: &mut Window, cx: &mut App)
             }
             return;
         }
-        // Calendar deletes the selected event with its own Delete key handling.
-        Module::Calendar | Module::Settings => return,
+        Module::Calendar => {
+            let deleted = views(cx)
+                .and_then(|views| views.calendar.upgrade())
+                .is_some_and(|calendar| calendar.update(cx, |c, cx| c.action_delete(cx)));
+            if !deleted {
+                state.update(cx, |state, cx| state.notify_info("Select an event first", cx));
+            }
+            return;
+        }
+        Module::Settings => return,
     }
     let Some(message) = selected_message(state, cx) else {
         return no_selection(state, cx);

@@ -221,7 +221,8 @@ mod platform {
     /// AppUserModelID shown as the toast source (registered under HKCU on first use).
     const APP_ID: &str = "Mailbox.Desktop";
 
-    /// Unpackaged apps need their AUMID registered (with a display name) for toasts to show.
+    /// Unpackaged apps need their AUMID registered (with a display name and icon) for toasts
+    /// to show.
     fn register_app_id() {
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
@@ -229,6 +230,11 @@ mod platform {
                 .create(format!(r"Software\Classes\AppUserModelId\{APP_ID}"));
             if let Ok(key) = key {
                 let _ = key.set_string("DisplayName", "Mailbox");
+                // Toasts show the app icon from a file path: keep a copy in the data dir.
+                let icon = crate::sync_bridge::data_dir().join("app-icon.png");
+                if std::fs::write(&icon, crate::titlebar::APP_ICON_PNG).is_ok() {
+                    let _ = key.set_string("IconUri", icon.to_string_lossy().as_ref());
+                }
             }
         });
     }

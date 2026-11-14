@@ -696,6 +696,30 @@ END:VEVENT\r\n\
 END:VCALENDAR\r\n";
 
     #[test]
+    fn parses_minimal_request() {
+        let text = "BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//EN
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:budget-review-42@example.org
+SEQUENCE:0
+DTSTAMP:20261114T185000Z
+DTSTART:20261116T130000Z
+DTEND:20261116T140000Z
+SUMMARY:Budget review
+ORGANIZER;CN=Alice Boss:mailto:alice@example.org
+ATTENDEE;CN=Me Tester;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@example.test
+END:VEVENT
+END:VCALENDAR
+";
+        let calendar = parse(text).unwrap();
+        assert_eq!(calendar.method, Some(Method::Request));
+        assert_eq!(calendar.events.len(), 1);
+        assert_eq!(calendar.events[0].event.title, "Budget review");
+    }
+
+    #[test]
     fn parses_outlook_invitation() {
         let calendar = parse(OUTLOOK_INVITE).unwrap();
         assert_eq!(calendar.method, Some(Method::Request));

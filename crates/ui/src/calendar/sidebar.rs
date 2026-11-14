@@ -23,83 +23,113 @@ impl CalendarView {
         t: &Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        // Collected right away: the rows borrow `cx` only while being built.
-        let calendar_groups: Vec<_> = data
-            .accounts
+        // Calendars on this computer first, then one group per account.
+        let mut groups: Vec<(String, Vec<_>)> = Vec::new();
+        let local: Vec<_> = data
+            .calendars
             .iter()
-            .filter_map(|account| {
-                let calendars: Vec<_> = data
-                    .calendars
-                    .iter()
-                    .filter(|calendar| calendar.account_id == account.id)
-                    .cloned()
-                    .collect();
-                (!calendars.is_empty()).then(|| {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(SPACE_0_5)
-                        .child(
-                            div()
-                                .px(SPACE_2)
-                                .pt(SPACE_2)
-                                .pb(SPACE_1)
-                                .text_size(TEXT_XS)
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(t.text_subtle)
-                                .truncate()
-                                .child(account.email.to_uppercase()),
-                        )
-                        .children(calendars.into_iter().map(|calendar| {
-                            let id = calendar.id;
-                            let visible = !self.hidden.contains(&id);
-                            let color = hex(calendar.color);
-                            div()
-                                .id(("cal-row", id as u64))
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(SPACE_2)
-                                .h(px(28.))
-                                .px(SPACE_2)
-                                .rounded(RADIUS_MD)
-                                .cursor_pointer()
-                                .hover(|style| style.bg(t.hover))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !this.hidden.remove(&id) {
-                                        this.hidden.insert(id);
-                                    }
-                                    cx.notify();
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_shrink_0()
-                                        .items_center()
-                                        .justify_center()
-                                        .size(px(14.))
-                                        .rounded(px(3.))
-                                        .border_1()
-                                        .border_color(color)
-                                        .when(visible, |el| {
-                                            el.bg(color).child(
-                                                Icon::new(IconName::Check)
-                                                    .size(px(10.))
-                                                    .text_color(t.on_accent),
-                                            )
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.))
-                                        .truncate()
-                                        .text_size(TEXT_MD)
-                                        .text_color(if visible { t.text } else { t.text_muted })
-                                        .child(calendar.name.clone()),
-                                )
-                        }))
-                })
+            .filter(|calendar| !data.accounts.iter().any(|a| a.id == calendar.account_id))
+            .cloned()
+            .collect();
+        if !local.is_empty() {
+            groups.push(("ON THIS COMPUTER".to_owned(), local));
+        }
+        for account in &data.accounts {
+            let calendars: Vec<_> = data
+                .calendars
+                .iter()
+                .filter(|calendar| calendar.account_id == account.id)
+                .cloned()
+                .collect();
+            if !calendars.is_empty() {
+                groups.push((account.email.to_uppercase(), calendars));
+            }
+        }
+        // Collected right away: the rows borrow `cx` only while being built.
+        let calendar_groups: Vec<_> = groups
+            .into_iter()
+            .map(|(label, calendars)| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_0_5)
+                    .child(
+                        div()
+                            .px(SPACE_2)
+                            .pt(SPACE_2)
+                            .pb(SPACE_1)
+                            .text_size(TEXT_XS)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.text_subtle)
+                            .truncate()
+                            .child(label),
+                    )
+                    .children(calendars.into_iter().map(|calendar| {
+                        let id = calendar.id;
+                        let visible = !self.hidden.contains(&id);
+                        let color = hex(calendar.color);
+                        let group = SharedString::from(format!("cal-row-{id}"));
+                        div()
+                            .id(("cal-row", id as u64))
+                            .group(group.clone())
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(SPACE_2)
+                            .h(px(28.))
+                            .px(SPACE_2)
+                            .rounded(RADIUS_MD)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(t.hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.hidden.remove(&id) {
+                                    this.hidden.insert(id);
+                                }
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_shrink_0()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(14.))
+                                    .rounded(px(3.))
+                                    .border_1()
+                                    .border_color(color)
+                                    .when(visible, |el| {
+                                        el.bg(color).child(
+                                            Icon::new(IconName::Check)
+                                                .size(px(10.))
+                                                .text_color(t.on_accent),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .text_size(TEXT_MD)
+                                    .text_color(if visible { t.text } else { t.text_muted })
+                                    .child(calendar.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .opacity(0.)
+                                    .group_hover(group, |style| style.opacity(1.))
+                                    .child(
+                                        IconButton::new(("cal-edit", id as u64), IconName::Pencil)
+                                            .size(px(22.))
+                                            .icon_size(px(12.))
+                                            .tooltip("Edit calendar")
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                this.edit_calendar(Some(id), window, cx);
+                                            })),
+                                    ),
+                            )
+                    }))
             })
             .collect();
 
@@ -140,7 +170,34 @@ impl CalendarView {
                     .px(SPACE_2)
                     .py(SPACE_2)
                     .gap(SPACE_1)
-                    .children(calendar_groups),
+                    .children(calendar_groups)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(SPACE_1)
+                            .pt(SPACE_2)
+                            .child(
+                                Button::new("cal-add")
+                                    .ghost()
+                                    .icon(IconName::Plus)
+                                    .label("Add calendar")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.edit_calendar(None, window, cx)
+                                    })),
+                            )
+                            .child(
+                                IconButton::new("cal-add-dav", IconName::Globe)
+                                    .tooltip("Add a CalDAV account")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        crate::dav_bridge::open_add_dav_account(
+                                            this.state.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    })),
+                            ),
+                    ),
             )
             .child(
                 div()

@@ -38,6 +38,10 @@ CREATE TABLE task_details (
 );
 "#;
 
+/// Manual order of tasks (drag & drop), appended to `store::MIGRATIONS`.
+pub(crate) const POSITION_MIGRATION: &str =
+    "ALTER TABLE task_details ADD COLUMN position INTEGER NOT NULL DEFAULT 0;";
+
 /// How a task recurs; completing it creates the next occurrence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -135,6 +139,9 @@ pub struct TaskDetails {
     /// The flagged message this task was created from.
     pub message_id: Option<Id>,
     pub completed_at: Option<DateTime<Utc>>,
+    /// Manual order (drag & drop) used by the default sort; lower first.
+    #[serde(default)]
+    pub position: i64,
 }
 
 /// A task with its details: what the Tasks module reads and writes.
@@ -275,7 +282,7 @@ impl SmartList {
 /// Sort orders offered by the list header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TaskSort {
-    /// Oldest first, as added.
+    /// Manual order (drag & drop), then oldest first.
     #[default]
     Created,
     DueDate,
@@ -309,6 +316,12 @@ pub fn sort_tasks(cards: &mut [TaskCard], sort: TaskSort) {
             .cmp(&b.task.created)
             .then(a.id().cmp(&b.id()))
     };
+    let by_position = |a: &TaskCard, b: &TaskCard| {
+        a.details
+            .position
+            .cmp(&b.details.position)
+            .then(by_created(a, b))
+    };
     let by_due = |a: &TaskCard, b: &TaskCard| match (a.task.due, b.task.due) {
         (Some(x), Some(y)) => x.cmp(&y),
         (Some(_), None) => Ordering::Less,
@@ -316,7 +329,7 @@ pub fn sort_tasks(cards: &mut [TaskCard], sort: TaskSort) {
         (None, None) => Ordering::Equal,
     };
     match sort {
-        TaskSort::Created => cards.sort_by(by_created),
+        TaskSort::Created => cards.sort_by(by_position),
         TaskSort::DueDate => cards.sort_by(|a, b| by_due(a, b).then(by_created(a, b))),
         TaskSort::Importance => cards.sort_by(|a, b| {
             b.is_important()
@@ -651,6 +664,7 @@ impl Record for TaskDetails {
         "steps_json",
         "message_id",
         "completed_at",
+        "position",
     ];
 
     fn id(&self) -> Id {
@@ -670,6 +684,7 @@ impl Record for TaskDetails {
             Value::Text(serde_json::to_string(&self.steps)?),
             self.message_id.map_or(Value::Null, Value::Integer),
             time_value(self.completed_at),
+            Value::Integer(self.position),
         ])
     }
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
@@ -684,6 +699,7 @@ impl Record for TaskDetails {
             steps: serde_json::from_str(&steps).map_err(|err| conversion_error(5, err))?,
             message_id: row.get(6)?,
             completed_at: get_time(row, 7)?,
+            position: row.get(8)?,
         })
     }
 }
@@ -739,6 +755,7 @@ mod tests {
             ],
             message_id: None,
             completed_at: None,
+            position: 0,
         };
         card
     }

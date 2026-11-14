@@ -44,5 +44,40 @@ $w=$r.Ri-$r.L; $hh=$r.B-$r.T; $bmp=New-Object System.Drawing.Bitmap $w,$hh
 ```
 Then read the PNG to check. Delete temp files when done.
 
-## Local mail server for end-to-end tests
-`cargo run -p mailbox-devserver` (once it exists) serves fake IMAP/SMTP on 127.0.0.1; add an account pointing at it (security None). Never use a real mail account.
+Also set `MAILBOX_DATA_DIR` to your temp dir: sync state, the Outbox headers, attachments and the
+single-instance port file live there, and without it your test app forwards to (or collides with)
+another agent's running instance. The AgentDeck hook refuses new console windows: run the app and
+the devserver as background commands of your shell tool instead, e.g. (bash)
+`MAILBOX_DATA_DIR="$TEMP/mbx-me/data" "$TEMP/mbx-me/mailbox.exe" --data "$TEMP/mbx-me/data/test.db"`.
+
+Other agents drive their own windows at the same time: `SetForegroundWindow` can silently fail and
+your clicks/keys then land in someone else's window (and theirs in yours). Before every click and
+every keystroke check `GetForegroundWindow() == $h` (tap Alt + `SetForegroundWindow` to get it
+back, abort if it fails), send keys one at a time, and wait ~800 ms after a click before typing.
+
+## Local mail server for end-to-end tests (`mailbox-devserver`)
+Plain IMAP4rev1 (IDLE, MOVE, UIDPLUS, SPECIAL-USE) + SMTP on 127.0.0.1, in-memory mailboxes INBOX,
+Sent, Drafts, Trash, Archive, Junk. Any user name and password are accepted. SMTP stores every
+message and files a copy in INBOX when a recipient is `@<domain>` (default `mailbox.test`), so mail
+to yourself comes back on the next sync. State is lost when it stops. Never use a real account.
+```bash
+cargo build -p mailbox-devserver   # then copy target/debug/mailbox-devserver.exe to your temp dir
+mailbox-devserver --seed --imap-port 21143 --smtp-port 21025 --save "$TEMP/mbx-me/deliveries"
+```
+- `--seed`: 4 recent INBOX messages (a thread, HTML, an attachment) + 1 in Archive.
+- `--save DIR`: each SMTP delivery written to `DIR/delivery-N.eml` (check the exact MIME, Bcc...).
+- `--verbose`: log every IMAP/SMTP command; `--domain D`: the local domain.
+- Pick your own ports (defaults 1143/1025) so agents do not share a server.
+
+In the app: Add account -> `me@mailbox.test`, any password -> on Server settings set both servers to
+`127.0.0.1`, your ports, Security **None** -> Test connection -> Add account. The password goes to
+the Windows credential store (service `mailbox`): remove the account when done.
+Stop the server to test send failures (the message stays in the Outbox, toast with Retry); start it
+again on the same ports and click Retry.
+
+In tests, use the library in-process (`[dev-dependencies] mailbox-devserver.workspace = true`):
+```rust
+let server = mailbox_devserver::DevServer::start(mailbox_devserver::Config { seed: true, ..Default::default() })?;
+// server.imap_port(), server.smtp_port(); server.with_store(|s| s.deliveries.len()); server.stop();
+```
+See `crates/sync/tests/devserver.rs`.

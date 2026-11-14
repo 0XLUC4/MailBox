@@ -148,6 +148,19 @@ impl ReadingPaneView {
             .px(SPACE_3)
             .border_b_1()
             .border_color(theme(cx).border_subtle)
+            .when(in_role == Some(FolderRole::Drafts), |el| {
+                let state = self.state.clone();
+                el.child(
+                    Button::new("edit-draft")
+                        .primary()
+                        .compact()
+                        .icon(IconName::SquarePen)
+                        .label("Edit draft")
+                        .on_click(move |_, window, cx| {
+                            crate::compose::edit_draft(&state, id, window, cx)
+                        }),
+                )
+            })
             .child(
                 Button::new("reply")
                     .ghost()

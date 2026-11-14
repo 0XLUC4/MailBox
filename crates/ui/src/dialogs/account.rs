@@ -33,6 +33,10 @@ use crate::settings::tr;
 use crate::sync_bridge;
 use crate::theme::{ACCENTS, DEFAULT_ACCENT, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_SM, theme};
 
+/// Server source shown when the provider was not found anywhere.
+const GUESSED: &str =
+    "Provider not recognised: we guessed the usual settings. Check them with your provider.";
+
 const SECURITY: [(&str, Security); 3] = [
     ("SSL/TLS", Security::Tls),
     ("STARTTLS", Security::StartTls),
@@ -45,6 +49,33 @@ fn client_id_key(provider: OAuthProvider) -> &'static str {
         OAuthProvider::Google => "oauth.google.client_id",
         OAuthProvider::Microsoft => "oauth.microsoft.client_id",
     }
+}
+
+/// Why a provider needs an app password, and the page where it is created.
+fn app_password_help(provider: &str) -> Option<(&'static str, &'static str)> {
+    Some(match provider {
+        "Gmail" => (
+            "With two-step verification on, Gmail needs an app password instead of your Google password.",
+            "https://myaccount.google.com/apppasswords",
+        ),
+        "Outlook.com" => (
+            "With two-step verification on, Outlook needs an app password instead of your Microsoft password.",
+            "https://account.live.com/proofs/AppPassword",
+        ),
+        "iCloud" => (
+            "iCloud Mail needs an app-specific password, created in your Apple Account.",
+            "https://account.apple.com/account/manage",
+        ),
+        "Yahoo" => (
+            "Yahoo Mail needs an app password, created in your account security settings.",
+            "https://login.yahoo.com/account/security/app-passwords",
+        ),
+        "AOL" => (
+            "AOL Mail needs an app password, created in your account security settings.",
+            "https://login.aol.com/account/security/app-passwords",
+        ),
+        _ => return None,
+    })
 }
 
 /// Client id from the settings, else from the environment.
@@ -185,7 +216,7 @@ impl AccountDialog {
 
         let name = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Work, Personal...")
+                .placeholder(tr(cx, "Work, Personal..."))
                 .default_value(name)
         });
         let email = cx.new(|cx| {
@@ -194,22 +225,26 @@ impl AccountDialog {
                 .default_value(email)
         });
         let password = cx.new(|cx| {
-            InputState::new(window, cx)
-                .masked(true)
-                .placeholder(if account_id.is_some() {
+            InputState::new(window, cx).masked(true).placeholder(tr(
+                cx,
+                if account_id.is_some() {
                     "Leave empty to keep the saved password"
                 } else {
                     "Password or app password"
-                })
+                },
+            ))
         });
         let username = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Usually your email address")
+                .placeholder(tr(cx, "Usually your email address"))
                 .default_value(servers.username.clone())
         });
         let client_id = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Optional: enables “Sign in with Google / Microsoft”")
+                .placeholder(tr(
+                    cx,
+                    "Optional: enables “Sign in with Google / Microsoft”",
+                ))
                 .default_value(client_id)
         });
         let imap = EndpointInputs::new(&servers.imap, window, cx);
@@ -278,12 +313,6 @@ impl AccountDialog {
         cx.notify();
     }
 
-    /// OAuth provider of the email's well-known provider (Gmail, Outlook.com).
-    fn oauth_provider_for_email(&self) -> Option<OAuthProvider> {
-        let provider = self.provider?;
-        OAuthProvider::for_host(provider.imap.0)
-    }
-
     /// OAuth provider of the IMAP server currently entered.
     fn oauth_provider(&self, cx: &App) -> Option<OAuthProvider> {
         OAuthProvider::for_host(self.imap.host.read(cx).value().trim())
@@ -298,10 +327,10 @@ impl AccountDialog {
         }
         let email = self.email_value(cx);
         let Some(guess) = suggest_servers(&email) else {
-            return self.fail("Enter a valid email address", cx);
+            return self.fail(tr(cx, "Enter a valid email address"), cx);
         };
         if !self.use_oauth && self.password_value(cx).is_none() {
-            return self.fail("Enter your password (or an app password)", cx);
+            return self.fail(tr(cx, "Enter your password (or an app password)"), cx);
         }
         self.error = None;
         self.provider = detect_provider(&email);
@@ -314,11 +343,11 @@ impl AccountDialog {
                 .update(cx, |input, cx| input.set_value(name, window, cx));
         }
         if let Some(provider) = self.provider {
-            let source = format!("{} settings detected.", provider.name);
+            let source = tr(cx, "{} settings detected.").replace("{}", provider.name);
             return self.show_servers(guess, source, window, cx);
         }
 
-        self.check = Check::Running("Looking up the server settings…");
+        self.check = Check::Running(tr(cx, "Looking up the server settings…"));
         cx.notify();
         let lookup_email = email.clone();
         let lookup = cx
@@ -331,18 +360,13 @@ impl AccountDialog {
                 let (servers, source) = match found {
                     Some(servers) => {
                         let source = if servers.provider.is_empty() {
-                            "Settings found online.".to_owned()
+                            tr(cx, "Settings found online.").to_owned()
                         } else {
-                            format!("{} settings found online.", servers.provider)
+                            tr(cx, "{} settings found online.").replace("{}", &servers.provider)
                         };
                         (servers, source)
                     }
-                    None => (
-                        guess,
-                        "Provider not recognised: we guessed the usual settings. Check them \
-                         with your provider."
-                            .to_owned(),
-                    ),
+                    None => (guess, tr(cx, GUESSED).to_owned()),
                 };
                 this.show_servers(servers, source, window, cx);
             })
@@ -439,14 +463,17 @@ impl AccountDialog {
             AuthConfig::OAuth2 { .. } => None,
         };
         if self.account_id.is_none() && !self.use_oauth && password.is_none() {
-            return self.fail("Enter your password (or an app password)", cx);
+            return self.fail(tr(cx, "Enter your password (or an app password)"), cx);
         }
         self.error = None;
-        self.check = Check::Running(if self.use_oauth {
-            "Finish signing in in your browser…"
-        } else {
-            "Testing the connection…"
-        });
+        self.check = Check::Running(tr(
+            cx,
+            if self.use_oauth {
+                "Finish signing in in your browser…"
+            } else {
+                "Testing the connection…"
+            },
+        ));
         cx.notify();
         let tested = config.clone();
         let task = cx
@@ -555,12 +582,14 @@ impl AccountDialog {
         window.close_dialog(cx);
         confirm(
             Confirm {
-                title: format!("Remove {email}?").into(),
-                description: "Its mail, folders and calendars are deleted from this computer \
-                              and its password is removed from the system keychain. Nothing \
-                              is deleted on the server."
-                    .into(),
-                ok: "Remove account".into(),
+                title: tr(cx, "Remove {}?").replace("{}", &email).into(),
+                description: tr(
+                    cx,
+                    "Its mail, folders and calendars are deleted from this computer and its \
+                     password is removed from the system keychain. Nothing is deleted on the server.",
+                )
+                .into(),
+                ok: tr(cx, "Remove account").into(),
                 danger: true,
             },
             move |_, cx| sync_bridge::remove_account(account_id, cx),
@@ -579,7 +608,7 @@ impl AccountDialog {
         let view = cx.entity().downgrade();
         let security = segmented(
             title,
-            &SECURITY,
+            &SECURITY.map(|(label, value)| (tr(cx, label), value)),
             inputs.security,
             move |security, _, cx| {
                 if let Some(view) = view.upgrade() {
@@ -604,67 +633,83 @@ impl AccountDialog {
                     .flex()
                     .flex_row()
                     .gap(SPACE_2)
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(field("Server", Input::new(&inputs.host), cx)),
-                    )
-                    .child(
-                        div()
-                            .w(px(88.))
-                            .child(field("Port", Input::new(&inputs.port), cx)),
-                    ),
+                    .child(div().flex_1().child(field(
+                        tr(cx, "Server"),
+                        Input::new(&inputs.host),
+                        cx,
+                    )))
+                    .child(div().w(px(88.)).child(field(
+                        tr(cx, "Port"),
+                        Input::new(&inputs.port),
+                        cx,
+                    ))),
             )
-            .child(field("Security", security, cx))
+            .child(field(tr(cx, "Security"), security, cx))
     }
 
-    /// OAuth sign-in button, or how to use an app password, for Gmail / Outlook addresses.
-    fn render_oauth_hint(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let provider = self.oauth_provider_for_email()?;
+    /// How to get an app password (with a link that opens the provider's page), plus the
+    /// OAuth sign-in button for Gmail / Outlook when a client id is configured.
+    fn render_password_help(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let provider = self.provider?;
         let t = theme(cx).clone();
-        let has_client_id = configured_client_id(self.state.read(cx), provider).is_some();
-        let hint = div()
-            .text_size(TEXT_SM)
-            .text_color(t.text_muted)
-            .child(match provider {
-                OAuthProvider::Google => {
-                    "With two-step verification on, Gmail needs an app password: Google account \
-                     › Security › App passwords."
-                }
-                OAuthProvider::Microsoft => {
-                    "With two-step verification on, Outlook needs an app password: Microsoft \
-                     account › Security › Advanced security options › App passwords."
-                }
-            });
-        if !has_client_id {
-            return Some(div().child(hint).child(
-                div().text_size(TEXT_SM).text_color(t.text_subtle).child(format!(
-                    "To sign in with {} in your browser instead, set an OAuth client id in the \
-                     server settings or the {} environment variable.",
-                    provider.label(),
-                    match provider {
-                        OAuthProvider::Google => "MAILBOX_GOOGLE_CLIENT_ID",
-                        OAuthProvider::Microsoft => "MAILBOX_MS_CLIENT_ID",
-                    }
-                )),
-            ));
-        }
-        Some(
+        let help = app_password_help(provider.name).map(|(text, url)| {
             div()
                 .flex()
                 .flex_col()
-                .gap(SPACE_2)
+                .items_start()
+                .gap(SPACE_1)
                 .child(
-                    Button::new("account-oauth")
-                        .icon(IconName::Globe)
-                        .label(format!("Sign in with {}", provider.label()))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.use_oauth = true;
-                            this.next(window, cx);
-                        })),
+                    div()
+                        .text_size(TEXT_SM)
+                        .text_color(t.text_muted)
+                        .child(tr(cx, text)),
                 )
-                .child(hint),
-        )
+                .child(
+                    Button::new("account-app-password")
+                        .ghost()
+                        .compact()
+                        .icon(IconName::ExternalLink)
+                        .label(tr(cx, "Create an app password"))
+                        .on_click(move |_, _, cx| cx.open_url(url)),
+                )
+        });
+        let oauth = OAuthProvider::for_host(provider.imap.0);
+        let sign_in = oauth.map(|oauth| {
+            if configured_client_id(self.state.read(cx), oauth).is_some() {
+                Button::new("account-oauth")
+                    .icon(IconName::Globe)
+                    .label(tr(cx, "Sign in with {}").replace("{}", oauth.label()))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.use_oauth = true;
+                        this.next(window, cx);
+                    }))
+                    .into_any_element()
+            } else {
+                div()
+                    .text_size(TEXT_SM)
+                    .text_color(t.text_subtle)
+                    .child(
+                        tr(
+                            cx,
+                            "To sign in with {} in your browser instead, set an OAuth client id in the server settings or the {} environment variable.",
+                        )
+                        .replacen("{}", oauth.label(), 1)
+                        .replacen(
+                            "{}",
+                            match oauth {
+                                OAuthProvider::Google => "MAILBOX_GOOGLE_CLIENT_ID",
+                                OAuthProvider::Microsoft => "MAILBOX_MS_CLIENT_ID",
+                            },
+                            1,
+                        ),
+                    )
+                    .into_any_element()
+            }
+        });
+        if help.is_none() && sign_in.is_none() {
+            return None;
+        }
+        Some(card(cx).gap(SPACE_2).children(help).children(sign_in))
     }
 
     fn render_identity(&self, cx: &mut Context<Self>) -> Div {
@@ -672,7 +717,7 @@ impl AccountDialog {
         let detected = self.provider.map(|provider| {
             Banner::success(
                 "account-detected",
-                format!("{} detected: settings will be filled in", provider.name),
+                tr(cx, "{} detected: settings will be filled in").replace("{}", provider.name),
             )
             .icon(IconName::ShieldCheck)
             .plain()
@@ -682,15 +727,15 @@ impl AccountDialog {
             .flex()
             .flex_col()
             .gap(SPACE_3)
-            .child(field("Email address", Input::new(&self.email), cx))
+            .child(field(tr(cx, "Email address"), Input::new(&self.email), cx))
             .children(detected)
             .when(adding, |el| {
-                el.child(field("Password", Input::new(&self.password), cx))
-                    .children(self.render_oauth_hint(cx))
+                el.child(field(tr(cx, "Password"), Input::new(&self.password), cx))
+                    .children(self.render_password_help(cx))
             })
-            .child(field("Account name", Input::new(&self.name), cx))
+            .child(field(tr(cx, "Account name"), Input::new(&self.name), cx))
             .child(field(
-                "Colour",
+                tr(cx, "Colour"),
                 swatches(
                     "account-color",
                     ACCENTS,
@@ -709,17 +754,18 @@ impl AccountDialog {
             ))
     }
 
-    fn render_check(&self) -> Option<Banner> {
+    fn render_check(&self, cx: &App) -> Option<Banner> {
         const ID: &str = "account-check";
         match &self.check {
             Check::Idle => None,
             Check::Running(text) => Some(Banner::info(ID, *text).icon(IconName::Clock)),
             Check::Passed(_, folders) => Some(Banner::success(
                 ID,
-                format!(
+                tr(
+                    cx,
                     "Connected: sign-in works for receiving and sending ({} folders).",
-                    folders.len()
-                ),
+                )
+                .replace("{}", &folders.len().to_string()),
             )),
             Check::Failed(message) => Some(Banner::error(ID, message.clone())),
         }
@@ -732,7 +778,7 @@ impl AccountDialog {
             .then(|| self.source.clone())
             .flatten()
             .map(|text| {
-                if self.provider.is_some() || !text.contains("guessed") {
+                if self.provider.is_some() || text != tr(cx, GUESSED) {
                     Banner::success("account-source", text).icon(IconName::ShieldCheck)
                 } else {
                     Banner::warning("account-source", text)
@@ -742,13 +788,13 @@ impl AccountDialog {
         let auth_line = oauth.map(|provider| {
             let (text, toggle) = if self.use_oauth {
                 (
-                    format!("Signing in with {} in your browser.", provider.label()),
-                    "Use a password instead",
+                    tr(cx, "Signing in with {} in your browser.").replace("{}", provider.label()),
+                    tr(cx, "Use a password instead"),
                 )
             } else {
                 (
-                    "Signing in with a password or app password.".to_owned(),
-                    "Sign in with the browser instead",
+                    tr(cx, "Signing in with a password or app password.").to_owned(),
+                    tr(cx, "Sign in with the browser instead"),
                 )
             };
             div()
@@ -779,25 +825,29 @@ impl AccountDialog {
             .when(editing, |el| el.child(self.render_identity(cx)))
             .child(
                 card(cx)
-                    .child(self.render_endpoint("INCOMING MAIL (IMAP)", Which::Imap, cx))
-                    .child(self.render_endpoint("OUTGOING MAIL (SMTP)", Which::Smtp, cx)),
+                    .child(self.render_endpoint(tr(cx, "INCOMING MAIL (IMAP)"), Which::Imap, cx))
+                    .child(self.render_endpoint(tr(cx, "OUTGOING MAIL (SMTP)"), Which::Smtp, cx)),
             )
-            .child(field("Username", Input::new(&self.username), cx))
+            .child(field(tr(cx, "Username"), Input::new(&self.username), cx))
             .children(auth_line)
             .when(!self.use_oauth, |el| {
                 el.child(field(
-                    if editing { "New password" } else { "Password" },
+                    tr(cx, if editing { "New password" } else { "Password" }),
                     Input::new(&self.password),
                     cx,
                 ))
             })
             .when(oauth.is_some(), |el| {
-                el.child(field("OAuth client id", Input::new(&self.client_id), cx))
+                el.child(field(
+                    tr(cx, "OAuth client id"),
+                    Input::new(&self.client_id),
+                    cx,
+                ))
             })
-            .child(div().text_size(TEXT_SM).text_color(t.text_subtle).child(
-                "Passwords are kept in the system keychain, never in the Mailbox \
-                         database.",
-            ))
+            .child(div().text_size(TEXT_SM).text_color(t.text_subtle).child(tr(
+                cx,
+                "Passwords are kept in the system keychain, never in the Mailbox database.",
+            )))
     }
 }
 
@@ -820,6 +870,7 @@ impl Render for AccountDialog {
             ),
             (false, Step::Servers) => ("Server settings", "Step 2 of 2"),
         };
+        let (heading, subtitle) = (tr(cx, heading), tr(cx, subtitle));
         let body = match (editing, self.step) {
             (false, Step::Identity) => self.render_identity(cx),
             _ => self.render_servers(cx),
@@ -830,7 +881,7 @@ impl Render for AccountDialog {
             Button::new("account-back")
                 .ghost()
                 .icon(IconName::ArrowLeft)
-                .label("Back")
+                .label(tr(cx, "Back"))
                 .disabled(running)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.step = Step::Identity;
@@ -844,18 +895,18 @@ impl Render for AccountDialog {
             Button::new("account-remove")
                 .ghost()
                 .icon(IconName::Trash)
-                .label("Remove account…")
+                .label(tr(cx, "Remove account…"))
                 .on_click(cx.listener(|this, _, window, cx| this.remove(window, cx)))
         });
         let test = (self.step == Step::Servers).then(|| {
             Button::new("account-test")
-                .label("Test connection")
+                .label(tr(cx, "Test connection"))
                 .disabled(running)
                 .on_click(cx.listener(|this, _, window, cx| this.run_test(false, window, cx)))
         });
         let primary_label = match (editing, self.step) {
             (true, _) => tr(cx, "Save"),
-            (false, Step::Identity) => "Continue",
+            (false, Step::Identity) => tr(cx, "Continue"),
             (false, Step::Servers) => tr(cx, "Add account"),
         };
         let primary = Button::new("account-primary")
@@ -887,7 +938,7 @@ impl Render for AccountDialog {
                     .child(subtitle),
             );
         let messages = self
-            .render_check()
+            .render_check(cx)
             .map(IntoElement::into_any_element)
             .into_iter()
             .chain(
@@ -1020,7 +1071,10 @@ fn create_account(
             state.set_module(Module::Mail, cx);
             state.select_folder(Some(inbox.id), cx);
         }
-        state.notify_info(format!("Account {email} added: syncing…"), cx);
+        state.notify_info(
+            tr(cx, "Account {} added: syncing…").replace("{}", &email),
+            cx,
+        );
         Some(account_id)
     })
 }

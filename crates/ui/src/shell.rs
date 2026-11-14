@@ -85,7 +85,6 @@ impl Shell {
         // Lets ribbon / palette actions reach the module views.
         cx.set_global(crate::actions::ModuleViews {
             calendar: calendar.downgrade(),
-            people: people.downgrade(),
             tasks: tasks.downgrade(),
         });
 
@@ -108,7 +107,7 @@ impl Shell {
             .update(cx, |state, cx| state.set_module(module, cx));
     }
 
-    fn render_rail(&self, active: Module, t: &Theme) -> impl IntoElement {
+    fn render_rail(&self, active: Module, t: &Theme, cx: &App) -> impl IntoElement {
         let rail_item = |module: Module| {
             let state = self.state.clone();
             let is_active = module == active;
@@ -134,7 +133,7 @@ impl Shell {
                         .size(px(36.))
                         .icon_size(px(18.))
                         .active(is_active)
-                        .tooltip(module.label())
+                        .tooltip(crate::settings::tr(cx, module.label()))
                         .on_click(move |_, _, cx| {
                             state.update(cx, |state, cx| state.set_module(module, cx));
                         }),
@@ -162,7 +161,7 @@ impl Shell {
 
     /// Top bar doubling as the window title bar: empty space drags the window,
     /// caption buttons sit flush right.
-    fn render_top_bar(&self, active: Module, t: &Theme) -> impl IntoElement {
+    fn render_top_bar(&self, active: Module, t: &Theme, cx: &App) -> impl IntoElement {
         div()
             .flex()
             .flex_row()
@@ -183,7 +182,9 @@ impl Shell {
                     .min_w(px(0.))
                     .text_size(TEXT_LG)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(active.label()),
+                    .gap(px(10.))
+                    .child(titlebar::app_icon(px(18.)))
+                    .child(crate::settings::tr(cx, active.label())),
             ))
             .child(div().flex_shrink_0().w(px(420.)).child(self.search.clone()))
             .child(titlebar::drag_area(
@@ -202,7 +203,8 @@ impl Render for Shell {
         }
         let t = theme(cx).clone();
         let active = self.state.read(cx).module();
-        // First run: no account yet → onboarding (Settings stays reachable).
+        // First run: no account yet → onboarding (Settings, the local calendar and tasks
+        // stay reachable).
         let has_account = self
             .state
             .read(cx)
@@ -210,7 +212,13 @@ impl Render for Shell {
             .list_accounts()
             .is_ok_and(|accounts| !accounts.is_empty());
         let content = match active {
-            _ if !has_account && active != Module::Settings => {
+            // People, Calendar and Tasks stay reachable: they work locally without an account.
+            _ if !has_account
+                && !matches!(
+                    active,
+                    Module::Settings | Module::People | Module::Calendar | Module::Tasks
+                ) =>
+            {
                 crate::onboarding::onboarding(self.state.clone(), cx).into_any_element()
             }
             Module::Mail => self.mail.clone().into_any_element(),
@@ -246,7 +254,7 @@ impl Render for Shell {
             .bg(t.background)
             .text_color(t.text)
             .text_size(TEXT_MD)
-            .child(self.render_rail(active, &t))
+            .child(self.render_rail(active, &t, cx))
             .child(
                 div()
                     .flex()
@@ -254,7 +262,7 @@ impl Render for Shell {
                     .flex_1()
                     .min_w(px(0.))
                     .h_full()
-                    .child(self.render_top_bar(active, &t))
+                    .child(self.render_top_bar(active, &t, cx))
                     .child(self.ribbon.clone())
                     .child(
                         div()

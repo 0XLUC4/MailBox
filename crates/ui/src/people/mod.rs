@@ -1,5 +1,6 @@
-//! People module: sidebar (all, favourites, duplicates, groups, categories, import/export)
-//! | virtualized A–Z contact list with search | contact card or editor.
+//! People module: sidebar (all, favourites, recent correspondents, duplicates, groups,
+//! categories, import/export, CardDAV) | virtualized A–Z contact list with search and
+//! multi-select (Ctrl/Shift+click, Delete) | contact card, editor or bulk actions.
 //!
 //! Writes go through `Command::People` (undoable). "Email" and "Schedule meeting" do not
 //! compose or create events here: they emit [`PeopleEvent`]s that the compose and calendar
@@ -12,13 +13,17 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use gpui::component::WindowExt as _;
+use gpui::component::button::{Button as KitButton, ButtonVariants as _};
 use gpui::component::input::{Input, InputEvent, InputState};
+use gpui::component::notification::Notification;
+use gpui::component::tooltip::Tooltip;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use mailbox_core::people::{self, ContactCard, ContactGroup};
+use mailbox_core::people::{self, ContactCard, ContactGroup, Suggestion};
 use mailbox_core::{Address, Command, Id, PeopleCommand, vcard};
 
-use crate::app_state::AppState;
+use crate::app_state::{AppState, Module};
 use crate::components::{Avatar, Button, EmptyState, Icon, IconButton, IconName};
 use crate::theme::{
     ICON_SIZE, ICON_SIZE_SM, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD,
@@ -48,6 +53,8 @@ pub enum PeopleEvent {
 enum Filter {
     All,
     Favorites,
+    /// People you mailed with who are not contacts yet.
+    Recent,
     Duplicates,
     Group(Id),
     Category(String),
@@ -74,17 +81,75 @@ pub struct PeopleView {
     scroll: UniformListScrollHandle,
     /// Decoded photo of the open card, keyed by its data URI.
     photo_cache: Option<(String, Arc<Image>)>,
+    /// Multi-selection (Ctrl/Shift+click), in click order.
+    checked: Vec<Id>,
+    /// Last plainly clicked row: start of a Shift+click range.
+    anchor: Option<Id>,
+    list_focus: FocusHandle,
+    /// Whole module: receives the shared "New" / "Delete" actions (ribbon, Delete key).
+    root_focus: FocusHandle,
+    /// Contact editor: clicks on its non-text parts keep Enter / Esc working.
+    form_focus: FocusHandle,
+    /// People is the current module (to focus it once when it becomes active).
+    active: bool,
+    /// "Recent contacts", recomputed after each store change.
+    suggestions: Option<Arc<Vec<Suggestion>>>,
     _subscriptions: Vec<Subscription>,
 }
 
+/// How many recent correspondents the "Recent contacts" list shows.
+const MAX_SUGGESTIONS: usize = 200;
+
 impl EventEmitter<PeopleEvent> for PeopleView {}
+
+/// The People view, for app-level handlers (ribbon buttons, Delete key) that run while
+/// focus is outside it.
+struct ActiveView(WeakEntity<PeopleView>);
+
+impl Global for ActiveView {}
+
+fn with_view(cx: &mut App, f: impl FnOnce(&mut PeopleView, &mut Context<PeopleView>)) -> bool {
+    let view = cx
+        .try_global::<ActiveView>()
+        .and_then(|active| active.0.upgrade());
+    match view {
+        Some(view) => {
+            view.update(cx, f);
+            true
+        }
+        None => false,
+    }
+}
+
+/// "New contact" from anywhere (ribbon, command palette). False without a People view.
+pub fn new_contact(window: &mut Window, cx: &mut App) -> bool {
+    with_view(cx, |view, cx| {
+        view.state
+            .update(cx, |state, cx| state.set_module(Module::People, cx));
+        view.new_contact(window, cx)
+    })
+}
+
+/// "Delete" while People is active: the selected contacts. False without a People view.
+pub fn delete_selection(window: &mut Window, cx: &mut App) -> bool {
+    with_view(cx, |view, cx| view.delete_selection(window, cx))
+}
 
 impl PeopleView {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search people"));
         let new_group = cx.new(|cx| InputState::new(window, cx).placeholder("New group"));
         let subscriptions = vec![
-            cx.observe(&state, |_, _, cx| cx.notify()),
+            cx.observe_in(&state, window, |this: &mut Self, state, window, cx| {
+                this.suggestions = None;
+                // Entering People focuses it, so "New" / "Delete" (ribbon, keys) reach it.
+                let active = state.read(cx).module() == Module::People;
+                if active && !this.active && this.form.is_none() {
+                    this.root_focus.focus(window, cx);
+                }
+                this.active = active;
+                cx.notify();
+            }),
             cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     cx.notify();
@@ -103,6 +168,7 @@ impl PeopleView {
                 },
             ),
         ];
+        cx.set_global(ActiveView(cx.entity().downgrade()));
         Self {
             state,
             filter: Filter::All,
@@ -113,8 +179,26 @@ impl PeopleView {
             rows: Vec::new(),
             scroll: UniformListScrollHandle::new(),
             photo_cache: None,
+            checked: Vec::new(),
+            anchor: None,
+            list_focus: cx.focus_handle(),
+            root_focus: cx.focus_handle(),
+            form_focus: cx.focus_handle(),
+            active: false,
+            suggestions: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn suggestions(&mut self, cards: &[ContactCard], cx: &App) -> Arc<Vec<Suggestion>> {
+        if let Some(cached) = &self.suggestions {
+            return cached.clone();
+        }
+        let found = people::suggested_contacts(self.state.read(cx).store(), cards, MAX_SUGGESTIONS)
+            .unwrap_or_default();
+        let found = Arc::new(found);
+        self.suggestions = Some(found.clone());
+        found
     }
 
     // ---------- actions ----------
@@ -126,12 +210,95 @@ impl PeopleView {
 
     fn select(&mut self, id: Option<Id>, cx: &mut Context<Self>) {
         self.selected = id;
+        self.anchor = id;
+        self.checked.clear();
         self.form = None;
         cx.notify();
     }
 
+    /// Plain click selects; Ctrl+click toggles; Shift+click extends from the anchor.
+    fn click_row(
+        &mut self,
+        id: Id,
+        modifiers: Modifiers,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.list_focus.focus(window, cx);
+        if modifiers.shift {
+            let position = |target: Id| self.rows.iter().position(|row| row.id == target);
+            let anchor = self.anchor.or(self.selected).and_then(position);
+            if let (Some(from), Some(to)) = (anchor, position(id)) {
+                let (start, end) = (from.min(to), from.max(to));
+                self.checked = self.rows[start..=end].iter().map(|row| row.id).collect();
+                self.form = None;
+                cx.notify();
+                return;
+            }
+        }
+        if modifiers.control || modifiers.platform {
+            if self.checked.is_empty()
+                && let Some(current) = self.selected
+            {
+                self.checked.push(current);
+            }
+            if let Some(index) = self.checked.iter().position(|checked| *checked == id) {
+                self.checked.remove(index);
+            } else {
+                self.checked.push(id);
+            }
+            self.anchor = Some(id);
+            self.selected = self.checked.last().copied();
+            self.form = None;
+            cx.notify();
+            return;
+        }
+        self.select(Some(id), cx);
+    }
+
+    /// Contacts the bulk actions apply to: the multi-selection, else the open contact.
+    fn targets(&self) -> Vec<Id> {
+        if self.checked.is_empty() {
+            self.selected.into_iter().collect()
+        } else {
+            self.checked.clone()
+        }
+    }
+
+    fn on_list_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = window;
+        match event.keystroke.key.as_str() {
+            "escape" if !self.checked.is_empty() => {
+                self.checked.clear();
+                cx.notify();
+            }
+            "a" if event.keystroke.modifiers.control || event.keystroke.modifiers.platform => {
+                self.checked = self.rows.iter().map(|row| row.id).collect();
+                cx.notify();
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
+    }
+
+    /// Delete key / ribbon "Delete": the multi-selection or the open contact.
+    fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.form.is_some() {
+            return;
+        }
+        let targets = self.targets();
+        if targets.is_empty() {
+            self.state.update(cx, |state, cx| {
+                state.notify_info("Select a contact to delete", cx)
+            });
+        } else {
+            self.delete_contacts(targets, window, cx);
+        }
+    }
+
     fn set_filter(&mut self, filter: Filter, cx: &mut Context<Self>) {
         self.filter = filter;
+        self.checked.clear();
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
     }
@@ -142,13 +309,24 @@ impl PeopleView {
         accounts.first().map(|account| account.id)
     }
 
+    /// The first account, or an error toast explaining contacts need one.
+    fn require_account(&mut self, cx: &mut Context<Self>) -> Option<Id> {
+        let account_id = self.account_id(cx);
+        if account_id.is_none() {
+            self.report(
+                "Contacts are stored with an account: add a mail or CardDAV account first."
+                    .to_owned(),
+                cx,
+            );
+        }
+        account_id
+    }
+
     fn new_contact(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(account_id) = self.account_id(cx) else {
-            self.state.update(cx, |state, cx| {
-                state.report_error("Add an account first", cx)
-            });
+        let Some(account_id) = self.require_account(cx) else {
             return;
         };
+        self.checked.clear();
         let mut card = ContactCard::new(account_id);
         if let Filter::Category(category) = &self.filter {
             card.details.categories.push(category.clone());
@@ -161,6 +339,7 @@ impl PeopleView {
         let card = people::contact_card(self.state.read(cx).store(), id);
         match card {
             Ok(Some(card)) => {
+                self.checked.clear();
                 self.form = Some(ContactForm::new(card, window, cx));
                 cx.notify();
             }
@@ -169,6 +348,11 @@ impl PeopleView {
                 .state
                 .update(cx, |state, cx| state.report_error(err, cx)),
         }
+    }
+
+    fn cancel_form(&mut self, cx: &mut Context<Self>) {
+        self.form = None;
+        cx.notify();
     }
 
     fn save_form(&mut self, cx: &mut Context<Self>) {
@@ -202,6 +386,15 @@ impl PeopleView {
         }
         self.form = None;
         self.selected = id;
+        self.anchor = id;
+        let noun = if is_new {
+            "Contact created"
+        } else {
+            "Contact saved"
+        };
+        self.state.update(cx, |state, cx| {
+            state.notify_info(format!("{noun} · Ctrl+Z to undo"), cx)
+        });
         cx.notify();
     }
 
@@ -210,9 +403,93 @@ impl PeopleView {
         contacts.iter().map(|contact| contact.id).max()
     }
 
-    fn delete_contact(&mut self, id: Id, cx: &mut Context<Self>) {
-        if self.run(PeopleCommand::DeleteContacts(vec![id]), cx) {
+    fn delete_contacts(&mut self, ids: Vec<Id>, window: &mut Window, cx: &mut Context<Self>) {
+        let count = ids.len();
+        if self.run(PeopleCommand::DeleteContacts(ids), cx) {
             self.select(None, cx);
+            let message = match count {
+                1 => "Contact deleted".to_owned(),
+                n => format!("{n} contacts deleted"),
+            };
+            self.undo_toast(message, window, cx);
+        }
+    }
+
+    /// Info toast with an Undo button (the last command is undone).
+    fn undo_toast(&self, message: String, window: &mut Window, cx: &mut Context<Self>) {
+        let state = self.state.clone();
+        let notification = Notification::new()
+            .message(message)
+            .action(move |_, _, cx| {
+                let state = state.clone();
+                let notification = cx.entity();
+                KitButton::new("people-undo")
+                    .primary()
+                    .label("Undo")
+                    .on_click(move |_, window, cx| {
+                        state.update(cx, |state, cx| state.undo(cx));
+                        notification
+                            .update(cx, |notification, cx| notification.dismiss(window, cx));
+                    })
+            })
+            .autohide(true);
+        window.push_notification(notification, cx);
+    }
+
+    /// Saves a "Recent contacts" suggestion as a contact, in one click.
+    fn save_suggestion(&mut self, address: Address, cx: &mut Context<Self>) {
+        let Some(account_id) = self.require_account(cx) else {
+            return;
+        };
+        let card = people::card_from_address(&address, account_id);
+        if self.run(PeopleCommand::SaveContact(Box::new(card)), cx) {
+            self.state.update(cx, |state, cx| {
+                state.notify_info(format!("Saved {} to contacts", address.display()), cx)
+            });
+        }
+    }
+
+    /// Adds every target to a group (one undo step).
+    fn add_to_group(&mut self, group_id: Id, ids: Vec<Id>, cx: &mut Context<Self>) {
+        let group = self
+            .state
+            .read(cx)
+            .store()
+            .get::<ContactGroup>(group_id)
+            .ok()
+            .flatten();
+        let Some(mut group) = group else {
+            return;
+        };
+        let before = group.members.len();
+        for id in ids {
+            if !group.members.contains(&id) {
+                group.members.push(id);
+            }
+        }
+        let added = group.members.len() - before;
+        let name = group.name.clone();
+        if added > 0 && self.run(PeopleCommand::SaveGroup(Box::new(group)), cx) {
+            self.state.update(cx, |state, cx| {
+                state.notify_info(format!("Added {added} to {name}"), cx)
+            });
+        }
+    }
+
+    fn compose_to(&mut self, ids: &[Id], cx: &mut Context<Self>) {
+        let store = self.state.read(cx).store();
+        let recipients: Vec<Address> = ids
+            .iter()
+            .filter_map(|id| people::contact_card(store, *id).ok().flatten())
+            .filter_map(|card| {
+                card.primary_email()
+                    .map(|email| Address::new(card.name(), email))
+            })
+            .collect();
+        if recipients.is_empty() {
+            self.report("None of these contacts has an email address".to_owned(), cx);
+        } else {
+            self.emit_compose(recipients, cx);
         }
     }
 
@@ -294,17 +571,14 @@ impl PeopleView {
     // ---------- import / export ----------
 
     fn import(&mut self, cx: &mut Context<Self>) {
-        let Some(account_id) = self.account_id(cx) else {
-            self.state.update(cx, |state, cx| {
-                state.report_error("Add an account first", cx)
-            });
+        let Some(account_id) = self.require_account(cx) else {
             return;
         };
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Import contacts".into()),
+            prompt: Some("Import contacts (.vcf)".into()),
         });
         cx.spawn(async move |this, cx| {
             let paths = match picked.await {
@@ -352,9 +626,11 @@ impl PeopleView {
             .collect();
         self.state.update(cx, |state, cx| {
             if state.run(Command::Batch(commands), cx) {
-                state.notify_info(format!("Imported {count} contacts"), cx);
+                let noun = if count == 1 { "contact" } else { "contacts" };
+                state.notify_info(format!("Imported {count} {noun} · Ctrl+Z to undo"), cx);
             }
         });
+        self.set_filter(Filter::All, cx);
     }
 
     /// Exports `ids` (or every contact) to a `.vcf` file chosen by the user.
@@ -421,7 +697,7 @@ impl PeopleView {
         cards
             .iter()
             .filter(|card| match &self.filter {
-                Filter::All | Filter::Duplicates => true,
+                Filter::All | Filter::Duplicates | Filter::Recent => true,
                 Filter::Favorites => card.contact.favorite,
                 Filter::Group(_) => members.is_some_and(|members| members.contains(&card.id())),
                 Filter::Category(category) => card.details.categories.contains(category),
@@ -436,6 +712,7 @@ impl PeopleView {
         cards: &[ContactCard],
         groups: &[ContactGroup],
         duplicates: usize,
+        recent: usize,
         t: &Theme,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -479,6 +756,14 @@ impl PeopleView {
                 "Favorites".into(),
                 favorites,
                 Filter::Favorites,
+                cx,
+            ),
+            filter_row(
+                "people-recent".into(),
+                IconName::Clock,
+                "Recent contacts".into(),
+                recent,
+                Filter::Recent,
                 cx,
             ),
         ];
@@ -630,6 +915,345 @@ impl PeopleView {
                             .on_click(cx.listener(|this, _, _, cx| this.export(None, cx))),
                     ),
             )
+            .child(self.render_carddav(t, cx))
+    }
+
+    /// CardDAV status + "Sync now", or "Connect CardDAV account" when none is set up.
+    fn render_carddav(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let row = div()
+            .flex()
+            .items_center()
+            .gap(SPACE_1)
+            .px(SPACE_1)
+            .pt(SPACE_1);
+        match crate::dav_bridge::status(cx) {
+            Some(status) => row
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .text_size(TEXT_XS)
+                        .text_color(t.text_subtle)
+                        .whitespace_normal()
+                        .child(status),
+                )
+                .child(
+                    IconButton::new("carddav-sync", IconName::RefreshCw)
+                        .icon_size(ICON_SIZE_SM)
+                        .tooltip("Sync contacts now")
+                        .on_click(|_, _, cx| crate::dav_bridge::sync_now(cx)),
+                ),
+            None => row.child(
+                Button::new("carddav-connect")
+                    .ghost()
+                    .compact()
+                    .icon(IconName::RefreshCw)
+                    .label("Connect CardDAV")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        crate::dav_bridge::open_add_dav_account(this.state.clone(), window, cx)
+                    })),
+            ),
+        }
+    }
+
+    /// First-run / empty list: what contacts are and how to get some.
+    fn render_empty(&self, has_account: bool, recent: usize, cx: &mut Context<Self>) -> AnyElement {
+        let carddav = Button::new("empty-carddav")
+            .icon(IconName::RefreshCw)
+            .label("Connect CardDAV account")
+            .on_click(cx.listener(|this, _, window, cx| {
+                crate::dav_bridge::open_add_dav_account(this.state.clone(), window, cx)
+            }));
+        if !has_account {
+            return EmptyState::new(IconName::Contact, "No account yet")
+                .description(
+                    "Contacts are kept with an account. Add a mail account, or connect a \
+                     CardDAV address book (iCloud, Fastmail, Nextcloud…).",
+                )
+                .action(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(SPACE_2)
+                        .child(
+                            Button::new("empty-add-account")
+                                .primary()
+                                .icon(IconName::UserPlus)
+                                .label("Add mail account")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    crate::dialogs::account::open_add_account(
+                                        this.state.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(carddav),
+                )
+                .into_any_element();
+        }
+        let description = if recent > 0 {
+            format!(
+                "Create one, import a .vcf file or sync an address book. \
+                 {recent} people from your mail are waiting in Recent contacts."
+            )
+        } else {
+            "Create one, import a .vcf file or sync an address book.".to_owned()
+        };
+        EmptyState::new(IconName::Users, "No contacts yet")
+            .description(description)
+            .action(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(SPACE_2)
+                    .child(
+                        Button::new("empty-new")
+                            .primary()
+                            .icon(IconName::UserPlus)
+                            .label("New contact")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.new_contact(window, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("empty-import")
+                            .icon(IconName::Download)
+                            .label("Import .vcf")
+                            .on_click(cx.listener(|this, _, _, cx| this.import(cx))),
+                    )
+                    .child(carddav)
+                    .when(recent > 0, |el| {
+                        el.child(
+                            Button::new("empty-recent")
+                                .ghost()
+                                .icon(IconName::Clock)
+                                .label("See recent contacts")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_filter(Filter::Recent, cx)
+                                })),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// "Recent contacts": correspondents not saved yet, each savable in one click.
+    fn render_recent(
+        &self,
+        suggestions: &[Suggestion],
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let query = self.search.read(cx).value().trim().to_lowercase();
+        let shown: Vec<Suggestion> = suggestions
+            .iter()
+            .filter(|suggestion| {
+                query.is_empty()
+                    || suggestion.address.email.to_lowercase().contains(&query)
+                    || suggestion.address.name.to_lowercase().contains(&query)
+            })
+            .cloned()
+            .collect();
+        if shown.is_empty() {
+            return EmptyState::new(IconName::Clock, "No recent contacts")
+                .description("People you write to or hear from show up here until you save them.")
+                .into_any_element();
+        }
+        div()
+            .id("recent-contacts")
+            .size_full()
+            .overflow_y_scroll()
+            .py(SPACE_1)
+            .children(shown.into_iter().enumerate().map(|(index, suggestion)| {
+                let address = suggestion.address.clone();
+                let to = vec![address.clone()];
+                let name = address.display().to_owned();
+                let noun = if suggestion.messages == 1 {
+                    "email"
+                } else {
+                    "emails"
+                };
+                let meta = format!(
+                    "{} {noun} · last {}",
+                    suggestion.messages,
+                    suggestion
+                        .last
+                        .with_timezone(&chrono::Local)
+                        .format("%-d %b %Y")
+                );
+                div()
+                    .id(("recent", index as u64))
+                    .tooltip({
+                        let meta = meta.clone();
+                        move |window, cx| Tooltip::new(meta.clone()).build(window, cx)
+                    })
+                    .flex()
+                    .items_center()
+                    .gap(SPACE_3)
+                    .h(ROW_HEIGHT)
+                    .mx(SPACE_2)
+                    .px(SPACE_2)
+                    .rounded(RADIUS_MD)
+                    .hover(|s| s.bg(t.hover))
+                    .child(Avatar::new(name.clone()).size(px(32.)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(div().truncate().text_size(TEXT_MD).child(name))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(TEXT_SM)
+                                    .text_color(t.text_muted)
+                                    .child(if address.name.trim().is_empty() {
+                                        meta
+                                    } else {
+                                        address.email.clone()
+                                    }),
+                            ),
+                    )
+                    .child(
+                        IconButton::new(("recent-email", index as u64), IconName::Mail)
+                            .icon_size(ICON_SIZE_SM)
+                            .tooltip("Email")
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.emit_compose(to.clone(), cx)
+                                }),
+                            ),
+                    )
+                    .child(
+                        Button::new(("recent-save", index as u64))
+                            .compact()
+                            .icon(IconName::UserPlus)
+                            .label("Save")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.save_suggestion(address.clone(), cx)
+                            })),
+                    )
+            }))
+            .into_any_element()
+    }
+
+    /// Detail pane for a multi-selection: email, add to group, export, delete.
+    fn render_bulk(
+        &self,
+        groups: &[ContactGroup],
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let ids = self.checked.clone();
+        let count = ids.len();
+        let (email_ids, export_ids, delete_ids) = (ids.clone(), ids.clone(), ids.clone());
+        let group_chips: Vec<AnyElement> = groups
+            .iter()
+            .map(|group| {
+                let (group_id, ids) = (group.id, ids.clone());
+                let all_in = ids.iter().all(|id| group.members.contains(id));
+                card::chip(
+                    ("bulk-group", group_id as u64),
+                    group.name.clone(),
+                    all_in,
+                    t,
+                )
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.add_to_group(group_id, ids.clone(), cx)),
+                )
+                .into_any_element()
+            })
+            .collect();
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap(SPACE_3)
+            .p(SPACE_3)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(64.))
+                    .rounded(px(32.))
+                    .bg(t.accent_subtle)
+                    .text_color(t.accent)
+                    .text_size(TEXT_LG)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(count.to_string()),
+            )
+            .child(
+                div()
+                    .text_size(TEXT_LG)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("{count} contacts selected")),
+            )
+            .child(
+                div()
+                    .text_size(TEXT_SM)
+                    .text_color(t.text_subtle)
+                    .child("Ctrl+click to add or remove · Shift+click for a range · Esc to clear"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap(SPACE_2)
+                    .child(
+                        Button::new("bulk-email")
+                            .primary()
+                            .icon(IconName::Mail)
+                            .label("Email all")
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.compose_to(&email_ids, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("bulk-export")
+                            .icon(IconName::Upload)
+                            .label("Export")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.export(Some(export_ids.clone()), cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("bulk-delete")
+                            .danger()
+                            .icon(IconName::Trash)
+                            .label("Delete")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.delete_contacts(delete_ids.clone(), window, cx)
+                            })),
+                    ),
+            )
+            .when(!group_chips.is_empty(), |el| {
+                el.child(
+                    div()
+                        .pt(SPACE_2)
+                        .text_size(TEXT_XS)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.text_subtle)
+                        .child("ADD TO GROUP"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .justify_center()
+                        .max_w(px(420.))
+                        .gap(SPACE_1)
+                        .children(group_chips),
+                )
+            })
+            .into_any_element()
     }
 
     fn render_list_header(
@@ -652,6 +1276,7 @@ impl PeopleView {
                 div()
                     .flex()
                     .items_center()
+                    .h(px(28.))
                     .gap(SPACE_2)
                     .child(
                         div()
@@ -671,6 +1296,7 @@ impl PeopleView {
                     .when(!group_emails.is_empty(), |el| {
                         el.child(
                             IconButton::new("email-group", IconName::Mail)
+                                .size(px(28.))
                                 .tooltip("Email everyone")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.emit_compose(group_emails.clone(), cx)
@@ -695,9 +1321,11 @@ impl PeopleView {
             return div().h(ROW_HEIGHT).into_any_element();
         };
         let id = row.id;
-        let selected = self.selected == Some(id);
+        let checked = self.checked.contains(&id);
+        let selected = checked || (self.checked.is_empty() && self.selected == Some(id));
         div()
             .id(("contact-row", id as u64))
+            .w_full()
             .h(ROW_HEIGHT)
             .flex()
             .items_center()
@@ -728,7 +1356,23 @@ impl PeopleView {
                     .cursor_pointer()
                     .when(selected, |el| el.bg(t.accent_subtle))
                     .when(!selected, |el| el.hover(|s| s.bg(t.hover)))
-                    .child(Avatar::new(row.name.clone()).size(px(32.)))
+                    .child(if checked {
+                        div()
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
+                            .size(px(32.))
+                            .rounded(px(16.))
+                            .bg(t.accent)
+                            .text_color(t.on_accent)
+                            .child(Icon::new(IconName::Check).size(ICON_SIZE))
+                            .into_any_element()
+                    } else {
+                        Avatar::new(row.name.clone())
+                            .size(px(32.))
+                            .into_any_element()
+                    })
                     .child(
                         div()
                             .flex()
@@ -761,7 +1405,9 @@ impl PeopleView {
                         )
                     }),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.select(Some(id), cx)))
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                this.click_row(id, event.modifiers(), window, cx)
+            }))
             .into_any_element()
     }
 
@@ -882,6 +1528,10 @@ impl Render for PeopleView {
         let cards = people::list_contact_cards(store).unwrap_or_default();
         let groups = people::list_contact_groups(store).unwrap_or_default();
         let duplicates = people::find_duplicates(&cards).len();
+        let has_account = store
+            .list_accounts()
+            .is_ok_and(|accounts| !accounts.is_empty());
+        let suggestions = self.suggestions(&cards, cx);
         let stale_filter = match &self.filter {
             Filter::Duplicates => duplicates == 0,
             Filter::Group(id) => !groups.iter().any(|group| group.id == *id),
@@ -922,6 +1572,7 @@ impl Render for PeopleView {
         let (title, group_emails): (SharedString, Vec<Address>) = match &self.filter {
             Filter::All => ("All contacts".into(), Vec::new()),
             Filter::Favorites => ("Favorites".into(), Vec::new()),
+            Filter::Recent => ("Recent contacts".into(), Vec::new()),
             Filter::Duplicates => ("Duplicates".into(), Vec::new()),
             Filter::Category(category) => (category.clone().into(), Vec::new()),
             Filter::Group(id) => (
@@ -939,16 +1590,18 @@ impl Render for PeopleView {
             ),
         };
 
+        // Drop selections of contacts that no longer exist (deleted, merged, synced away).
+        self.checked
+            .retain(|id| cards.iter().any(|card| card.id() == *id));
         let list: AnyElement = if self.filter == Filter::Duplicates {
             self.render_duplicates(&cards, &t, cx)
+        } else if self.filter == Filter::Recent {
+            self.render_recent(&suggestions, &t, cx)
+        } else if cards.is_empty() {
+            self.render_empty(has_account, suggestions.len(), cx)
         } else if self.rows.is_empty() {
-            let (title, description) = if cards.is_empty() {
-                ("No contacts yet", "Create a contact or import a .vcf file.")
-            } else {
-                ("Nobody here", "Try another search or filter.")
-            };
-            EmptyState::new(IconName::Users, title)
-                .description(description)
+            EmptyState::new(IconName::Users, "Nobody here")
+                .description("Try another search or filter.")
                 .into_any_element()
         } else {
             div()
@@ -975,6 +1628,14 @@ impl Render for PeopleView {
 
         let detail: AnyElement = if self.form.is_some() {
             self.render_form(&t, window, cx).into_any_element()
+        } else if self.checked.len() > 1 {
+            self.render_bulk(&groups, &t, cx)
+        } else if self.filter == Filter::Recent {
+            EmptyState::new(IconName::UserPlus, "Save people you mail with")
+                .description(
+                    "Everyone you write to or hear from appears here until saved. Save adds them to your contacts and to compose suggestions.",
+                )
+                .into_any_element()
         } else if let Some(card) = self
             .selected
             .and_then(|id| cards.iter().find(|card| card.id() == id))
@@ -991,8 +1652,24 @@ impl Render for PeopleView {
                 .into_any_element()
         };
 
-        let count = self.rows.len();
+        let count = match self.filter {
+            Filter::Recent => suggestions.len(),
+            Filter::Duplicates => duplicates,
+            _ => self.rows.len(),
+        };
         div()
+            .id("people")
+            .track_focus(&self.root_focus)
+            .on_action(
+                cx.listener(|this, _: &crate::actions::NewContact, window, cx| {
+                    this.new_contact(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::actions::DeleteSelection, window, cx| {
+                    this.delete_selection(window, cx)
+                }),
+            )
             .flex()
             .flex_row()
             .size_full()
@@ -1004,7 +1681,14 @@ impl Render for PeopleView {
                     .bg(t.surface)
                     .border_r_1()
                     .border_color(t.border_subtle)
-                    .child(self.render_sidebar(&cards, &groups, duplicates, &t, cx)),
+                    .child(self.render_sidebar(
+                        &cards,
+                        &groups,
+                        duplicates,
+                        suggestions.len(),
+                        &t,
+                        cx,
+                    )),
             )
             .child(
                 div()
@@ -1016,7 +1700,17 @@ impl Render for PeopleView {
                     .border_r_1()
                     .border_color(t.border_subtle)
                     .child(self.render_list_header(title, count, group_emails, &t, cx))
-                    .child(div().flex_1().min_h(px(0.)).child(list)),
+                    .child(
+                        div()
+                            .id("contact-list-pane")
+                            .track_focus(&self.list_focus)
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                this.on_list_key(event, window, cx)
+                            }))
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(list),
+                    ),
             )
             .child(div().flex_1().min_w(px(0.)).h_full().child(detail))
     }
@@ -1101,20 +1795,4 @@ fn decode_photo(uri: &str) -> Option<Arc<Image>> {
         _ => return None,
     };
     Some(Arc::new(Image::from_bytes(format, bytes)))
-}
-
-/// Ribbon / command palette entry points (routed by `crate::actions`).
-impl PeopleView {
-    pub(crate) fn action_new_contact(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_contact(window, cx);
-    }
-
-    /// Deletes the selected contact; false when nothing is selected.
-    pub(crate) fn action_delete(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(id) = self.selected else {
-            return false;
-        };
-        self.delete_contact(id, cx);
-        true
-    }
 }

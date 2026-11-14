@@ -109,6 +109,7 @@ impl PeopleView {
         let favorite = contact.favorite;
         let compose_to = recipients.clone();
         let meet_with = recipients.clone();
+        let first_phone = contact.phones.first().cloned();
         let actions = div()
             .flex()
             .items_center()
@@ -124,6 +125,17 @@ impl PeopleView {
                             this.emit_compose(compose_to.clone(), cx)
                         }),
                     ),
+            )
+            .child(
+                Button::new("card-call")
+                    .icon(IconName::Phone)
+                    .label("Call")
+                    .disabled(first_phone.is_none())
+                    .on_click(move |_, _, cx| {
+                        if let Some(phone) = &first_phone {
+                            cx.open_url(&tel_url(phone));
+                        }
+                    }),
             )
             .child(
                 Button::new("card-meeting")
@@ -168,36 +180,42 @@ impl PeopleView {
             .child(
                 IconButton::new("card-delete", IconName::Trash)
                     .tooltip("Delete contact")
-                    .on_click(cx.listener(move |this, _, _, cx| this.delete_contact(id, cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.delete_contacts(vec![id], window, cx)
+                    })),
             );
 
         // ----- contact info -----
         let mut info: Vec<AnyElement> = Vec::new();
         for (index, email) in contact.emails.iter().enumerate() {
             let to = vec![Address::new(name.clone(), email.clone())];
+            let label = field_label(details.email_label(index), "Email");
             info.push(
                 info_row(
                     ("card-email-row", index as u64),
                     IconName::Mail,
                     email.clone(),
-                    "Email",
+                    label,
                     t,
                 )
+                .child(self.copy_button(("copy-email", index as u64), email.clone(), cx))
                 .on_click(cx.listener(move |this, _, _, cx| this.emit_compose(to.clone(), cx)))
                 .into_any_element(),
             );
         }
         for (index, phone) in contact.phones.iter().enumerate() {
-            let value = phone.clone();
+            let url = tel_url(phone);
+            let label = field_label(details.phone_label(index), "Phone");
             info.push(
                 info_row(
                     ("card-phone-row", index as u64),
                     IconName::Phone,
                     phone.clone(),
-                    "Phone",
+                    label,
                     t,
                 )
-                .on_click(cx.listener(move |this, _, _, cx| this.copy(value.clone(), cx)))
+                .child(self.copy_button(("copy-phone", index as u64), phone.clone(), cx))
+                .on_click(move |_, _, cx| cx.open_url(&url))
                 .into_any_element(),
             );
         }
@@ -213,10 +231,11 @@ impl PeopleView {
                 info_row(
                     ("card-address-row", index as u64),
                     IconName::MapPin,
-                    value,
+                    value.clone(),
                     label,
                     t,
                 )
+                .child(self.copy_button(("copy-address", index as u64), value, cx))
                 .on_click(cx.listener(move |this, _, _, cx| this.copy(copied.clone(), cx)))
                 .into_any_element(),
             );
@@ -404,6 +423,29 @@ impl PeopleView {
         Some(image)
     }
 
+    /// Small "Copy" button shown on row hover (does not trigger the row's own click).
+    fn copy_button(
+        &self,
+        id: impl Into<ElementId>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex_shrink_0()
+            .opacity(0.)
+            .group_hover("info-row", |style| style.opacity(1.))
+            .child(
+                IconButton::new(id, IconName::Copy)
+                    .size(px(24.))
+                    .icon_size(ICON_SIZE_SM)
+                    .tooltip("Copy")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.copy(text.clone(), cx)
+                    })),
+            )
+    }
+
     fn copy(&mut self, text: String, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         self.state
@@ -457,6 +499,7 @@ fn info_row(
 ) -> Stateful<Div> {
     div()
         .id(id)
+        .group("info-row")
         .flex()
         .items_center()
         .gap(SPACE_3)
@@ -470,6 +513,7 @@ fn info_row(
             div()
                 .flex()
                 .flex_col()
+                .flex_1()
                 .min_w(px(0.))
                 .child(div().truncate().text_size(TEXT_MD).child(value))
                 .child(
@@ -556,6 +600,24 @@ fn empty_note(text: &'static str, t: &Theme) -> impl IntoElement {
         .text_size(TEXT_SM)
         .text_color(t.text_subtle)
         .child(text)
+}
+
+/// "work" -> "Work"; `fallback` when there is no label.
+fn field_label(label: &str, fallback: &str) -> String {
+    if label.is_empty() {
+        fallback.to_owned()
+    } else {
+        capitalize(label)
+    }
+}
+
+/// `tel:` URL with only the characters dialers understand.
+fn tel_url(phone: &str) -> String {
+    let number: String = phone
+        .chars()
+        .filter(|c| c.is_ascii_digit() || matches!(c, '+' | '*' | '#'))
+        .collect();
+    format!("tel:{number}")
 }
 
 fn capitalize(text: &str) -> String {

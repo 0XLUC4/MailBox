@@ -68,7 +68,7 @@ pub struct RulesDialog {
 impl RulesDialog {
     fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = |placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>| {
-            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, placeholder)))
         };
         let account_id = current_account(&state, cx);
         let subscription = cx.observe(&state, |_, _, cx| cx.notify());
@@ -210,7 +210,7 @@ impl RulesDialog {
         let rule = match self.build_rule(cx) {
             Ok(rule) => rule,
             Err(message) => {
-                self.error = Some(message.into());
+                self.error = Some(tr(cx, message).into());
                 return cx.notify();
             }
         };
@@ -219,7 +219,7 @@ impl RulesDialog {
         let saved = self.state.update(cx, |state, cx| {
             let saved = state.run(Command::SaveRule(Box::new(rule)), cx);
             if saved {
-                state.notify_info("Rule saved", cx);
+                state.notify_info(tr(cx, "Rule saved"), cx);
             }
             saved
         });
@@ -275,8 +275,10 @@ impl RulesDialog {
         let id = rule.id;
         confirm(
             Confirm {
-                title: "Delete rule?".into(),
-                description: format!("\u{201c}{}\u{201d} will be removed.", rule.name).into(),
+                title: tr(cx, "Delete rule?").into(),
+                description: tr(cx, "“{}” will be removed.")
+                    .replace("{}", &rule.name)
+                    .into(),
                 ok: tr(cx, "Delete").into(),
                 danger: true,
             },
@@ -369,7 +371,7 @@ impl RulesDialog {
                         .size(px(22.))
                         .icon_size(ICON_SIZE_SM)
                         .disabled(index == 0)
-                        .tooltip("Run earlier")
+                        .tooltip(tr(cx, "Run earlier"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.reorder(&up_ids, index, index.saturating_sub(1), cx)
                         })),
@@ -379,7 +381,7 @@ impl RulesDialog {
                         .size(px(22.))
                         .icon_size(ICON_SIZE_SM)
                         .disabled(index + 1 == rules.len())
-                        .tooltip("Run later")
+                        .tooltip(tr(cx, "Run later"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.reorder(&down_ids, index, index + 1, cx)
                         })),
@@ -407,7 +409,10 @@ impl RulesDialog {
                         .p(SPACE_3)
                         .text_size(TEXT_SM)
                         .text_color(t.text_muted)
-                        .child("No rules yet. Rules file, flag or categorize mail automatically."),
+                        .child(tr(
+                            cx,
+                            "No rules yet. Rules file, flag or categorize mail automatically.",
+                        )),
                 )
             })
     }
@@ -471,7 +476,7 @@ impl RulesDialog {
                 .child(label)
         };
 
-        let folder_chips = std::iter::once((None, "Don't move".to_owned()))
+        let folder_chips = std::iter::once((None, tr(cx, "Don't move").to_owned()))
             .chain(
                 folders
                     .iter()
@@ -490,7 +495,7 @@ impl RulesDialog {
                 })
             })
             .collect::<Vec<_>>();
-        let category_chips = std::iter::once((None, "None".to_owned(), None))
+        let category_chips = std::iter::once((None, tr(cx, "None").to_owned(), None))
             .chain(categories.iter().map(|category| {
                 (
                     Some(category.name.clone()),
@@ -531,14 +536,14 @@ impl RulesDialog {
             .flex()
             .flex_col()
             .gap(SPACE_4)
-            .child(field("Name", Input::new(&self.name), cx))
+            .child(field(tr(cx, "Name"), Input::new(&self.name), cx))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(SPACE_2)
                     .child(section_title(
-                        "WHEN A MESSAGE ARRIVES THAT MATCHES ALL OF",
+                        tr(cx, "WHEN A MESSAGE ARRIVES THAT MATCHES ALL OF"),
                         cx,
                     ))
                     .child(
@@ -547,12 +552,12 @@ impl RulesDialog {
                             .flex_row()
                             .gap(SPACE_2)
                             .child(div().flex_1().child(field(
-                                "From contains",
+                                tr(cx, "From contains"),
                                 Input::new(&self.from),
                                 cx,
                             )))
                             .child(div().flex_1().child(field(
-                                "To contains",
+                                tr(cx, "To contains"),
                                 Input::new(&self.to),
                                 cx,
                             ))),
@@ -563,18 +568,18 @@ impl RulesDialog {
                             .flex_row()
                             .gap(SPACE_2)
                             .child(div().flex_1().child(field(
-                                "Subject contains",
+                                tr(cx, "Subject contains"),
                                 Input::new(&self.subject),
                                 cx,
                             )))
                             .child(div().flex_1().child(field(
-                                "Body contains",
+                                tr(cx, "Body contains"),
                                 Input::new(&self.body),
                                 cx,
                             ))),
                     )
                     .child(toggle(
-                        "Has an attachment",
+                        tr(cx, "Has an attachment"),
                         self.switch(
                             "has-attachment",
                             draft.has_attachment,
@@ -583,10 +588,10 @@ impl RulesDialog {
                         ),
                     ))
                     .child(field(
-                        "Importance is",
+                        tr(cx, "Importance is"),
                         segmented(
                             "importance-filter",
-                            &IMPORTANCE_FILTER,
+                            &IMPORTANCE_FILTER.map(|(label, value)| (tr(cx, label), value)),
                             draft.importance,
                             set_importance_filter,
                             cx,
@@ -599,7 +604,7 @@ impl RulesDialog {
                     .flex()
                     .flex_col()
                     .gap(SPACE_2)
-                    .child(section_title("DO THE FOLLOWING", cx))
+                    .child(section_title(tr(cx, "DO THE FOLLOWING"), cx))
                     .child(field(
                         tr(cx, "Move to folder"),
                         div()
@@ -621,18 +626,18 @@ impl RulesDialog {
                         cx,
                     ))
                     .child(toggle(
-                        "Mark as read",
+                        tr(cx, "Mark as read"),
                         self.switch("mark-read", draft.mark_read, |d, v| d.mark_read = v, cx),
                     ))
                     .child(toggle(
-                        "Flag",
+                        tr(cx, "Flag"),
                         self.switch("flag", draft.flag, |d, v| d.flag = v, cx),
                     ))
                     .child(field(
-                        "Set importance",
+                        tr(cx, "Set importance"),
                         segmented(
                             "importance-set",
-                            &IMPORTANCE_SET,
+                            &IMPORTANCE_SET.map(|(label, value)| (tr(cx, label), value)),
                             draft.set_importance,
                             set_importance_action,
                             cx,
@@ -640,11 +645,11 @@ impl RulesDialog {
                         cx,
                     ))
                     .child(toggle(
-                        "Delete (move to Trash)",
+                        tr(cx, "Delete (move to Trash)"),
                         self.switch("delete", draft.delete, |d, v| d.delete = v, cx),
                     ))
                     .child(toggle(
-                        "Stop processing more rules",
+                        tr(cx, "Stop processing more rules"),
                         self.switch("stop", draft.stop, |d, v| d.stop = v, cx),
                     )),
             )
@@ -712,8 +717,8 @@ impl Render for RulesDialog {
             None => div()
                 .size_full()
                 .child(
-                    EmptyState::new(IconName::ListFilter, "Select a rule")
-                        .description("Pick a rule to edit it, or create a new one."),
+                    EmptyState::new(IconName::ListFilter, tr(cx, "Select a rule"))
+                        .description(tr(cx, "Pick a rule to edit it, or create a new one.")),
                 )
                 .into_any_element(),
         };
@@ -746,7 +751,7 @@ impl Render for RulesDialog {
                         Button::new("rules-run")
                             .ghost()
                             .icon(IconName::WandSparkles)
-                            .label("Run on current folder")
+                            .label(tr(cx, "Run on current folder"))
                             .disabled(rules.is_empty())
                             .on_click(cx.listener(|this, _, _, cx| run_rules(&this.state, cx))),
                     )
@@ -754,7 +759,7 @@ impl Render for RulesDialog {
                         Button::new("rules-new")
                             .primary()
                             .icon(IconName::Plus)
-                            .label("New rule")
+                            .label(tr(cx, "New rule"))
                             .disabled(self.account_id.is_none())
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.edit(None, window, cx)),
@@ -809,7 +814,7 @@ impl Render for RulesDialog {
                                     cx.notify();
                                 })),
                         )
-                        .child(div().text_size(TEXT_SM).child("Enabled"))
+                        .child(div().text_size(TEXT_SM).child(tr(cx, "Enabled")))
                     })
                     .child(div().flex_1())
                     .child(

@@ -1,14 +1,19 @@
 //! First-run screen, shown by the shell while no account exists: one call to action that opens
-//! the "Add account" wizard.
+//! the "Add account" wizard, a link to calendar/contacts-only accounts and a language switch.
 
 use gpui::*;
+use mailbox_core::settings::Language;
 
 use crate::app_state::AppState;
 use crate::components::{Button, Icon, IconName};
+use crate::dav_bridge::open_add_dav_account;
 use crate::dialogs::account::open_add_account;
+use crate::settings::controls::segmented;
+use crate::settings::{prefs, tr, update_settings};
 use crate::theme::{
     ICON_SIZE, RADIUS_XL, SPACE_1, SPACE_2, SPACE_3, SPACE_6, TEXT_2XL, TEXT_MD, TEXT_SM, theme,
 };
+use crate::titlebar::app_icon;
 
 /// What connecting an account gives, as (icon, text) rows.
 const POINTS: [(IconName, &str); 3] = [
@@ -44,11 +49,21 @@ pub fn onboarding(state: Entity<AppState>, cx: &App) -> Div {
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.))
                     .text_size(TEXT_SM)
                     .text_color(t.text_muted)
-                    .child(text),
+                    .child(tr(cx, text)),
             )
     });
+    let language_state = state.clone();
+    let language = segmented(
+        "onboarding-language",
+        &[("English", Language::En), ("Français", Language::Fr)],
+        prefs(cx).language,
+        move |value, _, cx| update_settings(&language_state, cx, |s| s.language = value),
+        cx,
+    );
+    let dav_state = state.clone();
     div()
         .size_full()
         .flex()
@@ -57,7 +72,7 @@ pub fn onboarding(state: Entity<AppState>, cx: &App) -> Div {
         .bg(t.background)
         .child(
             div()
-                .w(px(440.))
+                .w(px(460.))
                 .flex()
                 .flex_col()
                 .gap(SPACE_6)
@@ -66,17 +81,7 @@ pub fn onboarding(state: Entity<AppState>, cx: &App) -> Div {
                 .border_1()
                 .border_color(t.border_subtle)
                 .bg(t.elevated)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(48.))
-                        .rounded(RADIUS_XL)
-                        .bg(t.accent_subtle)
-                        .text_color(t.accent)
-                        .child(Icon::new(IconName::MailPlus).size(px(24.))),
-                )
+                .child(app_icon(px(56.)))
                 .child(
                     div()
                         .flex()
@@ -86,24 +91,62 @@ pub fn onboarding(state: Entity<AppState>, cx: &App) -> Div {
                             div()
                                 .text_size(TEXT_2XL)
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("Connect your email"),
+                                .child(tr(cx, "Connect your email")),
                         )
-                        .child(div().text_size(TEXT_MD).text_color(t.text_muted).child(
-                            "Add an account to start. Enter your address and password: \
-                                     server settings are detected for you.",
-                        )),
+                        .child(div().text_size(TEXT_MD).text_color(t.text_muted).child(tr(
+                            cx,
+                            "Add an account to start. Enter your address and password: server \
+                             settings are detected for you.",
+                        ))),
                 )
                 .child(div().flex().flex_col().gap(SPACE_2).children(points))
                 .child(
-                    div().flex().flex_row().child(
-                        Button::new("onboarding-add-account")
-                            .primary()
-                            .icon(IconName::Plus)
-                            .label("Add account")
-                            .on_click(move |_, window, cx| {
-                                open_add_account(state.clone(), window, cx)
-                            }),
-                    ),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(SPACE_2)
+                        .child(
+                            Button::new("onboarding-add-account")
+                                .primary()
+                                .icon(IconName::Plus)
+                                .label(tr(cx, "Add account"))
+                                .on_click(move |_, window, cx| {
+                                    open_add_account(state.clone(), window, cx)
+                                }),
+                        )
+                        .child(
+                            Button::new("onboarding-add-dav")
+                                .ghost()
+                                .icon(IconName::CalendarDays)
+                                .label(tr(cx, "Calendar & contacts only"))
+                                .on_click(move |_, window, cx| {
+                                    open_add_dav_account(dav_state.clone(), window, cx)
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(SPACE_2)
+                        .pt(SPACE_3)
+                        .border_t_1()
+                        .border_color(t.border_subtle)
+                        .child(
+                            Icon::new(IconName::Globe)
+                                .size(ICON_SIZE)
+                                .text_color(t.text_muted),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(TEXT_SM)
+                                .text_color(t.text_muted)
+                                .child(tr(cx, "Language")),
+                        )
+                        .child(language),
                 ),
         )
 }

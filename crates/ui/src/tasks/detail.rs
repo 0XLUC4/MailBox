@@ -2,7 +2,9 @@
 //! email, notes) and the panel for a flagged message that has no task yet.
 
 use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Timelike, Utc};
+use gpui::component::date_picker::{DatePicker, DatePickerEvent, DatePickerState};
 use gpui::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui::component::time_field::TimePrecision;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::todo::{self, Repeat, Step, TaskCard, TaskList};
@@ -22,7 +24,8 @@ pub(super) struct TaskDetail {
     title: Entity<InputState>,
     notes: Entity<TextareaState>,
     new_step: Entity<InputState>,
-    due: Entity<InputState>,
+    due: Entity<DatePickerState>,
+    remind: Entity<DatePickerState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -31,7 +34,11 @@ impl TaskDetail {
         let id = card.id();
         let title_text = card.task.title.clone();
         let notes_text = card.task.notes.clone();
-        let due_value = due_text(card);
+        let due_value = card.task.due;
+        let remind_value = card
+            .details
+            .reminder
+            .map(|at| at.with_timezone(&Local).naive_local());
         let title = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Title")
@@ -44,9 +51,24 @@ impl TaskDetail {
         });
         let new_step = cx.new(|cx| InputState::new(window, cx).placeholder("Add step"));
         let due = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Date: YYYY-MM-DD")
-                .default_value(due_value)
+            let mut picker = DatePickerState::new(window, cx)
+                .date_format("%a %e %b %Y")
+                .first_day_of_week(chrono::Weekday::Mon);
+            if let Some(date) = due_value {
+                picker.set_date(date, window, cx);
+            }
+            picker
+        });
+        let remind = cx.new(|cx| {
+            let mut picker = DatePickerState::new(window, cx)
+                .date_format("%a %e %b %Y, %H:%M")
+                .time_precision(TimePrecision::Minute)
+                .default_time(chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap_or_default())
+                .first_day_of_week(chrono::Weekday::Mon);
+            if let Some(at) = remind_value {
+                picker.set_date_time(at, window, cx);
+            }
+            picker
         });
 
         let subscriptions = vec![
@@ -97,22 +119,19 @@ impl TaskDetail {
             cx.subscribe_in(
                 &due,
                 window,
-                move |this, input, event: &InputEvent, _, cx| {
-                    if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                        let text = input.read(cx).value().trim().to_owned();
-                        if text.is_empty() {
-                            this.update_task(id, |card| card.task.due = None, cx);
-                        } else if let Some(date) = parse_date(&text) {
-                            this.update_task(id, move |card| card.task.due = Some(date), cx);
-                        } else {
-                            this.state.update(cx, |state, cx| {
-                                state.report_error(
-                                    format!("“{text}” is not a date (use YYYY-MM-DD)"),
-                                    cx,
-                                )
-                            });
-                        }
-                    }
+                move |this, _, event: &DatePickerEvent, _, cx| {
+                    let DatePickerEvent::Change(value) = event;
+                    let date = value.start().map(|at| at.date());
+                    this.update_task(id, move |card| card.task.due = date, cx);
+                },
+            ),
+            cx.subscribe_in(
+                &remind,
+                window,
+                move |this, _, event: &DatePickerEvent, _, cx| {
+                    let DatePickerEvent::Change(value) = event;
+                    let at = value.start().and_then(local_to_utc);
+                    this.update_task(id, move |card| card.details.reminder = at, cx);
                 },
             ),
         ];
@@ -123,6 +142,7 @@ impl TaskDetail {
             notes,
             new_step,
             due,
+            remind,
             _subscriptions: subscriptions,
         }
     }
@@ -134,14 +154,20 @@ impl TaskDetail {
         }
         let editing = self.title.read(cx).focus_handle(cx).is_focused(window)
             || self.notes.read(cx).focus_handle(cx).is_focused(window)
-            || self.new_step.read(cx).focus_handle(cx).is_focused(window)
-            || self.due.read(cx).focus_handle(cx).is_focused(window);
+            || self.new_step.read(cx).focus_handle(cx).is_focused(window);
         if editing {
             return false;
         }
         self.title.read(cx).value().trim() != card.task.title
             || self.notes.read(cx).value().trim_end() != card.task.notes.trim_end()
-            || self.due.read(cx).value().trim() != due_text(card)
+            || self.due.read(cx).date().start() != card.task.due
+            || self
+                .remind
+                .read(cx)
+                .date_time()
+                .start()
+                .and_then(local_to_utc)
+                != card.details.reminder
     }
 }
 
@@ -361,6 +387,13 @@ impl TasksView {
                             }),
                         ))
                     }),
+            )
+            .child(
+                div().px(SPACE_1).child(
+                    DatePicker::new(&detail.remind)
+                        .placeholder("Pick a date and time")
+                        .cleanable(true),
+                ),
             );
 
         // ----- due date -----
@@ -418,11 +451,9 @@ impl TasksView {
                 )
                 .child(
                     div().px(SPACE_1).child(
-                        Input::new(&detail.due).prefix(
-                            Icon::new(IconName::CalendarDays)
-                                .size(ICON_SIZE_SM)
-                                .text_color(t.text_subtle),
-                        ),
+                        DatePicker::new(&detail.due)
+                            .placeholder("Pick a due date")
+                            .cleanable(true),
                     ),
                 );
 
@@ -833,18 +864,11 @@ fn clear_button(
         .on_click(on_click)
 }
 
-fn due_text(card: &TaskCard) -> String {
-    card.task
-        .due
-        .map(|due| due.format("%Y-%m-%d").to_string())
-        .unwrap_or_default()
-}
-
-/// `2026-12-31`, `31/12/2026` or `31.12.2026`.
-fn parse_date(text: &str) -> Option<NaiveDate> {
-    ["%Y-%m-%d", "%d/%m/%Y", "%d.%m.%Y"]
-        .into_iter()
-        .find_map(|format| NaiveDate::parse_from_str(text, format).ok())
+/// Local wall time to UTC (`None` in a DST gap).
+fn local_to_utc(at: chrono::NaiveDateTime) -> Option<DateTime<Utc>> {
+    at.and_local_timezone(Local)
+        .earliest()
+        .map(|at| at.with_timezone(&Utc))
 }
 
 fn next_day(date: NaiveDate) -> NaiveDate {
@@ -880,15 +904,14 @@ fn later_today() -> Option<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_monday, parse_date};
+    use super::{local_to_utc, next_monday};
     use chrono::NaiveDate;
 
     #[test]
     fn date_helpers() {
         let date = |y, m, d| NaiveDate::from_ymd_opt(y, m, d).unwrap();
-        assert_eq!(parse_date("2026-12-31"), Some(date(2026, 12, 31)));
-        assert_eq!(parse_date("31/12/2026"), Some(date(2026, 12, 31)));
-        assert_eq!(parse_date("tomorrow"), None);
+        let noon = date(2026, 6, 1).and_hms_opt(12, 0, 0).unwrap();
+        assert!(local_to_utc(noon).is_some());
         // 2026-11-14 is a Saturday, 2026-11-16 a Monday.
         assert_eq!(next_monday(date(2026, 11, 14)), date(2026, 11, 16));
         assert_eq!(next_monday(date(2026, 11, 16)), date(2026, 11, 23));

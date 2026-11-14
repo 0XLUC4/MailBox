@@ -173,7 +173,11 @@ impl RecipientField {
         .unwrap_or_default();
         self.suggestions = found
             .into_iter()
-            .filter(|address| !taken.contains(&address.email.to_lowercase()))
+            // Past drafts may hold half-typed names: only offer real addresses.
+            .filter(|address| {
+                compose::is_valid_email(&address.email)
+                    && !taken.contains(&address.email.to_lowercase())
+            })
             .take(MAX_SUGGESTIONS)
             .collect();
         self.highlighted = 0;
@@ -405,6 +409,10 @@ impl Render for RecipientField {
                             .child(Input::new(&self.input).appearance(false)),
                     ),
             )
-            .children(suggestions)
+            // `anchored` is absolutely positioned at its parent's origin: a zero-height
+            // wrapper below the input row puts the list under the field instead of over it.
+            .when_some(suggestions, |el, suggestions| {
+                el.child(div().h_0().child(suggestions))
+            })
     }
 }

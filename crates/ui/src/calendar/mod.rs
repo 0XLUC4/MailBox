@@ -6,7 +6,9 @@
 //! it is undoable with Ctrl+Z.
 
 mod agenda;
+mod calendars;
 mod editor;
+mod invitations;
 mod layout;
 mod month;
 mod reminders;
@@ -25,7 +27,8 @@ use gpui::*;
 use mailbox_core::calendar::{self as cal, CalendarCommand, EventDetails, Occurrence, ShowAs};
 use mailbox_core::{Account, Calendar, CalendarEvent, Id, ResponseStatus};
 
-use crate::app_state::AppState;
+use crate::actions;
+use crate::app_state::{AppState, Module};
 use crate::components::{Button, Icon, IconButton, IconName, toolbar_separator};
 use crate::theme::{
     ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_LG,
@@ -33,8 +36,34 @@ use crate::theme::{
 };
 
 pub use editor::{EditorTarget, EventEditor, open_event_editor, open_meeting_editor};
+pub use invitations::{
+    IncomingInvitation, incoming_invitation, invitation_bar, queue_calendar_mail,
+    respond_to_invitation, sending_account,
+};
 use layout::ViewKind;
 pub use reminders::ReminderService;
+
+/// Handles a ribbon/palette action while `module` is open (app-level listener, registered
+/// after the "not available yet" fallbacks so it runs first); otherwise lets it through.
+pub(crate) fn module_action<A: Action, V: 'static>(
+    view: &WeakEntity<V>,
+    state: &Entity<AppState>,
+    module: Module,
+    cx: &mut App,
+    handler: fn(&mut V, &mut Context<V>),
+) {
+    let view = view.clone();
+    let state = state.downgrade();
+    cx.on_action(move |_: &A, cx| {
+        let active = state
+            .upgrade()
+            .is_some_and(|state| state.read(cx).module() == module);
+        match view.upgrade() {
+            Some(view) if active => view.update(cx, handler),
+            _ => cx.propagate(),
+        }
+    });
+}
 
 /// Height of one hour in the time grid.
 pub(crate) const HOUR_HEIGHT: f32 = 52.;
@@ -285,6 +314,9 @@ pub struct CalendarView {
     drag: Option<Drag>,
     quick: Option<QuickCreate>,
     prompt: Option<SeriesPrompt>,
+    calendar_edit: Option<calendars::CalendarEdit>,
+    /// Focus the view on its next render (the module was just opened).
+    needs_focus: bool,
     _reminders: Entity<ReminderService>,
     _tick: Task<()>,
     _subscription: Subscription,
@@ -292,7 +324,13 @@ pub struct CalendarView {
 
 impl CalendarView {
     pub fn new(state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let subscription = cx.observe(&state, |_, _, cx| cx.notify());
+        let subscription = cx.observe(&state, |this: &mut Self, state, cx| {
+            if state.read(cx).module() != Module::Calendar {
+                this.needs_focus = true;
+            }
+            cx.notify()
+        });
+        calendars::ensure_default_calendar(&state, cx);
         let today = Local::now().date_naive();
         let scroll = ScrollHandle::new();
         // Open the day at 07:30 so 08:00 is visible with a little context above.
@@ -309,6 +347,38 @@ impl CalendarView {
             }
         });
         let reminders = cx.new(|cx| ReminderService::new(state.clone(), cx));
+        let view = cx.entity().downgrade();
+        module_action::<actions::NewEvent, _>(&view, &state, Module::Calendar, cx, |this, cx| {
+            this.new_event(cx)
+        });
+        module_action::<actions::CalendarToday, _>(
+            &view,
+            &state,
+            Module::Calendar,
+            cx,
+            |this, cx| this.today(cx),
+        );
+        module_action::<actions::CalendarDayView, _>(
+            &view,
+            &state,
+            Module::Calendar,
+            cx,
+            |this, cx| this.set_kind(ViewKind::Day, cx),
+        );
+        module_action::<actions::CalendarWeekView, _>(
+            &view,
+            &state,
+            Module::Calendar,
+            cx,
+            |this, cx| this.set_kind(ViewKind::Week, cx),
+        );
+        module_action::<actions::CalendarMonthView, _>(
+            &view,
+            &state,
+            Module::Calendar,
+            cx,
+            |this, cx| this.set_kind(ViewKind::Month, cx),
+        );
         Self {
             state,
             focus: cx.focus_handle(),
@@ -324,6 +394,8 @@ impl CalendarView {
             drag: None,
             quick: None,
             prompt: None,
+            calendar_edit: None,
+            needs_focus: true,
             _reminders: reminders,
             _tick: tick,
             _subscription: subscription,
@@ -1354,6 +1426,11 @@ impl CalendarView {
 impl Render for CalendarView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
+        // Ribbon actions (New event, Today, views, Delete) dispatch from the focused element:
+        // take focus each time the module is opened.
+        if std::mem::take(&mut self.needs_focus) {
+            self.focus.focus(window, cx);
+        }
         self.hits.borrow_mut().clear();
         let data = self.load(cx);
         let body = match self.kind {
@@ -1368,6 +1445,7 @@ impl Render for CalendarView {
             .clone()
             .map(|prompt| self.render_prompt(&prompt, &t, cx));
         let picker = self.picker.map(|month| self.render_picker(month, &t, cx));
+        let calendar_edit = self.render_calendar_edit(&t, cx);
 
         div()
             .id("calendar")
@@ -1375,6 +1453,13 @@ impl Render for CalendarView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.on_key_down(event, window, cx)
+            }))
+            // The shell binds Delete to a mail action; here it deletes the selected event.
+            .on_action(cx.listener(|this, _: &actions::DeleteSelection, _, cx| {
+                let data = this.load(cx);
+                if let Some(occurrence) = this.find_selected(&data) {
+                    this.delete_occurrence(occurrence, cx);
+                }
             }))
             .relative()
             .size_full()
@@ -1394,6 +1479,7 @@ impl Render for CalendarView {
             )
             .when_some(picker, |el, picker| el.child(picker))
             .when_some(prompt, |el, prompt| el.child(prompt))
+            .when_some(calendar_edit, |el, edit| el.child(edit))
     }
 }
 
@@ -1401,6 +1487,16 @@ impl Render for CalendarView {
 impl CalendarView {
     pub(crate) fn action_today(&mut self, cx: &mut Context<Self>) {
         self.today(cx);
+    }
+
+    /// Deletes the selected event (asks first for a series); false when none is selected.
+    pub(crate) fn action_delete(&mut self, cx: &mut Context<Self>) -> bool {
+        let data = self.load(cx);
+        let Some(occurrence) = self.find_selected(&data) else {
+            return false;
+        };
+        self.delete_occurrence(occurrence, cx);
+        true
     }
 
     pub(crate) fn action_new_event(&mut self, cx: &mut Context<Self>) {
