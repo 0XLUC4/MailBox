@@ -1142,6 +1142,15 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
                     .font_family("monospace")
                     .child(text.clone())
                     .into_any_element(),
+                // Inline (`cid:`) pictures resolved to stored attachments: local, always shown.
+                Block::Image { src, .. } if crate::attachments::is_inline_file(src) => div()
+                    .max_w(px(640.))
+                    .child(
+                        img(std::path::PathBuf::from(src))
+                            .max_w_full()
+                            .rounded(RADIUS_MD),
+                    )
+                    .into_any_element(),
                 Block::Image { src, alt } => {
                     if ctx.show_images && is_remote(src) {
                         let source = if src.starts_with("//") {

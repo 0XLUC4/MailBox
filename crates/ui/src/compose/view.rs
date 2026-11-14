@@ -379,6 +379,11 @@ impl ComposeView {
     // ---------- sending ----------
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_at(None, window, cx);
+    }
+
+    /// Sends now (with the undo delay) or, with `at`, keeps the draft and sends it then.
+    fn send_at(&mut self, at: Option<DateTime<Utc>>, window: &mut Window, cx: &mut Context<Self>) {
         if self.closed {
             return;
         }
@@ -422,7 +427,19 @@ impl ComposeView {
         let subject = self.draft.message.subject.clone();
         let id = self.message_id();
         self.detach(window, cx);
-        send::schedule(self.state.clone(), id, subject, cx);
+        match at {
+            Some(at) => crate::later::schedule_send(&self.state, id, at, cx),
+            None => send::schedule(self.state.clone(), id, subject, cx),
+        }
+    }
+
+    fn pick_send_time(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let this = cx.entity().downgrade();
+        let on_pick: crate::later::OnPick = std::rc::Rc::new(move |at, window, cx| {
+            this.update(cx, |this, cx| this.send_at(Some(at), window, cx))
+                .ok();
+        });
+        crate::later::open_time_picker("Send later", on_pick, window, cx);
     }
 
     fn pop_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1268,6 +1285,11 @@ impl ComposeView {
                     .icon(IconName::SendHorizontal)
                     .label("Send")
                     .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
+            )
+            .child(
+                IconButton::new("compose-send-later", IconName::CalendarClock)
+                    .tooltip("Send later")
+                    .on_click(cx.listener(|this, _, window, cx| this.pick_send_time(window, cx))),
             )
             .child(
                 div()

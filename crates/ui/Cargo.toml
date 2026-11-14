@@ -11,5 +11,9 @@ gpui.workspace = true
 mailbox-core.workspace = true
 mailbox-sync.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification.workspace = true
+windows-registry.workspace = true
+
 [lints]
 workspace = true

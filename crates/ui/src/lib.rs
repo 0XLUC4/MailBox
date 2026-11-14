@@ -21,6 +21,18 @@ pub mod theme;
 // App-wide actions (ribbon, command palette, shortcuts).
 pub mod actions;
 
+// Everyday features: notifications, OS integration, attachments, print/export, snooze, out of
+// office, read receipts, shortcuts help.
+pub mod attachments;
+pub mod auto_reply;
+pub mod everyday;
+pub mod later;
+pub mod notifications;
+pub mod print;
+pub mod receipts;
+pub mod shortcuts;
+pub mod system_integration;
+
 use gpui::{
     App, AppContext as _, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
@@ -46,6 +58,11 @@ gpui::actions!(
 
 /// Opens the main window and runs the event loop until the window is closed.
 pub fn run(store: Store) {
+    run_with(store, None)
+}
+
+/// [`run`], then opens compose for `mailto` (a `mailto:` URL from the command line).
+pub fn run_with(store: Store, mailto: Option<String>) {
     gpui::application()
         .with_assets(gpui::assets::AllAssets)
         .run(move |cx: &mut App| {
@@ -64,12 +81,23 @@ pub fn run(store: Store) {
                 }),
                 ..Default::default()
             };
+            let shell_state = state.clone();
             let opened = gpui::open_window(options, cx, |window, cx| {
                 theme::init(window, cx);
-                cx.new(|cx| Shell::new(state, window, cx))
+                cx.new(|cx| Shell::new(shell_state, window, cx))
             });
             let main_window = match opened {
-                Ok((handle, _)) => handle.window_id(),
+                Ok((handle, _)) => {
+                    let window = handle;
+                    notifications::init(state.clone(), window, cx);
+                    system_integration::listen(state.clone(), window, cx);
+                    receipts::init(state.clone(), window, cx);
+                    later::init(state.clone(), cx);
+                    if let Some(url) = mailto.clone() {
+                        system_integration::open_mailto(&state, window, url, cx);
+                    }
+                    handle.window_id()
+                }
                 Err(err) => {
                     eprintln!("mailbox: failed to open window: {err:#}");
                     cx.quit();
@@ -90,7 +118,11 @@ pub fn run(store: Store) {
 /// Platform primary modifier + key, as a `&'static str` (KeyBinding keeps the borrow).
 macro_rules! primary {
     ($key:literal) => {
-        if cfg!(target_os = "macos") { concat!("cmd-", $key) } else { concat!("ctrl-", $key) }
+        if cfg!(target_os = "macos") {
+            concat!("cmd-", $key)
+        } else {
+            concat!("ctrl-", $key)
+        }
     };
 }
 

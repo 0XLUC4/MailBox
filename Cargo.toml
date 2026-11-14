@@ -27,6 +27,9 @@ keyring = "4.2"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls", "hostname"] }
 mail-parser = "0.11"
 oauth2 = { version = "5", default-features = false, features = ["ureq"] }
+# Windows integration (notifications, mailto handler); already in the lock file via deps.
+tauri-winrt-notification = "0.8.1"
+windows-registry = "0.6.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

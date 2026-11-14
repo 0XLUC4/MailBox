@@ -475,6 +475,8 @@ impl SyncBridge {
             Some(Err(err)) => self.report(err, cx),
             _ => {}
         }
+        // Mute, automatic replies, desktop notification.
+        crate::notifications::on_new_mail(&self.state, ids, cx);
     }
 
     // ---------- events → store ----------
@@ -554,6 +556,7 @@ impl SyncBridge {
             parsed.assign_thread(&mut account.sync.threads);
             let attachments = std::mem::take(&mut parsed.attachments);
             let message_id = parsed.message_id.clone();
+            let receipt_to = parsed.receipt_to.take();
             let mut message = parsed.message;
             message.account_id = account.account_id;
             message.folder_id = folder_id;
@@ -593,6 +596,9 @@ impl SyncBridge {
             let Some(local_id) = local_id else {
                 continue;
             };
+            if let Some(to) = receipt_to.filter(|_| is_inbox) {
+                crate::receipts::note_request(&self.state, local_id, to, cx);
+            }
             account.sync.link(
                 path,
                 uid,
@@ -967,7 +973,7 @@ impl SyncBridge {
 // ---------- free helpers (no UI state) ----------
 
 /// `MAILBOX_DATA_DIR`, else %APPDATA%/mailbox, $XDG_DATA_HOME/mailbox or ~/.local/share/mailbox.
-fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("MAILBOX_DATA_DIR") {
         return PathBuf::from(dir);
     }

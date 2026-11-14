@@ -3903,6 +3903,8 @@ dependencies = [
  "gpui-kit",
  "mailbox-core",
  "mailbox-sync",
+ "tauri-winrt-notification",
+ "windows-registry 0.6.1",
 ]
 
 [[package]]

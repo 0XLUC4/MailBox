@@ -22,6 +22,12 @@ pub mod calendar;
 pub mod ics;
 pub mod recurrence;
 
+// Everyday mail features: snooze / send later / mute, out of office, read receipts, export.
+pub mod auto_reply;
+pub mod export;
+pub mod later;
+pub mod receipts;
+
 pub use command::{Command, History};
 pub use error::{Error, Result};
 pub use model::*;

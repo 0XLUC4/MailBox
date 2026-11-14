@@ -29,6 +29,8 @@ pub struct ParsedMail {
     pub in_reply_to: Vec<String>,
     pub references: Vec<String>,
     pub attachments: Vec<AttachmentData>,
+    /// `Disposition-Notification-To`: the sender asks for a read receipt.
+    pub receipt_to: Option<Address>,
 }
 
 impl ParsedMail {
@@ -122,7 +124,19 @@ pub fn parse_message(raw: &[u8], received: Option<DateTime<Utc>>) -> SyncResult<
         in_reply_to: id_list(parsed.in_reply_to()),
         references: id_list(parsed.references()),
         attachments,
+        receipt_to: receipt_request(parsed.header_raw("Disposition-Notification-To")),
     })
+}
+
+/// Address of a `Disposition-Notification-To` header (`Name <a@b.c>` or bare).
+fn receipt_request(value: Option<&str>) -> Option<Address> {
+    let value = value?.trim();
+    let email = match (value.rfind('<'), value.rfind('>')) {
+        (Some(start), Some(end)) if start < end => &value[start + 1..end],
+        _ => value,
+    }
+    .trim();
+    email.contains('@').then(|| Address::new("", email))
 }
 
 fn address(addr: &Addr) -> Address {
@@ -283,5 +297,14 @@ JVBERi0xLjQK\r\n\
         if let Ok(parsed) = parse_message(b"", None) {
             assert!(parsed.message.subject.is_empty());
         }
+    }
+
+    #[test]
+    fn reads_receipt_requests() {
+        let raw = b"From: a@b.co\r\nDisposition-Notification-To: Ada <ada@b.co>\r\n\r\nhi\r\n";
+        let parsed = parse_message(raw, None).unwrap();
+        assert_eq!(parsed.receipt_to.map(|a| a.email), Some("ada@b.co".into()));
+        let plain = parse_message(b"From: a@b.co\r\nSubject: x\r\n\r\nhi\r\n", None).unwrap();
+        assert!(plain.receipt_to.is_none());
     }
 }

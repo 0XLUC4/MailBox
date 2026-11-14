@@ -73,6 +73,8 @@ impl ReminderService {
         for reminder in due {
             let key = reminder.occurrence.key();
             if !self.is_known(key) {
+                let event = &reminder.occurrence.event;
+                crate::notifications::reminder(&event.title, event.start, cx);
                 self.active.push(ActiveReminder {
                     key,
                     occurrence: reminder.occurrence,
