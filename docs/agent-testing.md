@@ -44,6 +44,20 @@ $w=$r.Ri-$r.L; $hh=$r.B-$r.T; $bmp=New-Object System.Drawing.Bitmap $w,$hh
 ```
 Then read the PNG to check. Delete temp files when done.
 
+### The mail webview: only an on-screen capture is proof
+HTML mail bodies are a WebView2 child window (`crates/ui/src/mail/webview.rs`) over the GPUI
+window. `PrintWindow` (even with `PW_RENDERFULLCONTENT`) asks each window to draw itself
+off-screen, so it shows the mail even when the user sees nothing: in 0.1.0 GPUI drew through a
+topmost DirectComposition layer (`CreateTargetForHwnd(hwnd, true)` in gpui-pre-windows) that
+covered the webview with a white rectangle, and `PrintWindow` captures looked fine. For anything
+touching the webview (reading pane, pop-out window, overlays over the body) capture what is on
+the screen: check `GetForegroundWindow() == $h` (abort otherwise, another window would be in
+the picture), then `CopyFromScreen` limited to the window rect, as above. Also check that keys
+still reach the app after clicking in the message body (the webview takes the system focus;
+`MailWebView::focus_app` gives it back on the next click on the app): open a context menu,
+press Esc, type in the search box. Known limit: a click inside the visible message body goes to
+the webview, not GPUI, so it does not close an open menu (a click anywhere else does).
+
 Also set `MAILBOX_DATA_DIR` to your temp dir: sync state, the Outbox headers, attachments and the
 single-instance port file live there, and without it your test app forwards to (or collides with)
 another agent's running instance. The AgentDeck hook refuses new console windows: run the app and
