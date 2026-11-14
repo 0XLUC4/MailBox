@@ -212,4 +212,10 @@ impl AppState {
             cx.notify();
         }
     }
+
+    /// Like [`AppState::run`] but not recorded for undo (autosaves, background bookkeeping).
+    pub fn run_untracked(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
+        let result = mailbox_core::command::apply(&self.store, command);
+        self.finish(result.map(|_| None), cx)
+    }
 }

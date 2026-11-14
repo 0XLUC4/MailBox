@@ -75,6 +75,16 @@ pub enum Command {
         key: String,
         value: Option<String>,
     },
+    /// Compose: save a draft message with its metadata (see `compose`).
+    SaveDraft(Box<crate::compose::Draft>),
+    /// Compose: delete a draft message (by message id) and its metadata.
+    DeleteDraft(Id),
+    /// Compose: move a draft into the Outbox folder, where the sync engine sends it.
+    QueueSend {
+        message_id: Id,
+        folder_id: Id,
+    },
+    SaveSignature(Box<crate::compose::Signature>),
     /// Calendar operation with details and recurrence exceptions (see [`crate::calendar`]).
     Calendar(Box<crate::calendar::CalendarCommand>),
 }
@@ -163,6 +173,10 @@ impl Command {
             Self::People(command) => command.label(),
             Self::Todo(command) => command.label(),
             Self::SetSetting { .. } => "Change settings".into(),
+            Self::SaveDraft(_) => "Save draft".into(),
+            Self::DeleteDraft(_) => "Discard draft".into(),
+            Self::QueueSend { .. } => "Send message".into(),
+            Self::SaveSignature(_) => "Save signature".into(),
             Self::Calendar(command) => command.label(),
         }
     }
@@ -280,6 +294,15 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
         Command::People(command) => crate::people::apply(store, command),
         Command::Todo(command) => crate::todo::apply(store, command),
         Command::SetSetting { key, value } => crate::settings::apply_set(store, key, value),
+        Command::SaveDraft(draft) => crate::compose::apply_save_draft(store, *draft),
+        Command::DeleteDraft(id) => crate::compose::apply_delete_draft(store, id),
+        Command::QueueSend {
+            message_id,
+            folder_id,
+        } => crate::compose::apply_queue_send(store, message_id, folder_id),
+        Command::SaveSignature(signature) => {
+            crate::compose::apply_save_signature(store, *signature)
+        }
         Command::Calendar(command) => crate::calendar::apply(store, *command),
     }
 }

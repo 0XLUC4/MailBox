@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 "#,
+    crate::compose::SCHEMA,
     crate::calendar::MIGRATION,
 ];
 
