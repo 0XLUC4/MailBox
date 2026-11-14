@@ -110,6 +110,15 @@ CREATE TABLE rules (
     conditions_json TEXT NOT NULL,
     actions_json TEXT NOT NULL
 );
+"#, r#"
+CREATE TABLE event_details (
+    id INTEGER PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+    master_id INTEGER,
+    uid TEXT NOT NULL,
+    data_json TEXT NOT NULL
+);
+CREATE INDEX event_details_master ON event_details(master_id);
+CREATE INDEX event_details_uid ON event_details(uid);
 "#];
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.

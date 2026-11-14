@@ -55,6 +55,8 @@ pub enum Command {
     DeleteRule(Id),
     /// Applied in order, atomically.
     Batch(Vec<Command>),
+    /// Calendar operation with details and recurrence exceptions (see [`crate::calendar`]).
+    Calendar(Box<crate::calendar::CalendarCommand>),
 }
 
 impl Command {
@@ -130,6 +132,7 @@ impl Command {
                 [single] => single.label(),
                 _ => format!("{} changes", commands.len()),
             },
+            Self::Calendar(command) => command.label(),
         }
     }
 }
@@ -237,6 +240,7 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
             inverses.reverse();
             Ok(Command::Batch(inverses))
         }
+        Command::Calendar(command) => crate::calendar::apply(store, *command),
     }
 }
 
