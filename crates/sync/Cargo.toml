@@ -9,6 +9,13 @@ publish.workspace = true
 chrono.workspace = true
 mailbox-core.workspace = true
 thiserror.workspace = true
+imap.workspace = true
+keyring.workspace = true
+lettre.workspace = true
+mail-parser.workspace = true
+oauth2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
