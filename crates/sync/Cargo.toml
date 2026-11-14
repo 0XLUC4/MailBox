@@ -14,6 +14,9 @@ keyring.workspace = true
 lettre.workspace = true
 mail-parser.workspace = true
 oauth2.workspace = true
+roxmltree.workspace = true
+ureq.workspace = true
+url.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

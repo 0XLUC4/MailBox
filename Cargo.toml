@@ -27,6 +27,10 @@ keyring = "4.2"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls", "hostname"] }
 mail-parser = "0.11"
 oauth2 = { version = "5", default-features = false, features = ["ureq"] }
+# CalDAV/CardDAV (HTTP + WebDAV XML).
+roxmltree = "0.21"
+ureq = "2.12"
+url = "2.5"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

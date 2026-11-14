@@ -3890,9 +3890,12 @@ dependencies = [
  "mail-parser",
  "mailbox-core",
  "oauth2",
+ "roxmltree 0.21.2",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "ureq",
+ "url",
 ]
 
 [[package]]

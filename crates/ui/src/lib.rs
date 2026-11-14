@@ -7,6 +7,7 @@ pub mod calendar;
 pub mod command_palette;
 pub mod components;
 pub mod compose;
+pub mod dav_bridge;
 pub mod dialogs;
 pub mod mail;
 pub mod people;
@@ -54,6 +55,7 @@ pub fn run(store: Store) {
 
             let state = cx.new(|_| AppState::new(store));
             sync_bridge::init(state.clone(), cx);
+            dav_bridge::init(state.clone(), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1360.), px(860.)), cx)),
                 window_min_size: Some(size(px(900.), px(560.))),
@@ -85,7 +87,11 @@ pub fn run(store: Store) {
 /// Platform primary modifier + key, as a `&'static str` (KeyBinding keeps the borrow).
 macro_rules! primary {
     ($key:literal) => {
-        if cfg!(target_os = "macos") { concat!("cmd-", $key) } else { concat!("ctrl-", $key) }
+        if cfg!(target_os = "macos") {
+            concat!("cmd-", $key)
+        } else {
+            concat!("ctrl-", $key)
+        }
     };
 }
 
