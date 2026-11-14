@@ -17,13 +17,12 @@ pub mod shell;
 pub mod sync_bridge;
 pub mod tasks;
 pub mod theme;
+pub mod titlebar;
 
 // App-wide actions (ribbon, command palette, shortcuts).
 pub mod actions;
 
-use gpui::{
-    App, AppContext as _, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, px, size,
-};
+use gpui::{App, AppContext as _, KeyBinding, WindowBounds, WindowOptions, px, size};
 use mailbox_core::Store;
 
 use crate::app_state::AppState;
@@ -58,11 +57,7 @@ pub fn run(store: Store) {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1360.), px(860.)), cx)),
                 window_min_size: Some(size(px(900.), px(560.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Mailbox".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
+                ..titlebar::window_options("Mailbox")
             };
             let opened = gpui::open_window(options, cx, |window, cx| {
                 theme::init(window, cx);
