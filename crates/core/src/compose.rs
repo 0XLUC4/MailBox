@@ -151,12 +151,11 @@ pub fn suggest_recipients(store: &Store, query: &str, limit: usize) -> Result<Ve
     };
 
     let mut contacts = Vec::new();
-    for contact in store.list_contacts()? {
-        for email in &contact.emails {
-            take(
-                Address::new(contact.display_name.clone(), email.clone()),
-                &mut contacts,
-            );
+    // Cards, not bare rows: a contact saved with only first/last name still has a name.
+    for card in crate::people::list_contact_cards(store)? {
+        let name = card.name();
+        for email in &card.contact.emails {
+            take(Address::new(name.clone(), email.clone()), &mut contacts);
         }
     }
     let mut correspondents = Vec::new();

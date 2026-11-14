@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS settings (
 "#,
     crate::compose::SCHEMA,
     crate::calendar::MIGRATION,
+    crate::people::MIGRATION_LABELS,
 ];
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.

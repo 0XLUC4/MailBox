@@ -1,11 +1,13 @@
-//! Contact editor: every field of a [`ContactCard`], with add/remove rows for emails, phones
-//! and addresses, a photo picker, categories and notes. Saved as one undoable command.
+//! Contact editor: every field of a [`ContactCard`], with add/remove rows for labelled emails,
+//! phones and addresses, a photo picker, categories and notes. Saved as one undoable command.
+//! Enter in any single-line field saves, Esc cancels.
 
 use chrono::NaiveDate;
-use gpui::component::input::{Input, InputState, Textarea, TextareaState};
+use gpui::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use mailbox_core::people::{ContactCard, PostalAddress};
+use mailbox_core::compose::is_valid_email;
+use mailbox_core::people::{ContactCard, PostalAddress, trim_labels};
 use mailbox_core::vcard;
 
 use super::PeopleView;
@@ -18,6 +20,38 @@ use crate::theme::{
 
 /// Largest photo accepted (stored inline in the database and in exported vCards).
 const MAX_PHOTO_BYTES: u64 = 1024 * 1024;
+
+/// A value with its label ("work", "home"...): one email or phone row.
+pub(super) struct LabeledInput {
+    label: Entity<InputState>,
+    value: Entity<InputState>,
+}
+
+impl LabeledInput {
+    fn new(
+        label: &str,
+        value: &str,
+        placeholder: &'static str,
+        window: &mut Window,
+        cx: &mut Context<PeopleView>,
+    ) -> Self {
+        Self {
+            label: text_input("Label", label, window, cx),
+            value: text_input(placeholder, value, window, cx),
+        }
+    }
+}
+
+/// Reads labelled rows: non-empty values and their labels (trailing empty labels dropped).
+fn read_labeled(rows: &[LabeledInput], cx: &App) -> (Vec<String>, Vec<String>) {
+    let (values, mut labels): (Vec<String>, Vec<String>) = rows
+        .iter()
+        .map(|row| (value(&row.value, cx), value(&row.label, cx).to_lowercase()))
+        .filter(|(value, _)| !value.is_empty())
+        .unzip();
+    trim_labels(&mut labels);
+    (values, labels)
+}
 
 pub(super) struct AddressFields {
     label: Entity<InputState>,
@@ -64,8 +98,8 @@ pub(super) struct ContactForm {
     website: Entity<InputState>,
     birthday: Entity<InputState>,
     notes: Entity<TextareaState>,
-    emails: Vec<Entity<InputState>>,
-    phones: Vec<Entity<InputState>>,
+    emails: Vec<LabeledInput>,
+    phones: Vec<LabeledInput>,
     addresses: Vec<AddressFields>,
     categories: Vec<String>,
     photo: Option<String>,
@@ -82,17 +116,22 @@ impl ContactForm {
         let contact = &card.contact;
         let details = &card.details;
         let list = |values: &[String],
+                    labels: &[String],
                     placeholder: &'static str,
                     window: &mut Window,
                     cx: &mut Context<PeopleView>| {
-            let mut inputs: Vec<Entity<InputState>> = values
+            let mut rows: Vec<LabeledInput> = values
                 .iter()
-                .map(|value| text_input(placeholder, value, window, cx))
+                .enumerate()
+                .map(|(index, value)| {
+                    let label = labels.get(index).map_or("", String::as_str);
+                    LabeledInput::new(label, value, placeholder, window, cx)
+                })
                 .collect();
-            if inputs.is_empty() {
-                inputs.push(text_input(placeholder, "", window, cx));
+            if rows.is_empty() {
+                rows.push(LabeledInput::new("", "", placeholder, window, cx));
             }
-            inputs
+            rows
         };
         let notes_text = contact.notes.clone();
         let notes = cx.new(|cx| {
@@ -121,8 +160,20 @@ impl ContactForm {
                 cx,
             ),
             notes,
-            emails: list(contact.emails.as_slice(), "name@example.com", window, cx),
-            phones: list(contact.phones.as_slice(), "+1 555 0100", window, cx),
+            emails: list(
+                &contact.emails,
+                &details.email_labels,
+                EMAIL_PLACEHOLDER,
+                window,
+                cx,
+            ),
+            phones: list(
+                &contact.phones,
+                &details.phone_labels,
+                PHONE_PLACEHOLDER,
+                window,
+                cx,
+            ),
             addresses: details
                 .addresses
                 .iter()
@@ -139,14 +190,17 @@ impl ContactForm {
     /// The edited card, or a message explaining what to fix.
     pub(super) fn to_card(&self, cx: &App) -> Result<ContactCard, String> {
         let mut card = self.base.clone();
-        let emails: Vec<String> = self
-            .emails
-            .iter()
-            .map(|input| value(input, cx))
-            .filter(|email| !email.is_empty())
-            .collect();
-        if let Some(invalid) = emails.iter().find(|email| !email.contains('@')) {
+        let (emails, email_labels) = read_labeled(&self.emails, cx);
+        if let Some(invalid) = emails.iter().find(|email| !is_valid_email(email)) {
             return Err(format!("“{invalid}” is not an email address."));
+        }
+        let (phones, phone_labels) = read_labeled(&self.phones, cx);
+        if let Some(invalid) = phones.iter().find(|phone| !is_phone(phone)) {
+            return Err(format!("“{invalid}” is not a phone number."));
+        }
+        let website = value(&self.website, cx);
+        if website.chars().any(char::is_whitespace) {
+            return Err("The website should be a single address, like example.com.".into());
         }
         let birthday = value(&self.birthday, cx);
         let birthday = if birthday.is_empty() {
@@ -162,18 +216,15 @@ impl ContactForm {
         contact.notes = self.notes.read(cx).value().trim_end().to_owned();
         contact.favorite = self.favorite;
         contact.emails = emails;
-        contact.phones = self
-            .phones
-            .iter()
-            .map(|input| value(input, cx))
-            .filter(|phone| !phone.is_empty())
-            .collect();
+        contact.phones = phones;
 
         let details = &mut card.details;
         details.first_name = value(&self.first_name, cx);
         details.last_name = value(&self.last_name, cx);
         details.nickname = value(&self.nickname, cx);
-        details.website = value(&self.website, cx);
+        details.website = website;
+        details.email_labels = email_labels;
+        details.phone_labels = phone_labels;
         details.birthday = birthday;
         details.photo = self.photo.clone();
         details.categories = self.categories.clone();
@@ -227,9 +278,9 @@ impl PeopleView {
             .into_any_element(),
         };
 
-        let email_rows = form.emails.iter().enumerate().map(|(index, input)| {
-            removable(
-                input,
+        let email_rows = form.emails.iter().enumerate().map(|(index, row)| {
+            labeled_row(
+                row,
                 ("remove-email", index as u64),
                 cx.listener(move |this, _, _, cx| {
                     if let Some(form) = this.form.as_mut().filter(|form| index < form.emails.len())
@@ -240,9 +291,9 @@ impl PeopleView {
                 }),
             )
         });
-        let phone_rows = form.phones.iter().enumerate().map(|(index, input)| {
-            removable(
-                input,
+        let phone_rows = form.phones.iter().enumerate().map(|(index, row)| {
+            labeled_row(
+                row,
                 ("remove-phone", index as u64),
                 cx.listener(move |this, _, _, cx| {
                     if let Some(form) = this.form.as_mut().filter(|form| index < form.phones.len())
@@ -296,6 +347,7 @@ impl PeopleView {
                 category_names.push(extra.clone());
             }
         }
+        let has_categories = !category_names.is_empty();
         let category_chips = category_names.into_iter().enumerate().map(|(index, name)| {
             let active = form.categories.contains(&name);
             let toggled = name.clone();
@@ -315,8 +367,30 @@ impl PeopleView {
 
         div()
             .id("contact-form")
+            .track_focus(&self.form_focus)
             .size_full()
             .overflow_y_scroll()
+            // Capture phase: runs before the focused input, which would otherwise eat Esc.
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    this.cancel_form(cx);
+                }
+            }))
+            // Enter with focus outside a text field (after picking a photo, toggling a chip).
+            // Inputs save through `PressEnter`; Notes keeps Enter for new lines.
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let in_notes = this
+                    .form
+                    .as_ref()
+                    .is_some_and(|form| form.notes.focus_handle(cx).is_focused(window));
+                if event.keystroke.key == "enter"
+                    && !event.keystroke.modifiers.modified()
+                    && !in_notes
+                {
+                    this.save_form(cx);
+                }
+            }))
             .child(
                 div()
                     .flex()
@@ -341,12 +415,12 @@ impl PeopleView {
                                         "Edit contact"
                                     }),
                             )
-                            .child(Button::new("form-cancel").ghost().label("Cancel").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.form = None;
-                                    cx.notify();
-                                }),
-                            ))
+                            .child(
+                                Button::new("form-cancel")
+                                    .ghost()
+                                    .label("Cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| this.cancel_form(cx))),
+                            )
                             .child(
                                 Button::new("form-save")
                                     .primary()
@@ -422,9 +496,11 @@ impl PeopleView {
                                 "add-email",
                                 "Add email",
                                 cx.listener(|this, _, window, cx| {
-                                    let input = text_input("name@example.com", "", window, cx);
+                                    let row =
+                                        LabeledInput::new("", "", EMAIL_PLACEHOLDER, window, cx);
+                                    row.value.update(cx, |input, cx| input.focus(window, cx));
                                     if let Some(form) = this.form.as_mut() {
-                                        form.emails.push(input);
+                                        form.emails.push(row);
                                     }
                                     cx.notify();
                                 }),
@@ -442,9 +518,11 @@ impl PeopleView {
                                 "add-phone",
                                 "Add phone",
                                 cx.listener(|this, _, window, cx| {
-                                    let input = text_input("+1 555 0100", "", window, cx);
+                                    let row =
+                                        LabeledInput::new("", "", PHONE_PLACEHOLDER, window, cx);
+                                    row.value.update(cx, |input, cx| input.focus(window, cx));
                                     if let Some(form) = this.form.as_mut() {
-                                        form.phones.push(input);
+                                        form.phones.push(row);
                                     }
                                     cx.notify();
                                 }),
@@ -476,16 +554,24 @@ impl PeopleView {
                         labeled("Birthday", Input::new(&form.birthday), t),
                         labeled("Website", Input::new(&form.website), t),
                     ))
-                    .child(labeled(
-                        "Categories",
+                    .when(has_categories, |el| {
+                        el.child(labeled(
+                            "Categories",
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap(SPACE_1)
+                                .children(category_chips),
+                            t,
+                        ))
+                    })
+                    .child(labeled("Notes", Textarea::new(&form.notes).h(px(110.)), t))
+                    .child(
                         div()
-                            .flex()
-                            .flex_wrap()
-                            .gap(SPACE_1)
-                            .children(category_chips),
-                        t,
-                    ))
-                    .child(labeled("Notes", Textarea::new(&form.notes).h(px(110.)), t)),
+                            .text_size(TEXT_XS)
+                            .text_color(t.text_subtle)
+                            .child("Enter saves · Esc cancels"),
+                    ),
             )
             .into_any_element()
     }
@@ -537,6 +623,10 @@ impl PeopleView {
     }
 }
 
+const EMAIL_PLACEHOLDER: &str = "name@example.com";
+const PHONE_PLACEHOLDER: &str = "+1 555 0100";
+
+/// Single-line field; Enter saves the form.
 fn text_input(
     placeholder: &'static str,
     initial: &str,
@@ -544,11 +634,29 @@ fn text_input(
     cx: &mut Context<PeopleView>,
 ) -> Entity<InputState> {
     let initial = initial.to_owned();
-    cx.new(|cx| {
+    let input = cx.new(|cx| {
         InputState::new(window, cx)
             .placeholder(placeholder)
             .default_value(initial)
+    });
+    // Detached: ends when the input is dropped with the form.
+    cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
+        if let InputEvent::PressEnter { .. } = event {
+            this.save_form(cx);
+        }
     })
+    .detach();
+    input
+}
+
+/// At least 3 digits; otherwise only spaces, `+ ( ) - . / #` and an "ext"/"x" extension.
+fn is_phone(text: &str) -> bool {
+    let digits = text.chars().filter(char::is_ascii_digit).count();
+    let rest = text.to_lowercase().replace("ext", "").replace('x', "");
+    digits >= 3
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_whitespace() || "+()-./#".contains(c))
 }
 
 fn value(input: &Entity<InputState>, cx: &App) -> String {
@@ -587,6 +695,31 @@ fn pair(left: impl IntoElement, right: impl IntoElement) -> Div {
         .child(div().flex_1().min_w(px(0.)).child(right))
 }
 
+/// Label + value inputs with a trailing remove button.
+fn labeled_row(
+    row: &LabeledInput,
+    id: impl Into<ElementId>,
+    on_remove: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(SPACE_1)
+        .child(
+            div()
+                .w(px(96.))
+                .flex_shrink_0()
+                .child(Input::new(&row.label)),
+        )
+        .child(div().flex_1().min_w(px(0.)).child(Input::new(&row.value)))
+        .child(
+            IconButton::new(id, IconName::X)
+                .icon_size(ICON_SIZE_SM)
+                .tooltip("Remove")
+                .on_click(on_remove),
+        )
+}
+
 /// Input with a trailing remove button.
 fn removable(
     input: &Entity<InputState>,
@@ -611,7 +744,7 @@ fn add_button(
     label: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    div().child(
+    div().flex().child(
         Button::new(id)
             .ghost()
             .compact()
@@ -623,8 +756,16 @@ fn add_button(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_birthday;
+    use super::{is_phone, parse_birthday};
     use chrono::NaiveDate;
+
+    #[test]
+    fn phone_validation() {
+        assert!(is_phone("+33 6 12 34 56 78"));
+        assert!(is_phone("(555) 010-0100 ext 12"));
+        assert!(!is_phone("call me"));
+        assert!(!is_phone("12"));
+    }
 
     #[test]
     fn birthday_formats() {
