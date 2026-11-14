@@ -389,3 +389,50 @@ pub fn card(cx: &App) -> Div {
         .border_color(t.border_subtle)
         .bg(t.surface)
 }
+
+/// Tallest a dialog's own content may be so the card fits the window: the dialog surface
+/// keeps a margin around it and adds its padding.
+pub fn dialog_max_height(window: &Window) -> Pixels {
+    (window.viewport_size().height - px(112.)).max(px(200.))
+}
+
+/// Dialog layout for views that draw their own header and footer: only `body` scrolls, so
+/// the header, the messages and the footer buttons stay visible and the card never grows
+/// taller than the window.
+pub fn dialog_frame(
+    id: impl Into<ElementId>,
+    header: impl IntoElement,
+    body: impl IntoElement,
+    messages: Vec<AnyElement>,
+    footer: impl IntoElement,
+    window: &Window,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(SPACE_4)
+        .w_full()
+        .min_w_0()
+        .max_h(dialog_max_height(window))
+        .child(div().flex_shrink_0().child(header))
+        .child(
+            div()
+                .id(id)
+                .min_h_0()
+                .min_w_0()
+                .overflow_y_scroll()
+                .child(body),
+        )
+        .when(!messages.is_empty(), |el| {
+            el.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_shrink_0()
+                    .gap(SPACE_2)
+                    .min_w_0()
+                    .children(messages),
+            )
+        })
+        .child(div().flex_shrink_0().child(footer))
+}

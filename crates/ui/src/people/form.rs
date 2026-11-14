@@ -10,10 +10,10 @@ use mailbox_core::vcard;
 
 use super::PeopleView;
 use super::card::chip;
-use crate::components::{Avatar, Button, IconButton, IconName};
+use crate::components::{Avatar, Banner, Button, IconButton, IconName};
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_SM,
-    TEXT_XL, TEXT_XS, Theme,
+    ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_XL,
+    TEXT_XS, Theme,
 };
 
 /// Largest photo accepted (stored inline in the database and in exported vCards).
@@ -356,16 +356,7 @@ impl PeopleView {
                             ),
                     )
                     .when_some(form.error.clone(), |el, error| {
-                        el.child(
-                            div()
-                                .px(SPACE_3)
-                                .py(SPACE_2)
-                                .rounded(RADIUS_LG)
-                                .bg(t.danger.alpha(0.12))
-                                .text_color(t.danger)
-                                .text_size(TEXT_SM)
-                                .child(error),
-                        )
+                        el.child(Banner::error("form-error", error))
                     })
                     .child(
                         div()

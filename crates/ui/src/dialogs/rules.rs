@@ -10,10 +10,10 @@ use mailbox_core::{
     Account, Category, Command, Folder, Id, Importance, Rule, RuleAction, RuleCondition, rules,
 };
 
-use super::{Confirm, confirm, field, section_title};
+use super::{Confirm, confirm, dialog_max_height, field, section_title};
 use crate::actions::{current_account, run_rules};
 use crate::app_state::AppState;
-use crate::components::{Button, EmptyState, Icon, IconButton, IconName};
+use crate::components::{Banner, Button, EmptyState, Icon, IconButton, IconName};
 use crate::settings::controls::segmented;
 use crate::settings::tr;
 use crate::theme::{
@@ -648,14 +648,11 @@ impl RulesDialog {
                         self.switch("stop", draft.stop, |d, v| d.stop = v, cx),
                     )),
             )
-            .when_some(self.error.clone(), |el, error| {
-                el.child(div().text_size(TEXT_SM).text_color(t.danger).child(error))
-            })
     }
 }
 
 impl Render for RulesDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let (accounts, rules, folders, categories): (
             Vec<Account>,
@@ -769,7 +766,8 @@ impl Render for RulesDialog {
                     .flex()
                     .flex_row()
                     .gap(SPACE_3)
-                    .h(px(500.))
+                    // Header, messages and footer stay visible in a short window.
+                    .h(px(500.).min((dialog_max_height(window) - px(140.)).max(px(160.))))
                     .child(
                         div()
                             .w(px(300.))
@@ -793,6 +791,9 @@ impl Render for RulesDialog {
                             .child(editor),
                     ),
             )
+            .when_some(self.error.clone(), |el, error| {
+                el.child(Banner::error("rules-error", error))
+            })
             .child(
                 div()
                     .flex()

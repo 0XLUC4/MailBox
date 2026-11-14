@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local};
 use gpui::component::WindowExt as _;
 use gpui::component::button::Button;
-use gpui::component::notification::Notification;
+use gpui::component::notification::{Notification, NotificationType};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use mailbox_core::settings::{self as core_settings, AccountServers};
 use mailbox_core::{Account, Address, Command, Folder, FolderRole, Id, Message, Store, command};
@@ -45,6 +45,7 @@ use mailbox_sync::{
 };
 
 use crate::app_state::{AppState, SyncPhase, SyncSummary};
+use crate::components::toast;
 use crate::{SendReceive, ToggleWorkOffline};
 
 /// How often worker events are applied to the store.
@@ -1064,13 +1065,17 @@ impl SyncBridge {
         } else {
             subject
         };
-        let notification = Notification::error(format!("“{subject}” stays in the Outbox. {error}"))
-            .title("Message not sent")
-            .action(|_, _, _| {
-                Button::new("retry-send")
-                    .label("Retry")
-                    .on_click(|_, _, cx| retry_outbox(cx))
-            });
+        let message = format!("“{subject}” stays in the Outbox. {error}");
+        let notification = toast(
+            Notification::new().with_type(NotificationType::Error),
+            &message,
+        )
+        .title("Message not sent")
+        .action(|_, _, _| {
+            Button::new("retry-send")
+                .label("Retry")
+                .on_click(|_, _, cx| retry_outbox(cx))
+        });
         // Deferred: a window may be mid-update when the event is applied.
         cx.defer(move |cx| {
             window

@@ -3,6 +3,7 @@
 
 mod avatar;
 mod badge;
+mod banner;
 mod button;
 mod empty_state;
 mod icon_button;
@@ -10,6 +11,7 @@ mod toolbar;
 
 pub use avatar::{Avatar, avatar_color, initials};
 pub use badge::{Badge, BadgeVariant};
+pub use banner::{Banner, BannerKind, toast};
 pub use button::{Button, ButtonVariant};
 pub use empty_state::EmptyState;
 pub use icon_button::IconButton;

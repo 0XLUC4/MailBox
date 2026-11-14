@@ -25,15 +25,13 @@ use mailbox_sync::config::{self, AccountConfig, AuthConfig, OAuthProvider, crede
 use mailbox_sync::imap_smtp::test_connection;
 use mailbox_sync::oauth::OAuthSettings;
 
-use super::{Confirm, card, confirm, field, section_title};
+use super::{Confirm, card, confirm, dialog_frame, field, section_title};
 use crate::app_state::{AppState, Module};
-use crate::components::{Button, Icon, IconName};
+use crate::components::{Banner, Button, IconName};
 use crate::settings::controls::{segmented, swatches};
 use crate::settings::tr;
 use crate::sync_bridge;
-use crate::theme::{
-    ACCENTS, DEFAULT_ACCENT, ICON_SIZE, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_SM, theme,
-};
+use crate::theme::{ACCENTS, DEFAULT_ACCENT, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_SM, theme};
 
 const SECURITY: [(&str, Security); 3] = [
     ("SSL/TLS", Security::Tls),
@@ -620,21 +618,6 @@ impl AccountDialog {
             .child(field("Security", security, cx))
     }
 
-    /// A tinted one-line message (detected settings, test result...).
-    fn banner(icon: IconName, color: Hsla, text: impl Into<SharedString>) -> Div {
-        div()
-            .flex()
-            .flex_row()
-            .items_start()
-            .gap(SPACE_2)
-            .p(SPACE_2)
-            .rounded(px(6.))
-            .bg(color.alpha(0.1))
-            .text_size(TEXT_SM)
-            .child(Icon::new(icon).size(ICON_SIZE).text_color(color))
-            .child(div().flex_1().child(text.into()))
-    }
-
     /// OAuth sign-in button, or how to use an app password, for Gmail / Outlook addresses.
     fn render_oauth_hint(&self, cx: &mut Context<Self>) -> Option<Div> {
         let provider = self.oauth_provider_for_email()?;
@@ -685,21 +668,14 @@ impl AccountDialog {
     }
 
     fn render_identity(&self, cx: &mut Context<Self>) -> Div {
-        let t = theme(cx).clone();
         let view = cx.entity().downgrade();
         let detected = self.provider.map(|provider| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SPACE_1)
-                .text_size(TEXT_SM)
-                .text_color(t.success)
-                .child(Icon::new(IconName::ShieldCheck).size(px(14.)))
-                .child(format!(
-                    "{} detected: settings will be filled in",
-                    provider.name
-                ))
+            Banner::success(
+                "account-detected",
+                format!("{} detected: settings will be filled in", provider.name),
+            )
+            .icon(IconName::ShieldCheck)
+            .plain()
         });
         let adding = self.account_id.is_none();
         div()
@@ -733,22 +709,19 @@ impl AccountDialog {
             ))
     }
 
-    fn render_check(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let t = theme(cx).clone();
+    fn render_check(&self) -> Option<Banner> {
+        const ID: &str = "account-check";
         match &self.check {
             Check::Idle => None,
-            Check::Running(text) => Some(Self::banner(IconName::Clock, t.accent, *text)),
-            Check::Passed(_, folders) => Some(Self::banner(
-                IconName::Check,
-                t.success,
+            Check::Running(text) => Some(Banner::info(ID, *text).icon(IconName::Clock)),
+            Check::Passed(_, folders) => Some(Banner::success(
+                ID,
                 format!(
                     "Connected: sign-in works for receiving and sending ({} folders).",
                     folders.len()
                 ),
             )),
-            Check::Failed(message) => {
-                Some(Self::banner(IconName::CircleX, t.danger, message.clone()))
-            }
+            Check::Failed(message) => Some(Banner::error(ID, message.clone())),
         }
     }
 
@@ -759,12 +732,11 @@ impl AccountDialog {
             .then(|| self.source.clone())
             .flatten()
             .map(|text| {
-                let (icon, color) = if self.provider.is_some() || !text.contains("guessed") {
-                    (IconName::ShieldCheck, t.success)
+                if self.provider.is_some() || !text.contains("guessed") {
+                    Banner::success("account-source", text).icon(IconName::ShieldCheck)
                 } else {
-                    (IconName::CircleAlert, t.warning)
-                };
-                Self::banner(icon, color, text)
+                    Banner::warning("account-source", text)
+                }
             });
         let oauth = self.oauth_provider(cx);
         let auth_line = oauth.map(|provider| {
@@ -836,7 +808,7 @@ enum Which {
 }
 
 impl Render for AccountDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let editing = self.account_id.is_some();
         let (heading, subtitle) = match (editing, self.step) {
@@ -898,56 +870,49 @@ impl Render for AccountDialog {
                 }
             }));
 
-        div()
+        let header = div()
             .flex()
             .flex_col()
-            .gap(SPACE_4)
+            .gap(SPACE_1)
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap(SPACE_1)
-                    .child(
-                        div()
-                            .text_size(TEXT_LG)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(heading),
-                    )
-                    .child(
-                        div()
-                            .text_size(TEXT_SM)
-                            .text_color(t.text_muted)
-                            .child(subtitle),
-                    ),
+                    .text_size(TEXT_LG)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(heading),
             )
             .child(
                 div()
-                    .id("account-body")
-                    .max_h(px(460.))
-                    .overflow_y_scroll()
-                    .child(body),
+                    .text_size(TEXT_SM)
+                    .text_color(t.text_muted)
+                    .child(subtitle),
+            );
+        let messages = self
+            .render_check()
+            .map(IntoElement::into_any_element)
+            .into_iter()
+            .chain(
+                self.error
+                    .clone()
+                    .map(|error| Banner::error("account-error", error).into_any_element()),
             )
-            .children(self.render_check(cx))
-            .when_some(self.error.clone(), |el, error| {
-                el.child(div().text_size(TEXT_SM).text_color(t.danger).child(error))
-            })
+            .collect();
+        let footer = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(SPACE_2)
+            .children(back)
+            .children(remove)
+            .child(div().flex_1())
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(SPACE_2)
-                    .children(back)
-                    .children(remove)
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("account-cancel")
-                            .label(tr(cx, "Cancel"))
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .children(test)
-                    .child(primary),
+                Button::new("account-cancel")
+                    .label(tr(cx, "Cancel"))
+                    .on_click(|_, window, cx| window.close_dialog(cx)),
             )
+            .children(test)
+            .child(primary);
+        dialog_frame("account-body", header, body, messages, footer, window)
     }
 }
 

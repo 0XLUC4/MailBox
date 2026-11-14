@@ -20,7 +20,7 @@ use mailbox_core::{Address, Attendee, Calendar, CalendarEvent, Id, ResponseStatu
 
 use super::sidebar::switch;
 use crate::app_state::AppState;
-use crate::components::{Avatar, Badge, Button, Icon, IconButton, IconName};
+use crate::components::{Avatar, Badge, Banner, Button, Icon, IconButton, IconName};
 use crate::theme::{
     RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_LG,
     TEXT_MD, TEXT_SM, TEXT_XL, TEXT_XS, Theme, hex, theme,
@@ -2151,20 +2151,10 @@ impl Render for EventEditor {
             .when_some(self.error.clone(), |el, error| {
                 el.child(
                     div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(SPACE_2)
+                        .flex_shrink_0()
                         .mx(SPACE_6)
                         .mt(SPACE_3)
-                        .px(SPACE_3)
-                        .py(SPACE_2)
-                        .rounded(RADIUS_MD)
-                        .bg(t.danger.alpha(0.12))
-                        .text_color(t.danger)
-                        .text_size(TEXT_SM)
-                        .child(Icon::new(IconName::CircleX).size(px(14.)))
-                        .child(error),
+                        .child(Banner::error("editor-error", error)),
                 )
             })
             .child(

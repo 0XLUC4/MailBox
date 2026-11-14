@@ -39,12 +39,12 @@ use mailbox_sync::dav::{
 
 use crate::SendReceive;
 use crate::app_state::AppState;
-use crate::components::Button;
-use crate::dialogs::{card, field};
+use crate::components::{Banner, Button, IconName};
+use crate::dialogs::{card, dialog_frame, field};
 use crate::settings::controls::segmented;
 use crate::settings::tr;
 use crate::sync_bridge;
-use crate::theme::{DEFAULT_ACCENT, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_SM, theme};
+use crate::theme::{DEFAULT_ACCENT, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_SM, theme};
 
 /// How often due accounts are checked.
 const TICK: Duration = Duration::from_secs(20);
@@ -1010,7 +1010,7 @@ fn save_account(account: &DavAccount, password: &str) -> SyncResult<()> {
 }
 
 impl Render for AddDavAccountDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let view = cx.entity().downgrade();
         let providers = segmented(
@@ -1028,83 +1028,78 @@ impl Render for AddDavAccountDialog {
             },
             cx,
         );
+        const TEST_ID: &str = "dav-test-result";
         let test_line = match &self.test {
             TestState::Idle => None,
-            TestState::Running => Some((t.text_muted, "Connecting…".to_owned())),
-            TestState::Passed(found) => Some((t.success, found.clone())),
-            TestState::Failed(error) => Some((t.danger, error.clone())),
+            TestState::Running => Some(Banner::info(TEST_ID, "Connecting…").icon(IconName::Clock)),
+            TestState::Passed(found) => Some(Banner::success(TEST_ID, found.clone())),
+            TestState::Failed(error) => Some(Banner::error(TEST_ID, error.clone())),
         };
-        div()
+        let header = div()
             .flex()
             .flex_col()
-            .gap(SPACE_4)
+            .gap(SPACE_1)
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap(SPACE_1)
-                    .child(
-                        div()
-                            .text_size(TEXT_LG)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Add calendar/contacts account"),
-                    )
-                    .child(
-                        div()
-                            .text_size(TEXT_SM)
-                            .text_color(t.text_muted)
-                            .child("Two-way sync of calendars (CalDAV) and contacts (CardDAV)."),
-                    ),
+                    .text_size(TEXT_LG)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Add calendar/contacts account"),
             )
-            .child(
-                card(cx)
-                    .gap(SPACE_3)
-                    .child(field("Provider", providers, cx))
-                    .child(
-                        div()
-                            .text_size(TEXT_SM)
-                            .text_color(t.text_subtle)
-                            .child(self.provider.help()),
-                    )
-                    .child(field("Email address", Input::new(&self.email), cx))
-                    .when(self.provider.needs_url(), |el| {
-                        el.child(field("Server address", Input::new(&self.url), cx))
-                    })
-                    .when(!self.provider.uses_oauth(), |el| {
-                        el.child(field("Username", Input::new(&self.username), cx))
-                            .child(field("Password", Input::new(&self.password), cx))
-                    }),
-            )
-            .when_some(test_line, |el, (color, text)| {
-                el.child(div().text_size(TEXT_SM).text_color(color).child(text))
-            })
-            .when_some(self.error.clone(), |el, error| {
-                el.child(div().text_size(TEXT_SM).text_color(t.danger).child(error))
-            })
             .child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(SPACE_2)
-                    .child(
-                        Button::new("dav-test")
-                            .ghost()
-                            .label("Test")
-                            .on_click(cx.listener(|this, _, _, cx| this.run_test(cx))),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("dav-cancel")
-                            .label(tr(cx, "Cancel"))
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    )
-                    .child(
-                        Button::new("dav-add")
-                            .primary()
-                            .label(tr(cx, "Add account"))
-                            .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
-                    ),
+                    .text_size(TEXT_SM)
+                    .text_color(t.text_muted)
+                    .child("Two-way sync of calendars (CalDAV) and contacts (CardDAV)."),
+            );
+        let messages = test_line
+            .map(IntoElement::into_any_element)
+            .into_iter()
+            .chain(
+                self.error
+                    .clone()
+                    .map(|error| Banner::error("dav-error", error).into_any_element()),
             )
+            .collect();
+        let body = card(cx)
+            .gap(SPACE_3)
+            .child(field("Provider", providers, cx))
+            .child(
+                div()
+                    .text_size(TEXT_SM)
+                    .text_color(t.text_subtle)
+                    .child(self.provider.help()),
+            )
+            .child(field("Email address", Input::new(&self.email), cx))
+            .when(self.provider.needs_url(), |el| {
+                el.child(field("Server address", Input::new(&self.url), cx))
+            })
+            .when(!self.provider.uses_oauth(), |el| {
+                el.child(field("Username", Input::new(&self.username), cx))
+                    .child(field("Password", Input::new(&self.password), cx))
+            });
+        let footer = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(SPACE_2)
+            .child(
+                Button::new("dav-test")
+                    .ghost()
+                    .label("Test")
+                    .on_click(cx.listener(|this, _, _, cx| this.run_test(cx))),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("dav-cancel")
+                    .label(tr(cx, "Cancel"))
+                    .on_click(|_, window, cx| window.close_dialog(cx)),
+            )
+            .child(
+                Button::new("dav-add")
+                    .primary()
+                    .label(tr(cx, "Add account"))
+                    .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
+            );
+        dialog_frame("dav-body", header, body, messages, footer, window)
     }
 }

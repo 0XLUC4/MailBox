@@ -72,13 +72,17 @@ impl Render for XxxView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();          // design tokens
         let state = self.state.read(cx);    // read data
-        // ... build with components::{Button, IconButton, Avatar, Badge, Toolbar, EmptyState}
+        // ... build with components::{Button, IconButton, Avatar, Badge, Banner, Toolbar, EmptyState}
     }
 }
 ```
 
 Look and feel: use `theme` tokens only (no raw colours), spacing `SPACE_*`, radii `RADIUS_*`, sizes `TEXT_*`,
 icons `components::IconName` (full Lucide set). Light/dark follows the system; Settings can force it and pick an accent.
+Inline errors/statuses in dialogs and cards use `components::Banner` (wraps long hostnames/URLs, shortens
+very long server replies with "Copy full message"); toasts with server text go through `components::toast`.
+Dialogs that draw their own header/footer use `dialogs::dialog_frame` so only the body scrolls and the card
+fits the window.
 
 ## File ownership (parallel agents)
 

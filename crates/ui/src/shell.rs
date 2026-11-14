@@ -1,13 +1,13 @@
 //! Window root: left rail, top bar (ribbon + search) and the active module.
 
 use gpui::component::WindowExt as _;
-use gpui::component::notification::Notification;
+use gpui::component::notification::{Notification, NotificationType};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::app_state::{AppEvent, AppState, Module};
 use crate::calendar::CalendarView;
-use crate::components::IconButton;
+use crate::components::{IconButton, toast};
 use crate::mail::MailView;
 use crate::people::{PeopleEvent, PeopleView};
 use crate::ribbon::RibbonView;
@@ -41,12 +41,20 @@ impl Shell {
                 &state,
                 window,
                 |_, _, event: &AppEvent, window, cx| match event {
-                    AppEvent::Error(message) => {
-                        window.push_notification(Notification::error(message.clone()), cx)
-                    }
-                    AppEvent::Info(message) => {
-                        window.push_notification(Notification::info(message.clone()), cx)
-                    }
+                    AppEvent::Error(message) => window.push_notification(
+                        toast(
+                            Notification::new().with_type(NotificationType::Error),
+                            message,
+                        ),
+                        cx,
+                    ),
+                    AppEvent::Info(message) => window.push_notification(
+                        toast(
+                            Notification::new().with_type(NotificationType::Info),
+                            message,
+                        ),
+                        cx,
+                    ),
                 },
             ),
             cx.observe_window_appearance(window, |_, window, cx| crate::theme::refresh(window, cx)),
