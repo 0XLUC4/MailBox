@@ -22,6 +22,18 @@ use crate::model::*;
 use crate::recurrence::RRule;
 use crate::store::{Record, Store};
 
+/// Schema for [`EventDetails`], appended to `store::MIGRATIONS`.
+pub const MIGRATION: &str = r#"
+CREATE TABLE event_details (
+    id INTEGER PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+    master_id INTEGER,
+    uid TEXT NOT NULL,
+    data_json TEXT NOT NULL
+);
+CREATE INDEX event_details_master ON event_details(master_id);
+CREATE INDEX event_details_uid ON event_details(uid);
+"#;
+
 /// How an event shows on free/busy (Outlook "Show as").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -161,8 +173,9 @@ impl Record for EventDetails {
     }
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let raw: String = row.get(3)?;
-        let mut details: Self = serde_json::from_str(&raw)
-            .map_err(|err| rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err)))?;
+        let mut details: Self = serde_json::from_str(&raw).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
+        })?;
         details.event_id = row.get(0)?;
         details.master_id = row.get(1)?;
         Ok(details)
@@ -301,7 +314,14 @@ impl<Z: TimeZone> ExpandIn for Z {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> Vec<DateTime<Utc>> {
-        rule.occurrences(event.start, event.end - event.start, self, exdates, from, to)
+        rule.occurrences(
+            event.start,
+            event.end - event.start,
+            self,
+            exdates,
+            from,
+            to,
+        )
     }
 }
 
@@ -346,7 +366,11 @@ pub fn expand_event(
 }
 
 /// All instances overlapping `[from, to)`, sorted by start (all-day first on ties).
-pub fn occurrences(store: &Store, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<Occurrence>> {
+pub fn occurrences(
+    store: &Store,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<Occurrence>> {
     let events = store.list_events_between(from, to)?;
     let stored: Vec<EventDetails> = store.query(
         "WHERE id IN (SELECT id FROM events WHERE start_at < ?2 AND (end_at > ?1 OR recurrence IS NOT NULL))",
@@ -456,11 +480,9 @@ pub fn free_busy(list: &[Occurrence], email: &str, my_emails: &[String]) -> Vec<
                     .is_some_and(|organizer| same_email(&organizer.email, email))
         })
         .map(|occurrence| {
-            let tentative = occurrence
-                .event
-                .attendees
-                .iter()
-                .any(|a| same_email(&a.address.email, email) && a.status == ResponseStatus::Tentative);
+            let tentative = occurrence.event.attendees.iter().any(|a| {
+                same_email(&a.address.email, email) && a.status == ResponseStatus::Tentative
+            });
             BusySlot {
                 start: occurrence.event.start,
                 end: occurrence.event.end,
@@ -503,9 +525,10 @@ pub fn suggest_slots<Z: TimeZone>(
             && local_start.hour() >= work_hours.0
             && (local_end.hour() < work_hours.1
                 || (local_end.hour() == work_hours.1 && local_end.minute() == 0));
-        let free = busy.iter().flatten().all(|slot| {
-            !slot.show_as.is_busy() || slot.end <= at || slot.start >= at + duration
-        });
+        let free = busy
+            .iter()
+            .flatten()
+            .all(|slot| !slot.show_as.is_busy() || slot.end <= at || slot.start >= at + duration);
         if in_hours && free {
             found.push(at);
         }
@@ -747,7 +770,9 @@ pub fn apply(store: &Store, command: CalendarCommand) -> Result<Command> {
 
 fn validate(event: &CalendarEvent) -> Result<()> {
     if event.end < event.start {
-        return Err(Error::Invalid("an event cannot end before it starts".into()));
+        return Err(Error::Invalid(
+            "an event cannot end before it starts".into(),
+        ));
     }
     if let Some(rule) = &event.recurrence {
         RRule::parse(rule)?;
@@ -814,25 +839,27 @@ fn import(
             }
             _ => {}
         }
-        if let Some(recurrence_id) = details.recurrence_id {
-            if let Some(master) = details_by_uid(store, &details.uid)?
+        if let Some(recurrence_id) = details.recurrence_id
+            && let Some(master) = details_by_uid(store, &details.uid)?
                 .into_iter()
                 .find(|row| row.recurrence_id.is_none())
-            {
-                details.master_id = Some(master.event_id);
-                let (master_event, mut master_details) = tx.load(master.event_id)?;
-                if !master_details.exdates.contains(&recurrence_id) {
-                    master_details.exdates.push(recurrence_id);
-                    master_details.exdates.sort();
-                    tx.write(master_event, Some(master_details))?;
-                }
+        {
+            details.master_id = Some(master.event_id);
+            let (master_event, mut master_details) = tx.load(master.event_id)?;
+            if !master_details.exdates.contains(&recurrence_id) {
+                master_details.exdates.push(recurrence_id);
+                master_details.exdates.sort();
+                tx.write(master_event, Some(master_details))?;
             }
         }
         match existing {
             Some(row) => {
                 let (current, current_details) = tx.load(row.event_id)?;
                 let newer = details.invitation.as_ref().map_or(0, |i| i.sequence)
-                    >= current_details.invitation.as_ref().map_or(0, |i| i.sequence);
+                    >= current_details
+                        .invitation
+                        .as_ref()
+                        .map_or(0, |i| i.sequence);
                 if newer {
                     event.id = current.id;
                     event.calendar_id = current.calendar_id;
@@ -1019,7 +1046,10 @@ mod tests {
                 details: Box::new(utc_details()),
             },
         );
-        store.query::<CalendarEvent>("ORDER BY id DESC", []).unwrap()[0].id
+        store
+            .query::<CalendarEvent>("ORDER BY id DESC", [])
+            .unwrap()[0]
+            .id
     }
 
     #[test]
@@ -1027,7 +1057,11 @@ mod tests {
         let store = store();
         let cal = calendar(&store);
         let mut history = History::new();
-        let id = create(&store, &mut history, event(cal.id, utc(2026, 11, 16, 9, 0), None));
+        let id = create(
+            &store,
+            &mut history,
+            event(cal.id, utc(2026, 11, 16, 9, 0), None),
+        );
         assert_eq!(history.undo_label(), Some("Create event"));
         let created = dump(&store);
         assert_eq!(created.len(), 1);
@@ -1061,7 +1095,11 @@ mod tests {
         let store = store();
         let cal = calendar(&store);
         let mut history = History::new();
-        let id = create(&store, &mut history, event(cal.id, utc(2026, 11, 16, 9, 0), None));
+        let id = create(
+            &store,
+            &mut history,
+            event(cal.id, utc(2026, 11, 16, 9, 0), None),
+        );
         let before = dump(&store);
 
         let start = utc(2026, 11, 17, 14, 0);
@@ -1075,7 +1113,10 @@ mod tests {
             },
         );
         let moved = store.require::<CalendarEvent>(id).unwrap();
-        assert_eq!((moved.start, moved.end), (start, start + Duration::hours(1)));
+        assert_eq!(
+            (moved.start, moved.end),
+            (start, start + Duration::hours(1))
+        );
         history.undo(&store).unwrap();
         assert_eq!(dump(&store), before);
 
@@ -1111,7 +1152,11 @@ mod tests {
         let cal = calendar(&store);
         let mut history = History::new();
         let start = utc(2026, 11, 16, 9, 0);
-        let series = create(&store, &mut history, event(cal.id, start, Some("FREQ=DAILY;COUNT=5")));
+        let series = create(
+            &store,
+            &mut history,
+            event(cal.id, start, Some("FREQ=DAILY;COUNT=5")),
+        );
         let original = dump(&store);
         let week = |store: &Store| occurrences(store, start, start + Duration::days(7)).unwrap();
         assert_eq!(week(&store).len(), 5);
@@ -1175,7 +1220,11 @@ mod tests {
         let cal = calendar(&store);
         let mut history = History::new();
         let start = utc(2026, 11, 16, 9, 0);
-        let series = create(&store, &mut history, event(cal.id, start, Some("FREQ=DAILY;COUNT=3")));
+        let series = create(
+            &store,
+            &mut history,
+            event(cal.id, start, Some("FREQ=DAILY;COUNT=3")),
+        );
         let second = start + Duration::days(1);
         run(
             &store,
@@ -1205,7 +1254,11 @@ mod tests {
         let store = store();
         let cal = calendar(&store);
         let mut history = History::new();
-        let id = create(&store, &mut history, event(cal.id, utc(2026, 11, 16, 9, 0), None));
+        let id = create(
+            &store,
+            &mut history,
+            event(cal.id, utc(2026, 11, 16, 9, 0), None),
+        );
         run(
             &store,
             &mut history,
@@ -1251,25 +1304,45 @@ mod tests {
             method,
             events,
         };
-        run(&store, &mut history, import(Some(Method::Request), vec![incoming("Plan", 0)]));
-        run(&store, &mut history, import(Some(Method::Request), vec![incoming("Plan v2", 1)]));
+        run(
+            &store,
+            &mut history,
+            import(Some(Method::Request), vec![incoming("Plan", 0)]),
+        );
+        run(
+            &store,
+            &mut history,
+            import(Some(Method::Request), vec![incoming("Plan v2", 1)]),
+        );
         let all = dump(&store);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].event.title, "Plan v2");
         assert_eq!(all[0].event.calendar_id, cal.id);
 
         // An older sequence does not overwrite.
-        run(&store, &mut history, import(Some(Method::Request), vec![incoming("Old", 0)]));
+        run(
+            &store,
+            &mut history,
+            import(Some(Method::Request), vec![incoming("Old", 0)]),
+        );
         assert_eq!(dump(&store)[0].event.title, "Plan v2");
 
         let mut reply = incoming("ignored", 1);
         reply.event.attendees[0].status = ResponseStatus::Accepted;
-        run(&store, &mut history, import(Some(Method::Reply), vec![reply]));
+        run(
+            &store,
+            &mut history,
+            import(Some(Method::Reply), vec![reply]),
+        );
         let all = dump(&store);
         assert_eq!(all[0].event.title, "Plan v2");
         assert_eq!(all[0].event.attendees[0].status, ResponseStatus::Accepted);
 
-        run(&store, &mut history, import(Some(Method::Cancel), vec![incoming("", 2)]));
+        run(
+            &store,
+            &mut history,
+            import(Some(Method::Cancel), vec![incoming("", 2)]),
+        );
         assert!(dump(&store).is_empty());
         history.undo(&store).unwrap();
         assert_eq!(dump(&store), all);
@@ -1287,7 +1360,12 @@ mod tests {
         solo.attendees.clear();
         create(&store, &mut history, solo);
 
-        let day = occurrences(&store, start - Duration::hours(9), start + Duration::hours(15)).unwrap();
+        let day = occurrences(
+            &store,
+            start - Duration::hours(9),
+            start + Duration::hours(15),
+        )
+        .unwrap();
         let me = vec!["me@example.com".to_owned()];
         let mine = free_busy(&day, "me@example.com", &me);
         let ada = free_busy(&day, "ada@example.com", &me);
@@ -1327,15 +1405,23 @@ mod tests {
         let start = utc(2026, 11, 16, 9, 0);
         create(&store, &mut history, event(cal.id, start, None));
         let fire = start - Duration::minutes(10);
-        assert!(due_reminders(&store, fire - Duration::minutes(5), fire - Duration::minutes(1))
+        assert!(
+            due_reminders(
+                &store,
+                fire - Duration::minutes(5),
+                fire - Duration::minutes(1)
+            )
             .unwrap()
-            .is_empty());
+            .is_empty()
+        );
         let due = due_reminders(&store, fire - Duration::minutes(1), fire).unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].at, fire);
-        assert!(due_reminders(&store, fire, fire + Duration::minutes(1))
-            .unwrap()
-            .is_empty());
+        assert!(
+            due_reminders(&store, fire, fire + Duration::minutes(1))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1343,8 +1429,14 @@ mod tests {
         assert!(parse_tz("Europe/Paris").is_some());
         assert!(parse_tz("Mars/Olympus").is_none());
         assert!(time_zone_names().contains(&"America/New_York"));
-        assert_eq!(utc_offset_label("Europe/Paris", utc(2026, 1, 1, 0, 0)), "UTC+01:00");
-        assert_eq!(utc_offset_label("America/New_York", utc(2026, 7, 1, 0, 0)), "UTC-04:00");
+        assert_eq!(
+            utc_offset_label("Europe/Paris", utc(2026, 1, 1, 0, 0)),
+            "UTC+01:00"
+        );
+        assert_eq!(
+            utc_offset_label("America/New_York", utc(2026, 7, 1, 0, 0)),
+            "UTC-04:00"
+        );
     }
 
     #[test]

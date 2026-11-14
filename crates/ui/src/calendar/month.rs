@@ -21,7 +21,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let weekday_header = div()
             .flex()
             .flex_row()
@@ -44,16 +44,19 @@ impl CalendarView {
             .days
             .chunks(7)
             .enumerate()
-            .map(|(week, days)| self.render_week_row(week, days, data, t, cx).into_any_element())
+            .map(|(week, days)| {
+                self.render_week_row(week, days, data, t, cx)
+                    .into_any_element()
+            })
             .collect();
 
         div()
             .flex()
             .flex_col()
             .size_full()
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                this.on_mouse_move(event, cx)
-            }))
+            .on_mouse_move(
+                cx.listener(|this, event: &MouseMoveEvent, _, cx| this.on_mouse_move(event, cx)),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, window, cx| this.on_mouse_up(window, cx)),
@@ -73,7 +76,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let Some(&first_day) = days.first() else {
             return div();
         };
@@ -195,7 +198,8 @@ impl CalendarView {
                                     .when(!is_today, |el| {
                                         el.text_color(if in_month { t.text } else { t.text_subtle })
                                             .when(is_anchor, |el| {
-                                                el.font_weight(FontWeight::BOLD).text_color(t.accent)
+                                                el.font_weight(FontWeight::BOLD)
+                                                    .text_color(t.accent)
                                             })
                                     })
                                     .child(label),
@@ -271,7 +275,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.selected == Some(occurrence.key());
         let color = data.color(occurrence.event.calendar_id);
         let style = chip_style(
@@ -292,7 +296,9 @@ impl CalendarView {
         let time = layout::local_span(occurrence).0.format("%H:%M").to_string();
 
         div()
-            .id(ElementId::Name(format!("month-item-{week}-{id}-{start}").into()))
+            .id(ElementId::Name(
+                format!("month-item-{week}-{id}-{start}").into(),
+            ))
             .absolute()
             .left(relative(left))
             .w(relative(width))

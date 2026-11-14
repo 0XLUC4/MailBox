@@ -102,13 +102,12 @@ impl ReminderService {
         let service = cx.entity();
         let existing = self.window;
         cx.defer(move |cx| {
-            if let Some(handle) = existing {
-                if handle
+            if let Some(handle) = existing
+                && handle
                     .update(cx, |_, window, _| window.activate_window())
                     .is_ok()
-                {
-                    return;
-                }
+            {
+                return;
             }
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(440.), px(360.)), cx)),
@@ -210,11 +209,7 @@ impl Render for ReminderWindow {
         let service = self.service.read(cx);
         let reminders = service.active.clone();
         let state = service.state.clone();
-        let calendars = state
-            .read(cx)
-            .store()
-            .list_calendars()
-            .unwrap_or_default();
+        let calendars = state.read(cx).store().list_calendars().unwrap_or_default();
         let now = Utc::now();
 
         let rows: Vec<AnyElement> = reminders
@@ -288,7 +283,11 @@ impl Render for ReminderWindow {
                                     .child(
                                         div()
                                             .text_size(TEXT_SM)
-                                            .text_color(if started { t.danger } else { t.text_muted })
+                                            .text_color(if started {
+                                                t.danger
+                                            } else {
+                                                t.text_muted
+                                            })
                                             .child(format!(
                                                 "{} · {}",
                                                 when_label(event.start, now),
@@ -298,7 +297,9 @@ impl Render for ReminderWindow {
                                                     format!(
                                                         "{} {}",
                                                         local_start.format("%a"),
-                                                        layout::time_range_label(&reminder.occurrence)
+                                                        layout::time_range_label(
+                                                            &reminder.occurrence
+                                                        )
                                                     )
                                                 }
                                             )),
@@ -340,19 +341,23 @@ impl Render for ReminderWindow {
                                 ))
                                 .compact()
                                 .label("Open")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let target = if occurrence.is_recurring_instance() {
-                                        EditorTarget::Occurrence {
-                                            occurrence: occurrence.clone(),
-                                        }
-                                    } else {
-                                        EditorTarget::Event {
-                                            id: occurrence.event.id,
-                                        }
-                                    };
-                                    open_event_editor(state.clone(), target, cx);
-                                    this.act(window, cx, |service, cx| service.dismiss(key, cx));
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        let target = if occurrence.is_recurring_instance() {
+                                            EditorTarget::Occurrence {
+                                                occurrence: Box::new(occurrence.clone()),
+                                            }
+                                        } else {
+                                            EditorTarget::Event {
+                                                id: occurrence.event.id,
+                                            }
+                                        };
+                                        open_event_editor(state.clone(), target, cx);
+                                        this.act(window, cx, |service, cx| {
+                                            service.dismiss(key, cx)
+                                        });
+                                    },
+                                )),
                             )
                             .child(
                                 Button::new(ElementId::Name(
@@ -361,9 +366,11 @@ impl Render for ReminderWindow {
                                 .primary()
                                 .compact()
                                 .label("Dismiss")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.act(window, cx, |service, cx| service.dismiss(key, cx))
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.act(window, cx, |service, cx| service.dismiss(key, cx))
+                                    },
+                                )),
                             ),
                     )
                     .into_any_element()
@@ -429,16 +436,22 @@ impl Render for ReminderWindow {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use chrono::TimeZone as _;
+    use super::when_label;
+    use chrono::{Duration, TimeZone as _, Utc};
 
     #[test]
     fn when_labels() {
         let now = Utc.with_ymd_and_hms(2026, 11, 16, 9, 0, 0).unwrap();
         assert_eq!(when_label(now + Duration::minutes(10), now), "in 10 min");
         assert_eq!(when_label(now, now), "now");
-        assert_eq!(when_label(now - Duration::minutes(5), now), "started 5 min ago");
-        assert_eq!(when_label(now + Duration::minutes(90), now), "in 1 h 30 min");
+        assert_eq!(
+            when_label(now - Duration::minutes(5), now),
+            "started 5 min ago"
+        );
+        assert_eq!(
+            when_label(now + Duration::minutes(90), now),
+            "in 1 h 30 min"
+        );
         assert_eq!(when_label(now + Duration::days(2), now), "in 2 d");
     }
 }

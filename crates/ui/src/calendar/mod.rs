@@ -32,7 +32,7 @@ use crate::theme::{
     TEXT_MD, TEXT_SM, Theme, hex, theme,
 };
 
-pub use editor::{EditorTarget, EventEditor, open_event_editor};
+pub use editor::{EditorTarget, EventEditor, open_event_editor, open_meeting_editor};
 use layout::ViewKind;
 pub use reminders::ReminderService;
 
@@ -372,7 +372,10 @@ impl CalendarView {
         let occurrences = self.occurrences_between(cx, &days, &visible);
         let now = Local::now().naive_local();
         ViewData {
-            my_emails: accounts.iter().map(|account| account.email.clone()).collect(),
+            my_emails: accounts
+                .iter()
+                .map(|account| account.email.clone())
+                .collect(),
             accounts,
             calendars,
             visible,
@@ -411,7 +414,12 @@ impl CalendarView {
     }
 
     fn default_calendar(&self, cx: &App) -> Option<Id> {
-        let calendars = self.state.read(cx).store().list_calendars().unwrap_or_default();
+        let calendars = self
+            .state
+            .read(cx)
+            .store()
+            .list_calendars()
+            .unwrap_or_default();
         calendars
             .iter()
             .find(|calendar| !self.hidden.contains(&calendar.id))
@@ -458,7 +466,13 @@ impl CalendarView {
         self.run(CalendarCommand::Move { id, start, end }, cx);
     }
 
-    fn copy_to(&mut self, occurrence: &Occurrence, start: DateTime<Utc>, end: DateTime<Utc>, cx: &mut Context<Self>) {
+    fn copy_to(
+        &mut self,
+        occurrence: &Occurrence,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        cx: &mut Context<Self>,
+    ) {
         self.run(
             CalendarCommand::Copy {
                 id: occurrence.event.id,
@@ -505,7 +519,15 @@ impl CalendarView {
         );
     }
 
-    fn open_new(&mut self, start: DateTime<Utc>, end: DateTime<Utc>, all_day: bool, calendar_id: Option<Id>, title: String, cx: &mut Context<Self>) {
+    fn open_new(
+        &mut self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        all_day: bool,
+        calendar_id: Option<Id>,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
         let calendar_id = calendar_id.or_else(|| self.default_calendar(cx));
         open_event_editor(
             self.state.clone(),
@@ -529,7 +551,14 @@ impl CalendarView {
             9
         };
         let start = layout::local_to_utc(self.anchor, hour * 60);
-        self.open_new(start, start + Duration::minutes(30), false, None, String::new(), cx);
+        self.open_new(
+            start,
+            start + Duration::minutes(30),
+            false,
+            None,
+            String::new(),
+            cx,
+        );
     }
 
     fn resolve_prompt(&mut self, whole_series: bool, cx: &mut Context<Self>) {
@@ -540,9 +569,13 @@ impl CalendarView {
         let series_id = occurrence.series_id();
         let original = occurrence.series_start.unwrap_or(occurrence.event.start);
         match (action, whole_series) {
-            (SeriesAction::Open, false) => {
-                open_event_editor(self.state.clone(), EditorTarget::Occurrence { occurrence }, cx)
-            }
+            (SeriesAction::Open, false) => open_event_editor(
+                self.state.clone(),
+                EditorTarget::Occurrence {
+                    occurrence: Box::new(occurrence),
+                },
+                cx,
+            ),
             (SeriesAction::Open, true) => open_event_editor(
                 self.state.clone(),
                 EditorTarget::Event { id: series_id },
@@ -864,7 +897,8 @@ impl CalendarView {
                 if !drag.moved {
                     return;
                 }
-                let (Some(occurrence), Some((start, end))) = (drag.occurrence.clone(), drag.preview())
+                let (Some(occurrence), Some((start, end))) =
+                    (drag.occurrence.clone(), drag.preview())
                 else {
                     return;
                 };
@@ -880,14 +914,19 @@ impl CalendarView {
     // ---------- keyboard ----------
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.focus.is_focused(window) || (self.prompt.is_some() && event.keystroke.key != "escape") {
+        if !self.focus.is_focused(window)
+            || (self.prompt.is_some() && event.keystroke.key != "escape")
+        {
             return;
         }
         let modifiers = event.keystroke.modifiers;
         if modifiers.control || modifiers.platform || modifiers.alt {
             return;
         }
-        let data_needed = matches!(event.keystroke.key.as_str(), "delete" | "backspace" | "enter");
+        let data_needed = matches!(
+            event.keystroke.key.as_str(),
+            "delete" | "backspace" | "enter"
+        );
         let selected = if data_needed {
             let data = self.load(cx);
             self.find_selected(&data)
@@ -954,8 +993,9 @@ impl CalendarView {
                 .and_then(|text| mailbox_core::ics::parse(&text).map_err(|err| err.to_string()));
             let _ = this.update(cx, |this, cx| match parsed {
                 Ok(calendar) if calendar.events.is_empty() => {
-                    this.state
-                        .update(cx, |state, cx| state.notify_info("No events in this file", cx));
+                    this.state.update(cx, |state, cx| {
+                        state.notify_info("No events in this file", cx)
+                    });
                 }
                 Ok(calendar) => {
                     let count = calendar.events.len();
@@ -979,9 +1019,9 @@ impl CalendarView {
                         });
                     }
                 }
-                Err(err) => this
-                    .state
-                    .update(cx, |state, cx| state.report_error(format!("Import failed: {err}"), cx)),
+                Err(err) => this.state.update(cx, |state, cx| {
+                    state.report_error(format!("Import failed: {err}"), cx)
+                }),
             });
         })
         .detach();
@@ -1034,7 +1074,7 @@ impl CalendarView {
 
     // ---------- toolbar ----------
 
-    fn render_toolbar(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_toolbar(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let title = layout::title(self.kind, self.anchor);
         let picker_open = self.picker.is_some();
         let segmented = div()
@@ -1057,7 +1097,9 @@ impl CalendarView {
                     .text_size(TEXT_SM)
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
-                    .when(active, |el| el.bg(t.elevated).text_color(t.text).shadow_sm())
+                    .when(active, |el| {
+                        el.bg(t.elevated).text_color(t.text).shadow_sm()
+                    })
                     .when(!active, |el| {
                         el.text_color(t.text_muted)
                             .hover(|style| style.text_color(t.text))
@@ -1105,40 +1147,38 @@ impl CalendarView {
                     ),
             )
             .child(
-                div()
-                    .relative()
-                    .child(
-                        div()
-                            .id("cal-title")
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(SPACE_1)
-                            .px(SPACE_2)
-                            .h(px(30.))
-                            .rounded(RADIUS_MD)
-                            .cursor_pointer()
-                            .hover(|style| style.bg(t.hover))
-                            .when(picker_open, |el| el.bg(t.active))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.picker = match this.picker {
-                                    Some(_) => None,
-                                    None => Some(layout::first_of_month(this.anchor)),
-                                };
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .text_size(TEXT_LG)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(title),
-                            )
-                            .child(
-                                Icon::new(IconName::ChevronDown)
-                                    .size(ICON_SIZE_SM)
-                                    .text_color(t.text_muted),
-                            ),
-                    )
+                div().relative().child(
+                    div()
+                        .id("cal-title")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(SPACE_1)
+                        .px(SPACE_2)
+                        .h(px(30.))
+                        .rounded(RADIUS_MD)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(t.hover))
+                        .when(picker_open, |el| el.bg(t.active))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.picker = match this.picker {
+                                Some(_) => None,
+                                None => Some(layout::first_of_month(this.anchor)),
+                            };
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .text_size(TEXT_LG)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(title),
+                        )
+                        .child(
+                            Icon::new(IconName::ChevronDown)
+                                .size(ICON_SIZE_SM)
+                                .text_color(t.text_muted),
+                        ),
+                ),
             )
             .child(div().flex_1())
             .child(segmented)
@@ -1156,7 +1196,12 @@ impl CalendarView {
     }
 
     /// Date picker popover under the toolbar title, with a click-away backdrop.
-    fn render_picker(&self, month: NaiveDate, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_picker(
+        &self,
+        month: NaiveDate,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         div()
             .id("cal-picker-backdrop")
             .absolute()
@@ -1187,7 +1232,12 @@ impl CalendarView {
             )
     }
 
-    fn render_prompt(&self, prompt: &SeriesPrompt, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_prompt(
+        &self,
+        prompt: &SeriesPrompt,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let (title, body, this_label, all_label) = match prompt.action {
             SeriesAction::Open => (
                 "Open recurring event",
@@ -1245,7 +1295,11 @@ impl CalendarView {
                             .flex_row()
                             .items_center()
                             .gap(SPACE_2)
-                            .child(Icon::new(IconName::Repeat).size(px(16.)).text_color(t.accent))
+                            .child(
+                                Icon::new(IconName::Repeat)
+                                    .size(px(16.))
+                                    .text_color(t.accent),
+                            )
                             .child(
                                 div()
                                     .text_size(TEXT_LG)
@@ -1266,12 +1320,15 @@ impl CalendarView {
                             .justify_end()
                             .gap(SPACE_2)
                             .pt(SPACE_2)
-                            .child(Button::new("prompt-cancel").ghost().label("Cancel").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.prompt = None;
-                                    cx.notify();
-                                }),
-                            ))
+                            .child(
+                                Button::new("prompt-cancel")
+                                    .ghost()
+                                    .label("Cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.prompt = None;
+                                        cx.notify();
+                                    })),
+                            )
                             .child(Button::new("prompt-series").label(all_label).on_click(
                                 cx.listener(|this, _, _, cx| this.resolve_prompt(true, cx)),
                             ))
@@ -1284,7 +1341,9 @@ impl CalendarView {
                                     })
                                     .label(this_label)
                                     .on_click(
-                                        cx.listener(|this, _, _, cx| this.resolve_prompt(false, cx)),
+                                        cx.listener(|this, _, _, cx| {
+                                            this.resolve_prompt(false, cx)
+                                        }),
                                     ),
                             ),
                     ),
@@ -1298,9 +1357,9 @@ impl Render for CalendarView {
         self.hits.borrow_mut().clear();
         let data = self.load(cx);
         let body = match self.kind {
-            ViewKind::Day | ViewKind::WorkWeek | ViewKind::Week => {
-                self.render_time_grid(&data, &t, window, cx).into_any_element()
-            }
+            ViewKind::Day | ViewKind::WorkWeek | ViewKind::Week => self
+                .render_time_grid(&data, &t, window, cx)
+                .into_any_element(),
             ViewKind::Month => self.render_month(&data, &t, cx).into_any_element(),
             ViewKind::Agenda => self.render_agenda(&data, &t, cx).into_any_element(),
         };

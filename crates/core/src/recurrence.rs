@@ -250,8 +250,7 @@ impl RRule {
                     ordinal_name(set_pos.unwrap_or(1)),
                     weekday_long(plain_days[0])
                 ));
-            } else if plain_days.len() == 5 && weekdays.iter().all(|day| plain_days.contains(day))
-            {
+            } else if plain_days.len() == 5 && weekdays.iter().all(|day| plain_days.contains(day)) {
                 text.push_str(" on weekdays");
             } else {
                 let names: Vec<&str> = plain_days.iter().map(|day| weekday_short(*day)).collect();
@@ -383,9 +382,8 @@ impl RRule {
     /// Candidate dates of the period `offset` periods after the one containing `start`.
     /// `None` when the date arithmetic overflows (ends the expansion).
     fn period_dates(&self, start: NaiveDate, offset: i64) -> Option<Vec<NaiveDate>> {
-        let month_ok = |date: &NaiveDate| {
-            self.by_month.is_empty() || self.by_month.contains(&date.month())
-        };
+        let month_ok =
+            |date: &NaiveDate| self.by_month.is_empty() || self.by_month.contains(&date.month());
         let day_ok = |date: &NaiveDate| {
             self.by_day.is_empty()
                 || self
@@ -552,7 +550,9 @@ fn select_positions(dates: &[NaiveDate], positions: &[i32]) -> Vec<NaiveDate> {
         .iter()
         .filter_map(|pos| {
             let index = if *pos > 0 { pos - 1 } else { len + pos };
-            usize::try_from(index).ok().and_then(|i| dates.get(i).copied())
+            usize::try_from(index)
+                .ok()
+                .and_then(|i| dates.get(i).copied())
         })
         .collect();
     picked.sort();
@@ -825,7 +825,11 @@ mod tests {
     #[test]
     fn weekly_on_chosen_days() {
         // 2026-11-02 is a Monday.
-        let out = all("FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=5", utc(2026, 11, 2, 9, 0), 100);
+        let out = all(
+            "FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=5",
+            utc(2026, 11, 2, 9, 0),
+            100,
+        );
         assert_eq!(
             dates(&out),
             [
@@ -841,7 +845,11 @@ mod tests {
     #[test]
     fn weekly_every_other_week_starting_mid_week() {
         // Starts Wednesday; Monday of the first week is before the start and skipped.
-        let out = all("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE", utc(2026, 11, 4, 9, 0), 4);
+        let out = all(
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE",
+            utc(2026, 11, 4, 9, 0),
+            4,
+        );
         assert_eq!(
             dates(&out),
             ["2026-11-04", "2026-11-16", "2026-11-18", "2026-11-30"]
@@ -875,7 +883,11 @@ mod tests {
         assert_eq!(dates(&out), ["2026-11-10", "2026-12-08", "2027-01-12"]);
         let out = all("FREQ=MONTHLY;BYDAY=-1FR", utc(2026, 11, 27, 9, 0), 2);
         assert_eq!(dates(&out), ["2026-11-27", "2026-12-25"]);
-        let out = all("FREQ=MONTHLY;BYDAY=TU;BYSETPOS=2", utc(2026, 11, 10, 9, 0), 2);
+        let out = all(
+            "FREQ=MONTHLY;BYDAY=TU;BYSETPOS=2",
+            utc(2026, 11, 10, 9, 0),
+            2,
+        );
         assert_eq!(dates(&out), ["2026-11-10", "2026-12-08"]);
     }
 
@@ -883,7 +895,11 @@ mod tests {
     fn yearly_variants() {
         let out = all("FREQ=YEARLY", utc(2024, 2, 29, 0, 0), 2);
         assert_eq!(dates(&out), ["2024-02-29", "2028-02-29"]);
-        let out = all("FREQ=YEARLY;BYMONTH=11;BYDAY=4TH", utc(2026, 11, 26, 12, 0), 2);
+        let out = all(
+            "FREQ=YEARLY;BYMONTH=11;BYDAY=4TH",
+            utc(2026, 11, 26, 12, 0),
+            2,
+        );
         assert_eq!(dates(&out), ["2026-11-26", "2027-11-25"]);
         let out = all("FREQ=YEARLY;INTERVAL=2", utc(2026, 6, 1, 12, 0), 2);
         assert_eq!(dates(&out), ["2026-06-01", "2028-06-01"]);
@@ -951,7 +967,10 @@ mod tests {
             describe("FREQ=MONTHLY;BYDAY=2TU"),
             "Monthly on the second Tuesday"
         );
-        assert_eq!(describe("FREQ=MONTHLY;BYMONTHDAY=-1"), "Monthly on last day");
+        assert_eq!(
+            describe("FREQ=MONTHLY;BYMONTHDAY=-1"),
+            "Monthly on last day"
+        );
     }
 
     #[test]

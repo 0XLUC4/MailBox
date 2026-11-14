@@ -21,6 +21,12 @@ thiserror = "2.0.21"
 chrono-tz = "0.10"
 # GPUI + gpui-component + Lucide icons. Renamed to `gpui` so GPUI derive macros resolve.
 gpui = { package = "gpui-kit", version = "=0.9.0" }
+# Sync (IMAP/SMTP/OAuth/credentials, MIME parsing).
+imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
+keyring = "4.2"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls", "hostname"] }
+mail-parser = "0.11"
+oauth2 = { version = "5", default-features = false, features = ["ureq"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

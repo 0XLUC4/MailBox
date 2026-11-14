@@ -98,11 +98,11 @@ fn unfold(text: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for raw in text.split('\n') {
         let raw = raw.strip_suffix('\r').unwrap_or(raw);
-        if let Some(rest) = raw.strip_prefix([' ', '\t']) {
-            if let Some(last) = lines.last_mut() {
-                last.push_str(rest);
-                continue;
-            }
+        if let Some(rest) = raw.strip_prefix([' ', '\t'])
+            && let Some(last) = lines.last_mut()
+        {
+            last.push_str(rest);
+            continue;
         }
         if !raw.trim().is_empty() {
             lines.push(raw.to_owned());
@@ -351,7 +351,9 @@ fn build_event(
     let get = |name: &str| properties.iter().find(|p| p.name == name);
     let text = |name: &str| get(name).map(|p| unescape(&p.value)).unwrap_or_default();
 
-    let start = parse_time(get("DTSTART").ok_or_else(|| Error::Invalid("ics: VEVENT without DTSTART".into()))?)?;
+    let start = parse_time(
+        get("DTSTART").ok_or_else(|| Error::Invalid("ics: VEVENT without DTSTART".into()))?,
+    )?;
     let end = match (get("DTEND"), get("DURATION")) {
         (Some(end), _) => parse_time(end)?.utc,
         (None, Some(duration)) => {
@@ -444,7 +446,10 @@ fn build_event(
         time_zone: start.zone,
         show_as,
         private: get("CLASS").is_some_and(|p| {
-            matches!(p.value.to_ascii_uppercase().as_str(), "PRIVATE" | "CONFIDENTIAL")
+            matches!(
+                p.value.to_ascii_uppercase().as_str(),
+                "PRIVATE" | "CONFIDENTIAL"
+            )
         }),
         organizer: get("ORGANIZER").map(parse_address),
         exdates,
@@ -532,7 +537,13 @@ fn utc_stamp(time: DateTime<Utc>) -> String {
     time.format("%Y%m%dT%H%M%SZ").to_string()
 }
 
-fn write_time(out: &mut Writer, name: &str, time: DateTime<Utc>, all_day: bool, zone: Option<&str>) {
+fn write_time(
+    out: &mut Writer,
+    name: &str,
+    time: DateTime<Utc>,
+    all_day: bool,
+    zone: Option<&str>,
+) {
     if all_day {
         out.line(&format!("{name};VALUE=DATE:{}", time.format("%Y%m%d")));
         return;
@@ -540,7 +551,8 @@ fn write_time(out: &mut Writer, name: &str, time: DateTime<Utc>, all_day: bool, 
     match zone.and_then(|z| parse_tz(z).map(|tz| (z, tz))) {
         Some((name_tz, tz)) => out.line(&format!(
             "{name};TZID={name_tz}:{}",
-            tz.from_utc_datetime(&time.naive_utc()).format("%Y%m%dT%H%M%S")
+            tz.from_utc_datetime(&time.naive_utc())
+                .format("%Y%m%dT%H%M%S")
         )),
         None => out.line(&format!("{name}:{}", utc_stamp(time))),
     }
@@ -555,7 +567,12 @@ fn address_line(name: &str, params: &str, address: &Address) -> String {
     format!("{name}{cn}{params}:mailto:{}", address.email)
 }
 
-fn write_event(out: &mut Writer, event: &CalendarEvent, details: &EventDetails, method: Option<Method>) {
+fn write_event(
+    out: &mut Writer,
+    event: &CalendarEvent,
+    details: &EventDetails,
+    method: Option<Method>,
+) {
     let zone = details.time_zone.as_deref();
     out.line("BEGIN:VEVENT");
     out.line(&format!("UID:{}", details.uid));
@@ -691,7 +708,10 @@ END:VCALENDAR\r\n";
         // 10:00 Paris in November = 09:00 UTC.
         assert_eq!(event.start, utc(2026, 11, 17, 9, 0));
         assert_eq!(event.end, utc(2026, 11, 17, 10, 0));
-        assert_eq!(event.recurrence.as_deref(), Some("FREQ=WEEKLY;BYDAY=TU;COUNT=6"));
+        assert_eq!(
+            event.recurrence.as_deref(),
+            Some("FREQ=WEEKLY;BYDAY=TU;COUNT=6")
+        );
         assert_eq!(details.exdates, [utc(2026, 11, 24, 9, 0)]);
         assert_eq!(details.time_zone.as_deref(), Some("Europe/Paris"));
         assert_eq!(details.show_as, ShowAs::Tentative);
@@ -785,7 +805,9 @@ END:VCALENDAR\r\n";
         assert!(parse("hello").is_err());
         assert!(parse("BEGIN:VEVENT\nEND:VEVENT\n").is_err());
         assert!(parse("BEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VCALENDAR\n").is_err());
-        assert!(parse("BEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:x\nEND:VEVENT\nEND:VCALENDAR\n").is_err());
+        assert!(
+            parse("BEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:x\nEND:VEVENT\nEND:VCALENDAR\n").is_err()
+        );
     }
 
     #[test]

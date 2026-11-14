@@ -7,8 +7,6 @@ use chrono::{
 use mailbox_core::calendar::Occurrence;
 use mailbox_core::recurrence::to_utc;
 
-use crate::components::IconName;
-
 pub const WEEK_START: Weekday = Weekday::Mon;
 pub const MINUTES_PER_DAY: i64 = 24 * 60;
 /// Drag / click granularity.
@@ -45,16 +43,6 @@ impl ViewKind {
         }
     }
 
-    pub fn icon(self) -> IconName {
-        match self {
-            Self::Day => IconName::CalendarDays,
-            Self::WorkWeek => IconName::CalendarRange,
-            Self::Week => IconName::CalendarRange,
-            Self::Month => IconName::Calendar,
-            Self::Agenda => IconName::List,
-        }
-    }
-
     /// Keyboard shortcut shown in tooltips.
     pub fn shortcut(self) -> &'static str {
         match self {
@@ -64,11 +52,6 @@ impl ViewKind {
             Self::Month => "M",
             Self::Agenda => "A",
         }
-    }
-
-    /// True for the hour-grid views.
-    pub fn is_time_grid(self) -> bool {
-        matches!(self, Self::Day | Self::WorkWeek | Self::Week)
     }
 }
 
@@ -135,7 +118,11 @@ pub fn title(kind: ViewKind, anchor: NaiveDate) -> String {
             } else if first.year() == last.year() {
                 format!("{} – {}", first.format("%-d %b"), last.format("%-d %b %Y"))
             } else {
-                format!("{} – {}", first.format("%-d %b %Y"), last.format("%-d %b %Y"))
+                format!(
+                    "{} – {}",
+                    first.format("%-d %b %Y"),
+                    last.format("%-d %b %Y")
+                )
             }
         }
     }
@@ -145,7 +132,8 @@ pub fn title(kind: ViewKind, anchor: NaiveDate) -> String {
 pub fn utc_range(first: NaiveDate, last: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
     // All-day events are stored at UTC midnight; widen by a day so they are never missed.
     let from = to_utc(&Local, first.and_time(NaiveTime::MIN)) - Duration::days(1);
-    let to = to_utc(&Local, (last + Duration::days(1)).and_time(NaiveTime::MIN)) + Duration::days(1);
+    let to =
+        to_utc(&Local, (last + Duration::days(1)).and_time(NaiveTime::MIN)) + Duration::days(1);
     (from, to)
 }
 
@@ -216,32 +204,33 @@ pub fn layout_columns(items: &[(i64, i64)], min_len: i64) -> Vec<Placement> {
     let mut cluster_end = i64::MIN;
     let mut column_ends: Vec<i64> = Vec::new();
 
-    let flush = |cluster: &mut Vec<usize>, column_ends: &mut Vec<i64>, placements: &mut [Placement]| {
-        let columns = column_ends.len().max(1);
-        for &index in cluster.iter() {
-            placements[index].columns = columns;
-        }
-        // Grow each item right while the next columns are free during its time.
-        for &index in cluster.iter() {
-            let (start, end) = (items[index].0, end_of(index));
-            let column = placements[index].column;
-            let mut span = 1;
-            while column + span < columns {
-                let blocked = cluster.iter().any(|&other| {
-                    placements[other].column == column + span
-                        && items[other].0 < end
-                        && end_of(other) > start
-                });
-                if blocked {
-                    break;
-                }
-                span += 1;
+    let flush =
+        |cluster: &mut Vec<usize>, column_ends: &mut Vec<i64>, placements: &mut [Placement]| {
+            let columns = column_ends.len().max(1);
+            for &index in cluster.iter() {
+                placements[index].columns = columns;
             }
-            placements[index].span = span;
-        }
-        cluster.clear();
-        column_ends.clear();
-    };
+            // Grow each item right while the next columns are free during its time.
+            for &index in cluster.iter() {
+                let (start, end) = (items[index].0, end_of(index));
+                let column = placements[index].column;
+                let mut span = 1;
+                while column + span < columns {
+                    let blocked = cluster.iter().any(|&other| {
+                        placements[other].column == column + span
+                            && items[other].0 < end
+                            && end_of(other) > start
+                    });
+                    if blocked {
+                        break;
+                    }
+                    span += 1;
+                }
+                placements[index].span = span;
+            }
+            cluster.clear();
+            column_ends.clear();
+        };
 
     for (index, &(start, _)) in items.iter().enumerate() {
         if !cluster.is_empty() && start >= cluster_end {
@@ -249,7 +238,10 @@ pub fn layout_columns(items: &[(i64, i64)], min_len: i64) -> Vec<Placement> {
             cluster_end = i64::MIN;
         }
         let end = end_of(index);
-        let column = match column_ends.iter().position(|&column_end| column_end <= start) {
+        let column = match column_ends
+            .iter()
+            .position(|&column_end| column_end <= start)
+        {
             Some(column) => {
                 column_ends[column] = end;
                 column
@@ -273,8 +265,8 @@ pub fn pack_lanes(ranges: &[(usize, usize)]) -> Vec<usize> {
     let mut lane_ends: Vec<usize> = Vec::new();
     ranges
         .iter()
-        .map(|&(first, last)| {
-            match lane_ends.iter().position(|&end| end < first) {
+        .map(
+            |&(first, last)| match lane_ends.iter().position(|&end| end < first) {
                 Some(lane) => {
                     lane_ends[lane] = last;
                     lane
@@ -283,8 +275,8 @@ pub fn pack_lanes(ranges: &[(usize, usize)]) -> Vec<usize> {
                     lane_ends.push(last);
                     lane_ends.len() - 1
                 }
-            }
-        })
+            },
+        )
         .collect()
 }
 
@@ -300,7 +292,10 @@ pub fn snap_down(minutes: i64) -> i64 {
 
 /// Local day + minutes to UTC.
 pub fn local_to_utc(day: NaiveDate, minutes: i64) -> DateTime<Utc> {
-    to_utc(&Local, day.and_time(NaiveTime::MIN) + Duration::minutes(minutes))
+    to_utc(
+        &Local,
+        day.and_time(NaiveTime::MIN) + Duration::minutes(minutes),
+    )
 }
 
 /// "09:00", "13:30".
@@ -314,10 +309,16 @@ pub fn time_range_label(occurrence: &Occurrence) -> String {
         return "All day".into();
     }
     let (start, end) = local_span(occurrence);
-    if start.date() == end.date() || (end.time() == NaiveTime::MIN && end - start <= Duration::days(1)) {
+    if start.date() == end.date()
+        || (end.time() == NaiveTime::MIN && end - start <= Duration::days(1))
+    {
         format!("{} – {}", start.format("%H:%M"), end.format("%H:%M"))
     } else {
-        format!("{} – {}", start.format("%a %H:%M"), end.format("%a %-d %b %H:%M"))
+        format!(
+            "{} – {}",
+            start.format("%a %H:%M"),
+            end.format("%a %-d %b %H:%M")
+        )
     }
 }
 
@@ -352,7 +353,10 @@ mod tests {
         let month = visible_days(ViewKind::Month, anchor);
         assert_eq!(month.len(), 42);
         assert_eq!(month[0], date(2026, 10, 26));
-        assert_eq!(step(ViewKind::Month, date(2026, 1, 31), true), date(2026, 2, 28));
+        assert_eq!(
+            step(ViewKind::Month, date(2026, 1, 31), true),
+            date(2026, 2, 28)
+        );
         assert_eq!(step(ViewKind::Week, anchor, false), date(2026, 11, 11));
         assert_eq!(add_months(date(2026, 12, 15), 1), date(2027, 1, 15));
         assert_eq!(add_months(date(2026, 1, 15), -1), date(2025, 12, 15));
@@ -363,8 +367,14 @@ mod tests {
         let anchor = date(2026, 11, 18);
         assert_eq!(title(ViewKind::Month, anchor), "November 2026");
         assert_eq!(title(ViewKind::Week, anchor), "16 – 22 November 2026");
-        assert_eq!(title(ViewKind::Week, date(2026, 12, 30)), "28 Dec 2026 – 3 Jan 2027");
-        assert_eq!(title(ViewKind::Week, date(2026, 11, 30)), "30 Nov – 6 Dec 2026");
+        assert_eq!(
+            title(ViewKind::Week, date(2026, 12, 30)),
+            "28 Dec 2026 – 3 Jan 2027"
+        );
+        assert_eq!(
+            title(ViewKind::Week, date(2026, 11, 30)),
+            "30 Nov – 6 Dec 2026"
+        );
     }
 
     #[test]
@@ -372,11 +382,39 @@ mod tests {
         // A 9-11, B 9:30-10, C 10-10:30, D 12-13 (separate cluster).
         let items = [(540, 660), (570, 600), (600, 630), (720, 780)];
         let placements = layout_columns(&items, 15);
-        assert_eq!(placements[0], Placement { column: 0, columns: 2, span: 1 });
-        assert_eq!(placements[1], Placement { column: 1, columns: 2, span: 1 });
+        assert_eq!(
+            placements[0],
+            Placement {
+                column: 0,
+                columns: 2,
+                span: 1
+            }
+        );
+        assert_eq!(
+            placements[1],
+            Placement {
+                column: 1,
+                columns: 2,
+                span: 1
+            }
+        );
         // C reuses column 1 once B ended.
-        assert_eq!(placements[2], Placement { column: 1, columns: 2, span: 1 });
-        assert_eq!(placements[3], Placement { column: 0, columns: 1, span: 1 });
+        assert_eq!(
+            placements[2],
+            Placement {
+                column: 1,
+                columns: 2,
+                span: 1
+            }
+        );
+        assert_eq!(
+            placements[3],
+            Placement {
+                column: 0,
+                columns: 1,
+                span: 1
+            }
+        );
     }
 
     #[test]
@@ -384,16 +422,33 @@ mod tests {
         // A 9-10, B 9-12, C 9-10, D 10:30-11: D reuses column 0 and B blocks its growth.
         let items = [(540, 600), (540, 720), (540, 600), (630, 660)];
         let placements = layout_columns(&items, 15);
-        assert_eq!(placements.iter().map(|p| p.column).collect::<Vec<_>>(), [0, 1, 2, 0]);
+        assert_eq!(
+            placements.iter().map(|p| p.column).collect::<Vec<_>>(),
+            [0, 1, 2, 0]
+        );
         assert!(placements.iter().all(|p| p.columns == 3));
         assert_eq!(placements[3].span, 1);
         let items = [(540, 720), (540, 600), (630, 660)];
         let placements = layout_columns(&items, 15);
-        assert_eq!(placements[2], Placement { column: 1, columns: 2, span: 1 });
+        assert_eq!(
+            placements[2],
+            Placement {
+                column: 1,
+                columns: 2,
+                span: 1
+            }
+        );
         let items = [(540, 600), (540, 720), (630, 660)];
         let placements = layout_columns(&items, 15);
         // Third starts after the first ended: column 0, and column 1 is busy (B) -> span 1.
-        assert_eq!(placements[2], Placement { column: 0, columns: 2, span: 1 });
+        assert_eq!(
+            placements[2],
+            Placement {
+                column: 0,
+                columns: 2,
+                span: 1
+            }
+        );
     }
 
     #[test]

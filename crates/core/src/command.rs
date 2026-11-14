@@ -55,6 +55,26 @@ pub enum Command {
     DeleteRule(Id),
     /// Applied in order, atomically.
     Batch(Vec<Command>),
+    /// Duplicates messages into a folder (new ids); undo deletes the copies.
+    CopyMessages {
+        ids: Vec<Id>,
+        folder_id: Id,
+    },
+    /// Sets or clears the follow-up flag; `due` is kept only while flagged.
+    FlagMessages {
+        ids: Vec<Id>,
+        flagged: bool,
+        due: Option<chrono::NaiveDate>,
+    },
+    /// Contacts with details, groups, merge (see [`crate::people`]).
+    People(crate::people::PeopleCommand),
+    /// Tasks with details and lists (see [`crate::todo`]).
+    Todo(crate::todo::TaskCommand),
+    /// Key/value preference (JSON text); `None` removes the key. See [`crate::settings`].
+    SetSetting {
+        key: String,
+        value: Option<String>,
+    },
     /// Calendar operation with details and recurrence exceptions (see [`crate::calendar`]).
     Calendar(Box<crate::calendar::CalendarCommand>),
 }
@@ -132,6 +152,17 @@ impl Command {
                 [single] => single.label(),
                 _ => format!("{} changes", commands.len()),
             },
+            Self::CopyMessages { ids, .. } => format!("Copy {}", count(ids)),
+            Self::FlagMessages { ids, flagged, .. } => {
+                format!(
+                    "{} {}",
+                    if *flagged { "Flag" } else { "Unflag" },
+                    count(ids)
+                )
+            }
+            Self::People(command) => command.label(),
+            Self::Todo(command) => command.label(),
+            Self::SetSetting { .. } => "Change settings".into(),
             Self::Calendar(command) => command.label(),
         }
     }
@@ -240,6 +271,15 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
             inverses.reverse();
             Ok(Command::Batch(inverses))
         }
+        Command::CopyMessages { ids, folder_id } => {
+            crate::mail_ops::apply_copy(store, &ids, folder_id)
+        }
+        Command::FlagMessages { ids, flagged, due } => {
+            crate::mail_ops::apply_flag(store, &ids, flagged, due)
+        }
+        Command::People(command) => crate::people::apply(store, command),
+        Command::Todo(command) => crate::todo::apply(store, command),
+        Command::SetSetting { key, value } => crate::settings::apply_set(store, key, value),
         Command::Calendar(command) => crate::calendar::apply(store, *command),
     }
 }

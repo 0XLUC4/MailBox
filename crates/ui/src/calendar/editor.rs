@@ -13,8 +13,8 @@ use mailbox_core::calendar::{
     self as cal, BusySlot, CalendarCommand, EventDetails, Occurrence, ShowAs,
 };
 use mailbox_core::recurrence::{
-    Frequency, RRule, WeekdayNum, month_name, ordinal_name, to_utc, weekday_long,
-    weekday_position, weekday_short,
+    Frequency, RRule, WeekdayNum, month_name, ordinal_name, to_utc, weekday_long, weekday_position,
+    weekday_short,
 };
 use mailbox_core::{Address, Attendee, Calendar, CalendarEvent, Id, ResponseStatus};
 
@@ -36,16 +36,23 @@ pub enum EditorTarget {
         calendar_id: Option<Id>,
         title: String,
     },
+    /// A new meeting with people already invited; opens Find a Time.
+    Meeting {
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        attendees: Vec<Address>,
+    },
     /// A one-off event, a whole series, or a stored modified occurrence.
     Event { id: Id },
     /// One instance of a series: saving creates a modified occurrence.
-    Occurrence { occurrence: Occurrence },
+    Occurrence { occurrence: Box<Occurrence> },
 }
 
 /// Opens the editor in a new window.
 pub fn open_event_editor(state: Entity<AppState>, target: EditorTarget, cx: &mut App) {
     let title = match &target {
         EditorTarget::New { .. } => "New event",
+        EditorTarget::Meeting { .. } => "New meeting",
         EditorTarget::Event { .. } => "Edit event",
         EditorTarget::Occurrence { .. } => "Edit occurrence",
     };
@@ -70,6 +77,25 @@ pub fn open_event_editor(state: Entity<AppState>, target: EditorTarget, cx: &mut
             });
         }
     });
+}
+
+/// Opens a new-event editor with `attendees` invited, at the next half hour
+/// (for `PeopleEvent::ScheduleMeeting`).
+pub fn open_meeting_editor(state: Entity<AppState>, attendees: Vec<Address>, cx: &mut App) {
+    let now = Utc::now();
+    let minutes = i64::from(now.minute());
+    let start = now + Duration::minutes(30 - minutes % 30)
+        - Duration::seconds(i64::from(now.second()))
+        - Duration::nanoseconds(i64::from(now.nanosecond()));
+    open_event_editor(
+        state,
+        EditorTarget::Meeting {
+            start,
+            end: start + Duration::minutes(30),
+            attendees,
+        },
+        cx,
+    );
 }
 
 const REMINDER_CHOICES: &[(Option<i64>, &str)] = &[
@@ -154,21 +180,23 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
 fn parse_time(value: &str) -> Option<NaiveTime> {
     let value = value.trim().to_ascii_lowercase().replace('h', ":");
     let value = value.trim_end_matches(':');
-    ["%H:%M", "%H%M", "%H", "%I:%M%p", "%I:%M %p", "%I%p", "%I %p"]
-        .iter()
-        .find_map(|format| NaiveTime::parse_from_str(value, format).ok())
-        .or_else(|| {
-            // "9" or "930" without separator.
-            let digits: String = value.chars().filter(char::is_ascii_digit).collect();
-            match digits.len() {
-                1 | 2 => NaiveTime::from_hms_opt(digits.parse().ok()?, 0, 0),
-                3 | 4 => {
-                    let n: u32 = digits.parse().ok()?;
-                    NaiveTime::from_hms_opt(n / 100, n % 100, 0)
-                }
-                _ => None,
+    [
+        "%H:%M", "%H%M", "%H", "%I:%M%p", "%I:%M %p", "%I%p", "%I %p",
+    ]
+    .iter()
+    .find_map(|format| NaiveTime::parse_from_str(value, format).ok())
+    .or_else(|| {
+        // "9" or "930" without separator.
+        let digits: String = value.chars().filter(char::is_ascii_digit).collect();
+        match digits.len() {
+            1 | 2 => NaiveTime::from_hms_opt(digits.parse().ok()?, 0, 0),
+            3 | 4 => {
+                let n: u32 = digits.parse().ok()?;
+                NaiveTime::from_hms_opt(n / 100, n % 100, 0)
             }
-        })
+            _ => None,
+        }
+    })
 }
 
 /// Wall-clock time in the event zone (`None` = system zone).
@@ -190,13 +218,17 @@ fn zone_to_utc(local: NaiveDateTime, zone: Option<&str>) -> DateTime<Utc> {
 fn parse_address(text: &str) -> Option<Address> {
     let text = text.trim();
     let (name, email) = match (text.find('<'), text.rfind('>')) {
-        (Some(open), Some(close)) if open < close => {
-            (text[..open].trim().trim_matches('"'), text[open + 1..close].trim())
-        }
+        (Some(open), Some(close)) if open < close => (
+            text[..open].trim().trim_matches('"'),
+            text[open + 1..close].trim(),
+        ),
         _ => ("", text),
     };
     let valid = email.contains('@')
-        && email.rsplit('@').next().is_some_and(|domain| domain.contains('.'))
+        && email
+            .rsplit('@')
+            .next()
+            .is_some_and(|domain| domain.contains('.'))
         && !email.contains(' ');
     valid.then(|| Address::new(name, email))
 }
@@ -211,10 +243,18 @@ fn presets(start: NaiveDate) -> Vec<(String, Option<RRule>)> {
         ("Daily".to_owned(), Some(RRule::new(Frequency::Daily))),
         (
             "Weekdays".to_owned(),
-            Some(RRule::new(Frequency::Weekly).by_day(
-                [Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri]
+            Some(
+                RRule::new(Frequency::Weekly).by_day(
+                    [
+                        Weekday::Mon,
+                        Weekday::Tue,
+                        Weekday::Wed,
+                        Weekday::Thu,
+                        Weekday::Fri,
+                    ]
                     .map(WeekdayNum::every),
-            )),
+                ),
+            ),
         ),
         (
             format!("Weekly on {}", weekday_short(weekday)),
@@ -225,11 +265,19 @@ fn presets(start: NaiveDate) -> Vec<(String, Option<RRule>)> {
             Some(RRule::new(Frequency::Monthly).by_month_day([start.day() as i8])),
         ),
         (
-            format!("Monthly on the {} {}", ordinal_name(ordinal), weekday_short(weekday)),
+            format!(
+                "Monthly on the {} {}",
+                ordinal_name(ordinal),
+                weekday_short(weekday)
+            ),
             Some(RRule::new(Frequency::Monthly).by_day([WeekdayNum::nth(ordinal, weekday)])),
         ),
         (
-            format!("Yearly on {} {}", start.day(), &month_name(start.month())[..3]),
+            format!(
+                "Yearly on {} {}",
+                start.day(),
+                &month_name(start.month())[..3]
+            ),
             Some(RRule::new(Frequency::Yearly)),
         ),
     ]
@@ -277,14 +325,30 @@ impl EventEditor {
                     }
                     (event, EventDetails::default_for(0))
                 }
+                EditorTarget::Meeting {
+                    start,
+                    end,
+                    attendees,
+                } => {
+                    let mut event = blank(first_calendar, *start, *end);
+                    event.attendees = attendees
+                        .iter()
+                        .map(|address| Attendee {
+                            address: address.clone(),
+                            status: ResponseStatus::NeedsAction,
+                            optional: false,
+                        })
+                        .collect();
+                    (event, EventDetails::default_for(0))
+                }
                 EditorTarget::Event { id } => {
                     let event = store
                         .get::<CalendarEvent>(*id)
                         .ok()
                         .flatten()
                         .unwrap_or_else(|| blank(first_calendar, Utc::now(), Utc::now()));
-                    let details = cal::details(store, *id)
-                        .unwrap_or_else(|_| EventDetails::default_for(*id));
+                    let details =
+                        cal::details(store, *id).unwrap_or_else(|_| EventDetails::default_for(*id));
                     (event, details)
                 }
                 EditorTarget::Occurrence { occurrence } => {
@@ -417,7 +481,12 @@ impl EventEditor {
             show_as: details.show_as,
             private: details.private,
             categories: event.categories.clone(),
-            find_time: None,
+            find_time: match &target {
+                EditorTarget::Meeting { start, .. } => {
+                    Some(start.with_timezone(&Local).date_naive())
+                }
+                _ => None,
+            },
             error: None,
             details,
             target,
@@ -443,7 +512,9 @@ impl EventEditor {
     }
 
     fn is_mine(&self, email: &str) -> bool {
-        self.my_emails.iter().any(|mine| mine.eq_ignore_ascii_case(email))
+        self.my_emails
+            .iter()
+            .any(|mine| mine.eq_ignore_ascii_case(email))
     }
 
     /// The user's own address on this event's calendar.
@@ -555,7 +626,10 @@ impl EventEditor {
             (None, true) => None,
         };
         let event = CalendarEvent {
-            id: if matches!(self.target, EditorTarget::New { .. }) {
+            id: if matches!(
+                self.target,
+                EditorTarget::New { .. } | EditorTarget::Meeting { .. }
+            ) {
                 0
             } else {
                 self.event_id
@@ -626,7 +700,7 @@ impl EventEditor {
 
     fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let command = match &self.target {
-            EditorTarget::New { .. } => {
+            EditorTarget::New { .. } | EditorTarget::Meeting { .. } => {
                 window.remove_window();
                 return;
             }
@@ -696,12 +770,30 @@ impl EventEditor {
         let zone = self.time_zone.clone();
         let start = utc_to_zone(start, zone.as_deref());
         let end = utc_to_zone(end, zone.as_deref());
-        let set = |input: &Entity<InputState>, value: String, window: &mut Window, cx: &mut Context<Self>| {
+        let set = |input: &Entity<InputState>,
+                   value: String,
+                   window: &mut Window,
+                   cx: &mut Context<Self>| {
             input.update(cx, |input, cx| input.set_value(value, window, cx));
         };
-        set(&self.start_date, start.format("%Y-%m-%d").to_string(), window, cx);
-        set(&self.start_time, start.format("%H:%M").to_string(), window, cx);
-        set(&self.end_date, end.format("%Y-%m-%d").to_string(), window, cx);
+        set(
+            &self.start_date,
+            start.format("%Y-%m-%d").to_string(),
+            window,
+            cx,
+        );
+        set(
+            &self.start_time,
+            start.format("%H:%M").to_string(),
+            window,
+            cx,
+        );
+        set(
+            &self.end_date,
+            end.format("%Y-%m-%d").to_string(),
+            window,
+            cx,
+        );
         set(&self.end_time, end.format("%H:%M").to_string(), window, cx);
         self.error = None;
         cx.notify();
@@ -724,9 +816,8 @@ impl EventEditor {
             .unwrap_or_else(|| start + Duration::days(90))
             .format("%Y-%m-%d")
             .to_string();
-        let mut input = |value: String| {
-            cx.new(|cx| InputState::new(window, cx).default_value(value))
-        };
+        let mut input =
+            |value: String| cx.new(|cx| InputState::new(window, cx).default_value(value));
         let draft = RecurrenceDraft {
             freq: rule.freq,
             weekdays: if rule.by_day.is_empty() {
@@ -752,7 +843,9 @@ impl EventEditor {
     }
 
     fn draft_rule(&self, draft: &RecurrenceDraft, cx: &App) -> Result<RRule, String> {
-        let start = self.start_date_value(cx).ok_or("Set a valid start date first")?;
+        let start = self
+            .start_date_value(cx)
+            .ok_or("Set a valid start date first")?;
         let interval: u32 = self
             .value(&draft.interval, cx)
             .parse()
@@ -800,7 +893,8 @@ impl EventEditor {
                 rule = rule.count(count);
             }
             RecurrenceEnd::Until => {
-                let date = parse_date(&self.value(&draft.until, cx)).ok_or("End by: use YYYY-MM-DD")?;
+                let date =
+                    parse_date(&self.value(&draft.until, cx)).ok_or("End by: use YYYY-MM-DD")?;
                 let last = date.and_hms_opt(23, 59, 59).unwrap_or_default();
                 rule = rule.until(zone_to_utc(last, self.time_zone.as_deref()));
             }
@@ -826,7 +920,12 @@ impl EventEditor {
 
 // ---------- rendering ----------
 
-fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, active: bool, t: &Theme) -> Stateful<Div> {
+fn chip(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    active: bool,
+    t: &Theme,
+) -> Stateful<Div> {
     chip_base(id, active, t).child(label.into())
 }
 
@@ -897,7 +996,7 @@ fn small_input(input: &Entity<InputState>, width: f32) -> Div {
 }
 
 impl EventEditor {
-    fn render_header(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let color = self
             .calendars
             .iter()
@@ -905,11 +1004,15 @@ impl EventEditor {
             .map_or(t.accent, |calendar| hex(calendar.color));
         let heading = match &self.target {
             EditorTarget::New { .. } => "New event",
+            EditorTarget::Meeting { .. } => "New meeting",
             EditorTarget::Event { .. } if self.recurrence.is_some() => "Edit series",
             EditorTarget::Event { .. } => "Edit event",
             EditorTarget::Occurrence { .. } => "Edit occurrence",
         };
-        let is_new = matches!(self.target, EditorTarget::New { .. });
+        let is_new = matches!(
+            self.target,
+            EditorTarget::New { .. } | EditorTarget::Meeting { .. }
+        );
         div()
             .flex()
             .flex_row()
@@ -955,7 +1058,11 @@ impl EventEditor {
             )
     }
 
-    fn render_invitation(&self, t: &Theme, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_invitation(
+        &self,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
         let (organizer, me) = self.invitation()?;
         let answer = |status: ResponseStatus, label: &'static str, icon: IconName| {
             let active = me.status == status;
@@ -986,32 +1093,38 @@ impl EventEditor {
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(format!("{} invited you", organizer.display())),
                         )
-                        .child(
-                            div()
-                                .text_size(TEXT_XS)
-                                .text_color(t.text_muted)
-                                .child(match me.status {
-                                    ResponseStatus::NeedsAction => "You have not answered yet",
-                                    ResponseStatus::Accepted => "You accepted",
-                                    ResponseStatus::Tentative => "You tentatively accepted",
-                                    ResponseStatus::Declined => "You declined",
-                                }),
-                        ),
+                        .child(div().text_size(TEXT_XS).text_color(t.text_muted).child(
+                            match me.status {
+                                ResponseStatus::NeedsAction => "You have not answered yet",
+                                ResponseStatus::Accepted => "You accepted",
+                                ResponseStatus::Tentative => "You tentatively accepted",
+                                ResponseStatus::Declined => "You declined",
+                            },
+                        )),
                 )
                 .child(answer(ResponseStatus::Accepted, "Accept", IconName::Check))
-                .child(answer(ResponseStatus::Tentative, "Tentative", IconName::CircleQuestionMark))
+                .child(answer(
+                    ResponseStatus::Tentative,
+                    "Tentative",
+                    IconName::CircleQuestionMark,
+                ))
                 .child(answer(ResponseStatus::Declined, "Decline", IconName::X)),
         )
     }
 
-    fn render_when(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_when(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let zone_label = match &self.time_zone {
             Some(zone) => format!("{zone} ({})", cal::utc_offset_label(zone, Utc::now())),
             None => format!("System time ({})", Local::now().format("UTC%:z")),
         };
         let all_day = self.all_day;
         let zones: Vec<&'static str> = if self.tz_open {
-            let query = self.tz_query.read(cx).value().to_lowercase().replace(' ', "_");
+            let query = self
+                .tz_query
+                .read(cx)
+                .value()
+                .to_lowercase()
+                .replace(' ', "_");
             cal::time_zone_names()
                 .into_iter()
                 .filter(|name| name.to_lowercase().contains(&query))
@@ -1063,7 +1176,11 @@ impl EventEditor {
                     .gap(SPACE_2)
                     .child(small_input(&self.start_date, 120.))
                     .when(!all_day, |el| el.child(small_input(&self.start_time, 76.)))
-                    .child(Icon::new(IconName::ArrowRight).size(px(14.)).text_color(t.text_subtle))
+                    .child(
+                        Icon::new(IconName::ArrowRight)
+                            .size(px(14.))
+                            .text_color(t.text_subtle),
+                    )
                     .child(small_input(&self.end_date, 120.))
                     .when(!all_day, |el| el.child(small_input(&self.end_time, 76.)))
                     .child(
@@ -1134,14 +1251,12 @@ impl EventEditor {
             })
     }
 
-    fn render_repeat(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_repeat(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let start = self
             .start_date_value(cx)
             .unwrap_or_else(|| Local::now().date_naive());
         let options = presets(start);
-        let matched = options
-            .iter()
-            .any(|(_, rule)| *rule == self.recurrence);
+        let matched = options.iter().any(|(_, rule)| *rule == self.recurrence);
         let chips: Vec<AnyElement> = options
             .into_iter()
             .enumerate()
@@ -1166,12 +1281,9 @@ impl EventEditor {
                     .flex_wrap()
                     .gap(SPACE_1)
                     .children(chips)
-                    .child(
-                        chip("repeat-custom", "Custom…", !matched, t)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_recurrence_dialog(window, cx)
-                            })),
-                    ),
+                    .child(chip("repeat-custom", "Custom…", !matched, t).on_click(
+                        cx.listener(|this, _, window, cx| this.open_recurrence_dialog(window, cx)),
+                    )),
             )
             .when_some(self.recurrence.as_ref(), |el, rule| {
                 el.child(
@@ -1188,7 +1300,7 @@ impl EventEditor {
             })
     }
 
-    fn render_attendees(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_attendees(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let suggestions: Vec<AnyElement> = self
             .suggestions()
             .into_iter()
@@ -1261,17 +1373,26 @@ impl EventEditor {
                     )
                     .child(Badge::new(status_label).color(status_color))
                     .child(
-                        chip(("optional", index as u64), if attendee.optional { "Optional" } else { "Required" }, attendee.optional, t)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(a) = this
-                                    .attendees
-                                    .iter_mut()
-                                    .find(|a| a.address.email == toggle_email)
-                                {
-                                    a.optional = !a.optional;
-                                }
-                                cx.notify();
-                            })),
+                        chip(
+                            ("optional", index as u64),
+                            if attendee.optional {
+                                "Optional"
+                            } else {
+                                "Required"
+                            },
+                            attendee.optional,
+                            t,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(a) = this
+                                .attendees
+                                .iter_mut()
+                                .find(|a| a.address.email == toggle_email)
+                            {
+                                a.optional = !a.optional;
+                            }
+                            cx.notify();
+                        })),
                     )
                     .child(
                         IconButton::new(("remove-attendee", index as u64), IconName::X)
@@ -1337,7 +1458,12 @@ impl EventEditor {
             .children(rows)
     }
 
-    fn render_find_time(&self, day: NaiveDate, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_find_time(
+        &self,
+        day: NaiveDate,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let store = self.state.read(cx).store();
         let from = to_utc(&Local, day.and_time(NaiveTime::MIN));
         let to = from + Duration::days(1);
@@ -1348,9 +1474,9 @@ impl EventEditor {
                 .collect()
         };
         let day_list = others(cal::occurrences(store, from, to).unwrap_or_default());
-        let me = self
-            .my_address(cx)
-            .unwrap_or_else(|| Address::new("You", self.my_emails.first().cloned().unwrap_or_default()));
+        let me = self.my_address(cx).unwrap_or_else(|| {
+            Address::new("You", self.my_emails.first().cloned().unwrap_or_default())
+        });
         let mut people: Vec<Address> = vec![Address::new("You", me.email.clone())];
         people.extend(
             self.attendees
@@ -1402,18 +1528,22 @@ impl EventEditor {
         let span = ((FIND_TO_HOUR - FIND_FROM_HOUR) * 60) as f32;
         let position = |time: DateTime<Utc>| {
             let local = time.with_timezone(&Local).naive_local();
-            let minutes = (local - day.and_time(NaiveTime::MIN)).num_minutes() - FIND_FROM_HOUR * 60;
+            let minutes =
+                (local - day.and_time(NaiveTime::MIN)).num_minutes() - FIND_FROM_HOUR * 60;
             (minutes as f32 / span).clamp(0., 1.)
         };
-        let hour_labels = div().flex().flex_row().ml(px(140.)).children(
-            (FIND_FROM_HOUR..FIND_TO_HOUR).map(|hour| {
-                div()
-                    .flex_1()
-                    .text_size(px(10.))
-                    .text_color(t.text_subtle)
-                    .child(format!("{hour:02}"))
-            }),
-        );
+        let hour_labels =
+            div()
+                .flex()
+                .flex_row()
+                .ml(px(140.))
+                .children((FIND_FROM_HOUR..FIND_TO_HOUR).map(|hour| {
+                    div()
+                        .flex_1()
+                        .text_size(px(10.))
+                        .text_color(t.text_subtle)
+                        .child(format!("{hour:02}"))
+                }));
         let rows: Vec<AnyElement> = people
             .iter()
             .zip(&busy)
@@ -1476,7 +1606,10 @@ impl EventEditor {
             .into_iter()
             .enumerate()
             .map(|(index, start)| {
-                let label = start.with_timezone(&Local).format("%a %-d · %H:%M").to_string();
+                let label = start
+                    .with_timezone(&Local)
+                    .format("%a %-d · %H:%M")
+                    .to_string();
                 chip(("slot", index as u64), label, false, t)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.set_times(start, start + duration, window, cx);
@@ -1591,11 +1724,11 @@ impl EventEditor {
                     hex(calendar.color),
                     t,
                 )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.calendar_id = id;
-                        cx.notify();
-                    }))
-                    .into_any_element()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.calendar_id = id;
+                    cx.notify();
+                }))
+                .into_any_element()
             })
             .collect();
         let reminders: Vec<AnyElement> = REMINDER_CHOICES
@@ -1603,12 +1736,17 @@ impl EventEditor {
             .enumerate()
             .map(|(index, (minutes, label))| {
                 let minutes = *minutes;
-                chip(("reminder", index as u64), *label, self.reminder == minutes, t)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.reminder = minutes;
-                        cx.notify();
-                    }))
-                    .into_any_element()
+                chip(
+                    ("reminder", index as u64),
+                    *label,
+                    self.reminder == minutes,
+                    t,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.reminder = minutes;
+                    cx.notify();
+                }))
+                .into_any_element()
             })
             .collect();
         let show_as: Vec<AnyElement> = ShowAs::ALL
@@ -1616,12 +1754,17 @@ impl EventEditor {
             .enumerate()
             .map(|(index, value)| {
                 let value = *value;
-                chip(("show-as", index as u64), value.label(), self.show_as == value, t)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.show_as = value;
-                        cx.notify();
-                    }))
-                    .into_any_element()
+                chip(
+                    ("show-as", index as u64),
+                    value.label(),
+                    self.show_as == value,
+                    t,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.show_as = value;
+                    cx.notify();
+                }))
+                .into_any_element()
             })
             .collect();
         let categories: Vec<AnyElement> = self
@@ -1631,19 +1774,32 @@ impl EventEditor {
             .map(|(index, (name, color))| {
                 let active = self.categories.contains(name);
                 let name = name.clone();
-                chip_with_dot(("category", index as u64), name.clone(), active, hex(*color), t)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.categories.contains(&name) {
-                            this.categories.push(name.clone());
-                        } else {
-                            this.categories.retain(|c| *c != name);
-                        }
-                        cx.notify();
-                    }))
-                    .into_any_element()
+                chip_with_dot(
+                    ("category", index as u64),
+                    name.clone(),
+                    active,
+                    hex(*color),
+                    t,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.categories.contains(&name) {
+                        this.categories.push(name.clone());
+                    } else {
+                        this.categories.retain(|c| *c != name);
+                    }
+                    cx.notify();
+                }))
+                .into_any_element()
             })
             .collect();
-        let wrap = |children: Vec<AnyElement>| div().flex().flex_row().flex_wrap().gap(SPACE_1).children(children);
+        let wrap = |children: Vec<AnyElement>| {
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(SPACE_1)
+                .children(children)
+        };
         let private = self.private;
 
         vec![
@@ -1684,7 +1840,7 @@ impl EventEditor {
         draft: &RecurrenceDraft,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let start = self
             .start_date_value(cx)
             .unwrap_or_else(|| Local::now().date_naive());
@@ -1777,18 +1933,13 @@ impl EventEditor {
             }))
         };
         let row = |label: &'static str| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(SPACE_2)
-                .child(
-                    div()
-                        .w(px(90.))
-                        .text_size(TEXT_SM)
-                        .text_color(t.text_muted)
-                        .child(label),
-                )
+            div().flex().flex_row().items_center().gap(SPACE_2).child(
+                div()
+                    .w(px(90.))
+                    .text_size(TEXT_SM)
+                    .text_color(t.text_muted)
+                    .child(label),
+            )
         };
         let month_label = &month_name(start.month())[..3];
 
@@ -1820,7 +1971,11 @@ impl EventEditor {
                             .flex_row()
                             .items_center()
                             .gap(SPACE_2)
-                            .child(Icon::new(IconName::Repeat).size(px(16.)).text_color(t.accent))
+                            .child(
+                                Icon::new(IconName::Repeat)
+                                    .size(px(16.))
+                                    .text_color(t.accent),
+                            )
                             .child(
                                 div()
                                     .text_size(TEXT_LG)
@@ -1843,7 +1998,11 @@ impl EventEditor {
                                 .child(by_option(
                                     "by-weekday",
                                     true,
-                                    format!("The {} {}", ordinal_name(ordinal), weekday_long(start.weekday())),
+                                    format!(
+                                        "The {} {}",
+                                        ordinal_name(ordinal),
+                                        weekday_long(start.weekday())
+                                    ),
                                 )),
                         )
                     })
@@ -1872,7 +2031,10 @@ impl EventEditor {
                             .child(end_option("end-count", RecurrenceEnd::Count, "After"))
                             .when(draft.end == RecurrenceEnd::Count, |el| {
                                 el.child(small_input(&draft.count, 56.)).child(
-                                    div().text_size(TEXT_SM).text_color(t.text_muted).child("times"),
+                                    div()
+                                        .text_size(TEXT_SM)
+                                        .text_color(t.text_muted)
+                                        .child("times"),
                                 )
                             })
                             .child(end_option("end-until", RecurrenceEnd::Until, "On"))
@@ -1890,7 +2052,11 @@ impl EventEditor {
                             .rounded(RADIUS_MD)
                             .bg(t.hover)
                             .text_size(TEXT_SM)
-                            .child(Icon::new(IconName::Info).size(px(14.)).text_color(t.text_muted))
+                            .child(
+                                Icon::new(IconName::Info)
+                                    .size(px(14.))
+                                    .text_color(t.text_muted),
+                            )
                             .child(preview),
                     )
                     .child(
@@ -1900,13 +2066,16 @@ impl EventEditor {
                             .gap(SPACE_2)
                             .pt(SPACE_2)
                             .when(self.recurrence.is_some(), |el| {
-                                el.child(Button::new("recurrence-remove").ghost().label("Don't repeat").on_click(
-                                    cx.listener(|this, _, _, cx| {
-                                        this.recurrence = None;
-                                        this.recurrence_dialog = None;
-                                        cx.notify();
-                                    }),
-                                ))
+                                el.child(
+                                    Button::new("recurrence-remove")
+                                        .ghost()
+                                        .label("Don't repeat")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.recurrence = None;
+                                            this.recurrence_dialog = None;
+                                            cx.notify();
+                                        })),
+                                )
                             })
                             .child(div().flex_1())
                             .child(Button::new("recurrence-cancel").label("Cancel").on_click(
@@ -2045,7 +2214,7 @@ impl Render for EventEditor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Address, NaiveDate, NaiveTime, parse_address, parse_date, parse_time, presets};
 
     #[test]
     fn parses_dates_and_times() {

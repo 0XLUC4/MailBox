@@ -16,7 +16,8 @@ use crate::model::*;
 
 /// Ordered schema migrations; index + 1 is the resulting `PRAGMA user_version`.
 /// Never edit a shipped migration: append a new one.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE accounts (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -110,16 +111,24 @@ CREATE TABLE rules (
     conditions_json TEXT NOT NULL,
     actions_json TEXT NOT NULL
 );
-"#, r#"
-CREATE TABLE event_details (
-    id INTEGER PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
-    master_id INTEGER,
-    uid TEXT NOT NULL,
-    data_json TEXT NOT NULL
+"#,
+    r#"
+CREATE TABLE message_flag_due (
+    id INTEGER PRIMARY KEY,
+    due TEXT NOT NULL
 );
-CREATE INDEX event_details_master ON event_details(master_id);
-CREATE INDEX event_details_uid ON event_details(uid);
-"#];
+"#,
+    crate::people::MIGRATION,
+    crate::todo::MIGRATION,
+    r#"
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL UNIQUE,
+    value TEXT NOT NULL
+);
+"#,
+    crate::calendar::MIGRATION,
+];
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.
 pub trait Record: Sized {
@@ -312,14 +321,10 @@ impl Store {
         )
     }
 
-    /// Simple case-insensitive search on subject, sender and preview, newest first.
+    /// Search with the query language of [`crate::search`] (`from:ada has:attachment ...`),
+    /// newest first.
     pub fn search_messages(&self, text: &str, limit: usize) -> Result<Vec<Message>> {
-        let pattern = format!("%{}%", text.trim());
-        self.query(
-            "WHERE subject LIKE ?1 OR from_name LIKE ?1 OR from_email LIKE ?1 OR preview LIKE ?1 \
-             ORDER BY date DESC LIMIT ?2",
-            params![pattern, limit as i64],
-        )
+        crate::search::search(self, &crate::search::SearchQuery::parse(text), limit)
     }
 
     pub fn unread_count(&self, folder_id: Id) -> Result<i64> {

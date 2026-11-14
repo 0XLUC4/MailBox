@@ -35,7 +35,7 @@ impl CalendarView {
         t: &Theme,
         _window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let lanes: Vec<Option<&Calendar>> = if self.side_by_side && data.visible.len() > 1 {
             data.visible.iter().map(Some).collect()
         } else {
@@ -94,9 +94,9 @@ impl CalendarView {
             .flex()
             .flex_col()
             .size_full()
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                this.on_mouse_move(event, cx)
-            }))
+            .on_mouse_move(
+                cx.listener(|this, event: &MouseMoveEvent, _, cx| this.on_mouse_move(event, cx)),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, window, cx| this.on_mouse_up(window, cx)),
@@ -132,7 +132,7 @@ impl CalendarView {
         lanes: &[Option<&Calendar>],
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let offset = Local::now().format("UTC%:z").to_string();
         let show_lanes = lanes.len() > 1;
         let days: Vec<AnyElement> = data
@@ -248,7 +248,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let Some(&first_day) = data.days.first() else {
             return div();
         };
@@ -261,11 +261,16 @@ impl CalendarView {
                 let (first, last) = layout::day_span(occurrence);
                 let first = (first - first_day).num_days().max(0) as usize;
                 let last = (last - first_day).num_days();
-                (last >= 0 && first < count).then(|| (first, (last as usize).min(count - 1), occurrence))
+                (last >= 0 && first < count)
+                    .then(|| (first, (last as usize).min(count - 1), occurrence))
             })
             .collect();
         items.sort_by_key(|(first, last, occurrence)| {
-            (*first, usize::MAX - (*last - *first), occurrence.event.start)
+            (
+                *first,
+                usize::MAX - (*last - *first),
+                occurrence.event.start,
+            )
         });
         let lanes = layout::pack_lanes(
             &items
@@ -274,7 +279,8 @@ impl CalendarView {
                 .collect::<Vec<_>>(),
         );
         let quick_all_day = self.quick.as_ref().filter(|quick| quick.all_day);
-        let lane_count = lanes.iter().max().map_or(0, |max| max + 1) + usize::from(quick_all_day.is_some());
+        let lane_count =
+            lanes.iter().max().map_or(0, |max| max + 1) + usize::from(quick_all_day.is_some());
         let height = (lane_count.max(1) as f32) * ALL_DAY_LANE + 6.;
 
         let cells: Vec<AnyElement> = data
@@ -385,7 +391,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.selected == Some(occurrence.key());
         let style = chip_style(
             data.color(occurrence.event.calendar_id),
@@ -394,10 +400,9 @@ impl CalendarView {
             data.my_status(occurrence),
             occurrence.details.show_as,
         );
-        let dragging = self
-            .drag
-            .as_ref()
-            .is_some_and(|drag| drag.moved && drag.occurrence.as_ref().map(Occurrence::key) == Some(occurrence.key()));
+        let dragging = self.drag.as_ref().is_some_and(|drag| {
+            drag.moved && drag.occurrence.as_ref().map(Occurrence::key) == Some(occurrence.key())
+        });
         let target = occurrence.clone();
         div()
             .id(occurrence_id("all-day", 0, occurrence))
@@ -431,7 +436,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let weekend = matches!(day.weekday(), Weekday::Sat | Weekday::Sun);
         let work_start = i64::from(layout::WORK_START_HOUR) * 60;
         let work_end = i64::from(layout::WORK_END_HOUR) * 60;
@@ -448,8 +453,10 @@ impl CalendarView {
             .collect();
         items.sort_by_key(|(occurrence, (from, to))| (*from, -(to - from), occurrence.event.id));
         let min_len = (MIN_EVENT_HEIGHT / HOUR_HEIGHT * 60.).ceil() as i64;
-        let placements =
-            layout::layout_columns(&items.iter().map(|(_, span)| *span).collect::<Vec<_>>(), min_len);
+        let placements = layout::layout_columns(
+            &items.iter().map(|(_, span)| *span).collect::<Vec<_>>(),
+            min_len,
+        );
         let blocks: Vec<AnyElement> = items
             .iter()
             .zip(placements)
@@ -470,12 +477,13 @@ impl CalendarView {
                 Some((ghost, span))
             });
         let create_ghost = drag
-            .filter(|drag| drag.kind == DragKind::Create && drag.origin.0 == day && drag.calendar == lane)
+            .filter(|drag| {
+                drag.kind == DragKind::Create && drag.origin.0 == day && drag.calendar == lane
+            })
             .map(|drag| drag.create_range());
-        let quick = self
-            .quick
-            .as_ref()
-            .filter(|quick| !quick.all_day && quick.day == day && lane.is_none_or(|id| id == quick.calendar_id));
+        let quick = self.quick.as_ref().filter(|quick| {
+            !quick.all_day && quick.day == day && lane.is_none_or(|id| id == quick.calendar_id)
+        });
 
         let hits = self.hits.clone();
         let now_top = (day == data.today)
@@ -665,7 +673,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let selected = self.selected == Some(occurrence.key());
         let style = chip_style(
             data.color(occurrence.event.calendar_id),
@@ -768,7 +776,11 @@ impl CalendarView {
 }
 
 /// The coloured body of an event: left bar, title, time and small status icons.
-pub(super) fn chip_body(occurrence: &Occurrence, style: &ChipStyle, compact: bool) -> impl IntoElement {
+pub(super) fn chip_body(
+    occurrence: &Occurrence,
+    style: &ChipStyle,
+    compact: bool,
+) -> impl IntoElement + use<> {
     let event = &occurrence.event;
     let title = if event.title.trim().is_empty() {
         "(No title)".to_owned()
@@ -781,14 +793,19 @@ pub(super) fn chip_body(occurrence: &Occurrence, style: &ChipStyle, compact: boo
         (occurrence.details.private, IconName::Lock),
         (!event.attendees.is_empty(), IconName::Users),
     ];
-    let icon_row = div()
-        .flex()
-        .flex_row()
-        .flex_shrink_0()
-        .gap(px(3.))
-        .children(icons.into_iter().filter(|(on, _)| *on).map(|(_, icon)| {
-            Icon::new(icon).size(px(10.)).text_color(style.muted)
-        }));
+    let icon_row = || {
+        div()
+            .flex()
+            .flex_row()
+            .flex_shrink_0()
+            .gap(px(3.))
+            .children(
+                icons
+                    .into_iter()
+                    .filter(|(on, _)| *on)
+                    .map(|(_, icon)| Icon::new(icon).size(px(10.)).text_color(style.muted)),
+            )
+    };
 
     div()
         .size_full()
@@ -797,7 +814,9 @@ pub(super) fn chip_body(occurrence: &Occurrence, style: &ChipStyle, compact: boo
         .overflow_hidden()
         .rounded(RADIUS_SM)
         .bg(style.bg)
-        .when_some(style.border, |el, border| el.border_1().border_color(border))
+        .when_some(style.border, |el, border| {
+            el.border_1().border_color(border)
+        })
         .child(div().flex_shrink_0().w(px(3.)).h_full().bg(style.bar))
         .child(
             div()
@@ -827,10 +846,13 @@ pub(super) fn chip_body(occurrence: &Occurrence, style: &ChipStyle, compact: boo
                                     .child(if event.all_day {
                                         title.clone()
                                     } else {
-                                        format!("{title}  {}", time.split(' ').next().unwrap_or_default())
+                                        format!(
+                                            "{title}  {}",
+                                            time.split(' ').next().unwrap_or_default()
+                                        )
                                     }),
                             )
-                            .child(icon_row),
+                            .child(icon_row()),
                     )
                 })
                 .when(!compact, |el| {
@@ -850,7 +872,7 @@ pub(super) fn chip_body(occurrence: &Occurrence, style: &ChipStyle, compact: boo
                                     .when(style.strike, |el| el.line_through())
                                     .child(title),
                             )
-                            .child(div().pt(px(3.)).child(icon_row)),
+                            .child(div().pt(px(3.)).child(icon_row())),
                     )
                     .child(div().truncate().text_color(style.muted).child(time))
                     .when(!event.location.is_empty(), |el| {

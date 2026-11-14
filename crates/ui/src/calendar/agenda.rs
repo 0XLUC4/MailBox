@@ -20,7 +20,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let groups: Vec<(NaiveDate, Vec<&Occurrence>)> = data
             .days
             .iter()
@@ -54,7 +54,10 @@ impl CalendarView {
                 let is_today = day == data.today;
                 let rows: Vec<AnyElement> = items
                     .into_iter()
-                    .map(|occurrence| self.render_agenda_row(day, occurrence, data, t, cx).into_any_element())
+                    .map(|occurrence| {
+                        self.render_agenda_row(day, occurrence, data, t, cx)
+                            .into_any_element()
+                    })
                     .collect();
                 div()
                     .flex()
@@ -95,16 +98,22 @@ impl CalendarView {
                                 div()
                                     .text_size(TEXT_XS)
                                     .text_color(if is_today { t.accent } else { t.text_muted })
-                                    .child(
-                                        if (day - data.today).num_days().abs() <= 1 {
-                                            layout::relative_day(day, data.today)
-                                        } else {
-                                            day.format("%B").to_string()
-                                        },
-                                    ),
+                                    .child(if (day - data.today).num_days().abs() <= 1 {
+                                        layout::relative_day(day, data.today)
+                                    } else {
+                                        day.format("%B").to_string()
+                                    }),
                             ),
                     )
-                    .child(div().flex().flex_col().flex_1().min_w(px(0.)).gap(SPACE_1).children(rows))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .gap(SPACE_1)
+                            .children(rows),
+                    )
                     .into_any_element()
             })
             .collect();
@@ -125,7 +134,7 @@ impl CalendarView {
         data: &ViewData,
         t: &Theme,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let event = &occurrence.event;
         let color = data.color(event.calendar_id);
         let selected = self.selected == Some(occurrence.key());
@@ -154,7 +163,9 @@ impl CalendarView {
             .unwrap_or_default();
 
         div()
-            .id(ElementId::Name(format!("agenda-{}-{id}-{ts}", day.num_days_from_ce()).into()))
+            .id(ElementId::Name(
+                format!("agenda-{}-{id}-{ts}", day.num_days_from_ce()).into(),
+            ))
             .flex()
             .flex_row()
             .items_center()
@@ -184,7 +195,14 @@ impl CalendarView {
                     .text_color(t.text_muted)
                     .child(time),
             )
-            .child(div().flex_shrink_0().w(px(4.)).h(px(32.)).rounded(RADIUS_FULL).bg(color))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(4.))
+                    .h(px(32.))
+                    .rounded(RADIUS_FULL)
+                    .bg(color),
+            )
             .child(
                 div()
                     .flex()
@@ -212,10 +230,18 @@ impl CalendarView {
                                     }),
                             )
                             .when(occurrence.is_part_of_series(), |el| {
-                                el.child(Icon::new(IconName::Repeat).size(px(12.)).text_color(t.text_subtle))
+                                el.child(
+                                    Icon::new(IconName::Repeat)
+                                        .size(px(12.))
+                                        .text_color(t.text_subtle),
+                                )
                             })
                             .when(occurrence.details.private, |el| {
-                                el.child(Icon::new(IconName::Lock).size(px(12.)).text_color(t.text_subtle))
+                                el.child(
+                                    Icon::new(IconName::Lock)
+                                        .size(px(12.))
+                                        .text_color(t.text_subtle),
+                                )
                             }),
                     )
                     .child(
@@ -242,7 +268,11 @@ impl CalendarView {
                                 el.child("·").child(format!(
                                     "{} {}",
                                     event.attendees.len(),
-                                    if event.attendees.len() == 1 { "guest" } else { "guests" }
+                                    if event.attendees.len() == 1 {
+                                        "guest"
+                                    } else {
+                                        "guests"
+                                    }
                                 ))
                             }),
                     ),
