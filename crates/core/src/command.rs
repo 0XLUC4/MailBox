@@ -55,6 +55,11 @@ pub enum Command {
     DeleteRule(Id),
     /// Applied in order, atomically.
     Batch(Vec<Command>),
+    /// Key/value preference (JSON text); `None` removes the key. See [`crate::settings`].
+    SetSetting {
+        key: String,
+        value: Option<String>,
+    },
 }
 
 impl Command {
@@ -130,6 +135,7 @@ impl Command {
                 [single] => single.label(),
                 _ => format!("{} changes", commands.len()),
             },
+            Self::SetSetting { .. } => "Change settings".into(),
         }
     }
 }
@@ -237,6 +243,7 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
             inverses.reverse();
             Ok(Command::Batch(inverses))
         }
+        Command::SetSetting { key, value } => crate::settings::apply_set(store, key, value),
     }
 }
 
