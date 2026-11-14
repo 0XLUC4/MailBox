@@ -1,81 +1,90 @@
+<div align="center">
+
+<img src="assets/png/icon-128.png" width="96" alt="Mailbox icon: a white envelope on a black rounded square">
+
 # Mailbox
 
-Client de bureau mail + calendrier + contacts + tâches, écrit en Rust avec [GPUI](https://gpui-kit.com)
-(le framework UI GPU de Zed). Stockage local SQLite, toutes les modifications passent par des commandes
-annulables (undo/redo).
+**Mail, calendar, contacts and tasks in one fast, native desktop app.**
 
-## Lancer
+Written in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU
+UI framework behind the Zed editor. No Electron, and your data stays on your computer.
+
+[Download the latest release](https://github.com/0XLUC4/MailBox/releases/latest)
+
+</div>
+
+![Mailbox: the inbox with an HTML email shown exactly as it was sent](docs/images/screenshot.png)
+
+<sub>Screenshot taken with demo data (made-up people and messages).</sub>
+
+## Features
+
+- **Mail**: any IMAP / SMTP provider (Gmail, Outlook, iCloud, your own domain…), automatic server
+  detection, folders and favorites, conversations, advanced search (`from:`, `has:attachment`,
+  `is:unread`, `after:`…), flags, categories, rules, snooze, send later, offline mode.
+- **Emails shown exactly as they were sent**, rendered by the Windows WebView2 engine and locked
+  down: JavaScript off, remote images blocked until you allow them.
+- **Compose**: rich text, attachments, signatures, auto-saved drafts, undo send, several compose
+  windows at once.
+- **Calendar**: day, week, month and agenda views, recurring events, reminders, multiple calendars,
+  invitations (accept / decline), `.ics` import and export, CalDAV sync.
+- **Contacts**: full contact cards, groups, duplicate merging, `.vcf` import and export, CardDAV sync.
+- **Tasks**: My Day, Important, Planned, custom lists, steps, reminders, flagged emails.
+- **Built-in updates**: the arrow above Settings shows when a new version is out, then
+  "Update and restart".
+- Light / dark theme, accent color, English and French UI, undo / redo everywhere
+  (`Ctrl+Z` / `Ctrl+Shift+Z`).
+
+## Install (Windows)
+
+1. Download `Mailbox-X.Y.Z-windows-x64.zip` from the
+   [releases](https://github.com/0XLUC4/MailBox/releases/latest).
+2. Unzip it anywhere and run `mailbox.exe`. No installer needed.
+3. Add your account: email address and password. For Gmail, use an
+   [app password](https://myaccount.google.com/apppasswords).
+
+Your mail is stored in `%APPDATA%\Mailbox` and your password in the Windows Credential Manager.
+
+## Build from source
+
+Requires a recent stable [Rust](https://rustup.rs) toolchain.
 
 ```sh
-cargo run -p mailbox                      # vos données : %APPDATA%\mailbox\mailbox.db (Windows),
-                                          # ~/.local/share/mailbox/mailbox.db ailleurs
-cargo run -p mailbox -- --data ./my.db    # une autre base SQLite
-cargo test                                # tests (store, commandes, IMAP/SMTP sur faux serveurs)
+cargo run -p mailbox                      # run the app
+cargo run -p mailbox -- --data ./test.db  # use another database
+cargo test --workspace                    # run all tests
 ```
 
-Au premier lancement (aucun compte), un écran d'accueil ouvre l'assistant « Ajouter un compte » :
-adresse + mot de passe (ou mot de passe d'application), détection des serveurs (table intégrée,
-puis base Mozilla ISPDB / autoconfig du domaine / MX — seul le nom de domaine est envoyé),
-« Tester la connexion » (IMAP + SMTP), mot de passe rangé dans le trousseau du système, puis
-synchronisation immédiate. Gmail / Outlook : connexion OAuth2 si un client id est configuré
-(champ de l'assistant, ou `MAILBOX_GOOGLE_CLIENT_ID` / `MAILBOX_MS_CLIENT_ID`).
-
-`MAILBOX_DATA_DIR` change le dossier de données. Les données d'exemple (`mailbox_core::sample`)
-ne sont plus livrées : elles ne compilent qu'en test ou avec la feature `dev` de `mailbox-core`.
-
-Raccourcis : `Ctrl+1..4` modules, `Ctrl+,` réglages, `Ctrl+Z` / `Ctrl+Shift+Z` annuler / rétablir,
-`F9` envoyer/recevoir.
-
-Réglages (`Ctrl+,`) : thème clair/sombre/système, couleur d'accent, densité, taille du texte, volet
-de lecture, langue (français / anglais), notifications, signatures, messagerie par défaut
-(`mailto:`), comptes de messagerie (ajouter, modifier, ressaisir le mot de passe, réordonner,
-supprimer) et comptes calendrier / contacts (CalDAV / CardDAV).
-
-## Version de production et paquet portable (Windows)
+Portable package:
 
 ```powershell
-cargo build --release -p mailbox                                  # target\release\mailbox.exe
-powershell -ExecutionPolicy Bypass -File scripts\package.ps1      # dist\Mailbox-<version>-windows-x64.zip
+cargo build --release -p mailbox
+powershell -ExecutionPolicy Bypass -File scripts\package.ps1   # dist\Mailbox-<version>-windows-x64.zip
 ```
 
-Le zip contient `mailbox.exe` (icône intégrée), ce README et l'icône. Aucune installation :
-décompresser et lancer. Les données restent dans `%APPDATA%\mailbox`.
+## Releasing
 
-## Releases
+Bump `version` in `[workspace.package]` (`Cargo.toml`), commit, then:
 
-Publier une version : mettre `version` de `[workspace.package]` (`Cargo.toml`) à `X.Y.Z`, committer,
-puis `git tag vX.Y.Z && git push origin vX.Y.Z`. `.github/workflows/release.yml` compile sous
-Windows, lance `scripts/package.ps1` et publie la release GitHub avec exactement ces fichiers :
+```sh
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
 
-| Fichier | Contenu |
+`.github/workflows/release.yml` builds on Windows and publishes the release with
+`Mailbox-X.Y.Z-windows-x64.zip` and `SHA256SUMS.txt`. The app checks
+`https://api.github.com/repos/0XLUC4/MailBox/releases/latest` at startup and every 6 hours, verifies
+the zip's SHA-256 before replacing `mailbox.exe`, and rolls back if anything fails.
+
+## Project layout
+
+| Folder | Purpose |
 |---|---|
-| `Mailbox-X.Y.Z-windows-x64.zip` | `mailbox.exe` à la racine (+ README, icône) |
-| `SHA256SUMS.txt` | `<sha256>  Mailbox-X.Y.Z-windows-x64.zip` (format `sha256sum`) |
+| `crates/core` | Data model, SQLite store, undoable commands |
+| `crates/sync` | IMAP / SMTP, OAuth2, CalDAV / CardDAV, `.eml` / `.mbox` |
+| `crates/ui` | The GPUI application |
+| `crates/updater` | Updates from GitHub releases |
+| `crates/devserver` | Local fake IMAP / SMTP server for tests |
+| `apps/mailbox` | The executable (embedded Windows icon) |
+| `assets` | Icon (SVG, PNG, ICO) |
 
-Mises à jour dans l'app (`crates/updater`, `crates/ui/src/updater.rs`) : bouton flèche au-dessus de
-Paramètres. Vérification 10 s après le lancement puis toutes les 6 h via
-`https://api.github.com/repos/0XLUC4/MailBox/releases/latest` (User-Agent `Mailbox-updater`, aucune
-donnée personnelle ; brouillons et pré-versions ignorés). « Mettre à jour et redémarrer » télécharge
-le zip, vérifie son SHA-256, renomme l'exe en cours en `mailbox.old.exe`, met le nouveau à sa place
-et le relance avec les mêmes arguments (retour à l'ancien en cas d'échec) ; `mailbox.old.exe` est
-supprimé au démarrage suivant. Rien n'est remplacé pour un exe lancé depuis `target\debug` ou
-`targetelease` (`cargo run`). Test : `MAILBOX_UPDATE_FEED=<fichier.json>` remplace la réponse de
-GitHub (même format ; les URL des fichiers peuvent alors être des chemins locaux).
-
-## Icône
-
-Source : `assets/icon.svg` (carré arrondi noir, « M » blanc). PNG (16 à 512 px) dans `assets/png/`
-et `assets/icon.ico` multi-tailles, régénérés par `cargo run -p mailbox --example make_icon`.
-`apps/mailbox/build.rs` intègre l'`.ico` dans l'exe (icône de l'Explorateur, de la fenêtre et de la
-barre des tâches) ; la même image sert aux notifications et à l'enregistrement `mailto:`.
-
-## Structure
-
-- `crates/core` : modèle, store SQLite, commandes
-- `crates/sync` : IMAP/SMTP, OAuth2, détection des serveurs, formats .eml/.mbox
-- `crates/ui` : application GPUI
-- `apps/mailbox` : binaire (+ `build.rs` : icône Windows, `examples/make_icon.rs`)
-- `assets` : icône (SVG source, PNG, ICO)
-- `scripts/package.ps1` : zip portable
-
-Voir [ARCHITECTURE.md](ARCHITECTURE.md).
+See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
