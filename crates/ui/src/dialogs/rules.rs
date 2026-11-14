@@ -747,6 +747,8 @@ impl Render for RulesDialog {
                     )
                     .children(account_tabs)
                     .child(div().flex_1())
+                    // Clear the dialog's close button in the top-right corner.
+                    .pr(px(28.))
                     .child(
                         Button::new("rules-run")
                             .ghost()

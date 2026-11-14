@@ -758,6 +758,8 @@ impl Render for ReadingPaneView {
 
         let action_bar = self.action_bar(&message, in_role, cx);
         let subject = self.subject_header(&message, &t, cx);
+        // Meeting invitation: Accept / Tentative / Decline (calendar module).
+        let invitation = crate::calendar::invitation_bar(&self.state, message.id, cx);
         let others = thread.len().saturating_sub(1);
         let cards: Vec<AnyElement> = thread
             .iter()
@@ -786,6 +788,7 @@ impl Render for ReadingPaneView {
                     .py(SPACE_4)
                     .gap(SPACE_3)
                     .child(subject)
+                    .children(invitation)
                     .when(others > 0, |el| {
                         el.child(
                             div()

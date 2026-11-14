@@ -82,6 +82,7 @@ const MAIL_HOME: &[Group] = &[
 ];
 const CALENDAR_HOME: &[Group] = &[
     group("New", 10, &["new-event"]),
+    group("Delete", 8, &["delete"]),
     group("Go to", 8, &["today"]),
     CALENDAR_ARRANGE,
     UNDO,

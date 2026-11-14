@@ -592,7 +592,8 @@ impl Render for FolderPaneView {
         let store = state.store();
         let selected = state.selected_folder();
         // Render-time reads: errors just show an empty pane (a toast would fire every frame).
-        let accounts: Vec<Account> = store.list_accounts().unwrap_or_default();
+        // The order chosen in Settings → Accounts.
+        let accounts: Vec<Account> = crate::settings::ordered_accounts(store);
         let folders_by_account: Vec<(Account, Vec<Folder>)> = accounts
             .into_iter()
             .map(|account| {

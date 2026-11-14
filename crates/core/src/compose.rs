@@ -251,6 +251,17 @@ pub fn reply_subject(subject: &str) -> String {
     format!("Re: {}", strip_prefixes(subject, &REPLY_PREFIXES))
 }
 
+/// Subject without any `Re:` / `Fwd:` prefixes, lowercased: groups messages that carry no
+/// threading headers (imported files) into conversations.
+pub fn conversation_subject(subject: &str) -> String {
+    let all: Vec<&str> = REPLY_PREFIXES
+        .iter()
+        .chain(&FORWARD_PREFIXES)
+        .copied()
+        .collect();
+    strip_prefixes(subject, &all).trim().to_lowercase()
+}
+
 /// `Fwd: subject`.
 pub fn forward_subject(subject: &str) -> String {
     format!("Fwd: {}", strip_prefixes(subject, &FORWARD_PREFIXES))
@@ -620,6 +631,8 @@ mod tests {
         assert_eq!(forward_subject("FW: Hello"), "Fwd: Hello");
         assert_eq!(forward_subject("Re: Hello"), "Fwd: Re: Hello");
         assert_eq!(reply_subject("Note: x"), "Re: Note: x");
+        assert_eq!(conversation_subject("RE: Fwd: re: Q4 Budget "), "q4 budget");
+        assert_eq!(conversation_subject("Note: x"), "note: x");
     }
 
     #[test]

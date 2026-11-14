@@ -550,7 +550,9 @@ fn delete_selection(state: &Entity<AppState>, window: &mut Window, cx: &mut App)
                 .and_then(|views| views.calendar.upgrade())
                 .is_some_and(|calendar| calendar.update(cx, |c, cx| c.action_delete(cx)));
             if !deleted {
-                state.update(cx, |state, cx| state.notify_info("Select an event first", cx));
+                state.update(cx, |state, cx| {
+                    state.notify_info("Select an event first", cx)
+                });
             }
             return;
         }

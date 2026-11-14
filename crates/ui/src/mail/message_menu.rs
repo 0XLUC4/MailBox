@@ -35,9 +35,7 @@ type Destinations = Rc<Vec<(String, Vec<(usize, Folder)>)>>;
 fn destinations(state: &Entity<AppState>, cx: &App) -> Destinations {
     let store = state.read(cx).store();
     Rc::new(
-        store
-            .list_accounts()
-            .unwrap_or_default()
+        crate::settings::ordered_accounts(store)
             .into_iter()
             .map(|account| {
                 let folders = store.list_folders(account.id).unwrap_or_default();
