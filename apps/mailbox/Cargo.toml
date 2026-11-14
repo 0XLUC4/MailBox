@@ -1,0 +1,18 @@
+[package]
+name = "mailbox"
+description = "Mailbox desktop client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "mailbox"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+mailbox-core.workspace = true
+mailbox-ui.workspace = true
+
+[lints]
+workspace = true

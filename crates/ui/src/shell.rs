@@ -1,0 +1,211 @@
+//! Window root: left rail, top bar (ribbon + search) and the active module.
+
+use gpui::component::WindowExt as _;
+use gpui::component::notification::Notification;
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+
+use crate::app_state::{AppEvent, AppState, Module};
+use crate::calendar::CalendarView;
+use crate::components::{Icon, IconButton, IconName};
+use crate::mail::MailView;
+use crate::people::PeopleView;
+use crate::ribbon::RibbonView;
+use crate::search::SearchView;
+use crate::settings::SettingsView;
+use crate::tasks::TasksView;
+use crate::theme::{
+    RADIUS_LG, RAIL_WIDTH, SPACE_1, SPACE_3, TEXT_LG, TEXT_MD, TOP_BAR_HEIGHT, Theme, theme,
+};
+use crate::{GoToCalendar, GoToMail, GoToPeople, GoToSettings, GoToTasks, Redo, Undo};
+
+pub struct Shell {
+    state: Entity<AppState>,
+    focus_handle: FocusHandle,
+    ribbon: Entity<RibbonView>,
+    search: Entity<SearchView>,
+    mail: Entity<MailView>,
+    calendar: Entity<CalendarView>,
+    people: Entity<PeopleView>,
+    tasks: Entity<TasksView>,
+    settings: Entity<SettingsView>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl Shell {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let subscriptions = vec![
+            cx.observe(&state, |_, _, cx| cx.notify()),
+            cx.subscribe_in(
+                &state,
+                window,
+                |_, _, event: &AppEvent, window, cx| match event {
+                    AppEvent::Error(message) => {
+                        window.push_notification(Notification::error(message.clone()), cx)
+                    }
+                    AppEvent::Info(message) => {
+                        window.push_notification(Notification::info(message.clone()), cx)
+                    }
+                },
+            ),
+            cx.observe_window_appearance(window, |_, window, cx| crate::theme::refresh(window, cx)),
+        ];
+        let focus_handle = cx.focus_handle();
+        focus_handle.focus(window, cx);
+
+        Self {
+            ribbon: cx.new(|cx| RibbonView::new(state.clone(), window, cx)),
+            search: cx.new(|cx| SearchView::new(state.clone(), window, cx)),
+            mail: cx.new(|cx| MailView::new(state.clone(), window, cx)),
+            calendar: cx.new(|cx| CalendarView::new(state.clone(), window, cx)),
+            people: cx.new(|cx| PeopleView::new(state.clone(), window, cx)),
+            tasks: cx.new(|cx| TasksView::new(state.clone(), window, cx)),
+            settings: cx.new(|cx| SettingsView::new(state.clone(), window, cx)),
+            state,
+            focus_handle,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn go_to(&mut self, module: Module, cx: &mut Context<Self>) {
+        self.state
+            .update(cx, |state, cx| state.set_module(module, cx));
+    }
+
+    fn render_rail(&self, active: Module, t: &Theme) -> impl IntoElement {
+        let rail_item = |module: Module| {
+            let state = self.state.clone();
+            let is_active = module == active;
+            div()
+                .relative()
+                .flex()
+                .w_full()
+                .justify_center()
+                .when(is_active, |el| {
+                    el.child(
+                        div()
+                            .absolute()
+                            .left(px(0.))
+                            .top(px(8.))
+                            .w(px(3.))
+                            .h(px(20.))
+                            .rounded(px(2.))
+                            .bg(t.accent),
+                    )
+                })
+                .child(
+                    IconButton::new(("rail", module as u64), module.icon())
+                        .size(px(36.))
+                        .icon_size(px(18.))
+                        .active(is_active)
+                        .tooltip(module.label())
+                        .on_click(move |_, _, cx| {
+                            state.update(cx, |state, cx| state.set_module(module, cx));
+                        }),
+                )
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .items_center()
+            .w(RAIL_WIDTH)
+            .h_full()
+            .py(SPACE_3)
+            .gap(SPACE_1)
+            .bg(t.rail)
+            .border_r_1()
+            .border_color(t.border_subtle)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(32.))
+                    .mb(SPACE_3)
+                    .rounded(RADIUS_LG)
+                    .bg(t.accent)
+                    .text_color(t.on_accent)
+                    .child(Icon::new(IconName::Mailbox).size(px(18.))),
+            )
+            .children(Module::MAIN.map(&rail_item))
+            .child(div().flex_1())
+            .child(rail_item(Module::Settings))
+    }
+
+    fn render_top_bar(&self, active: Module, t: &Theme) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .flex_shrink_0()
+            .items_center()
+            .gap(SPACE_3)
+            .h(TOP_BAR_HEIGHT)
+            .px(SPACE_3)
+            .bg(t.surface)
+            .border_b_1()
+            .border_color(t.border_subtle)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(120.))
+                    .text_size(TEXT_LG)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(active.label()),
+            )
+            .child(div().flex_1().min_w(px(0.)).child(self.ribbon.clone()))
+            .child(div().flex_shrink_0().w(px(320.)).child(self.search.clone()))
+    }
+}
+
+impl Render for Shell {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx).clone();
+        let active = self.state.read(cx).module();
+        let content = match active {
+            Module::Mail => self.mail.clone().into_any_element(),
+            Module::Calendar => self.calendar.clone().into_any_element(),
+            Module::People => self.people.clone().into_any_element(),
+            Module::Tasks => self.tasks.clone().into_any_element(),
+            Module::Settings => self.settings.clone().into_any_element(),
+        };
+
+        div()
+            .id("shell")
+            .key_context("Shell")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &Undo, _, cx| {
+                this.state.update(cx, |state, cx| state.undo(cx));
+            }))
+            .on_action(cx.listener(|this, _: &Redo, _, cx| {
+                this.state.update(cx, |state, cx| state.redo(cx));
+            }))
+            .on_action(cx.listener(|this, _: &GoToMail, _, cx| this.go_to(Module::Mail, cx)))
+            .on_action(
+                cx.listener(|this, _: &GoToCalendar, _, cx| this.go_to(Module::Calendar, cx)),
+            )
+            .on_action(cx.listener(|this, _: &GoToPeople, _, cx| this.go_to(Module::People, cx)))
+            .on_action(cx.listener(|this, _: &GoToTasks, _, cx| this.go_to(Module::Tasks, cx)))
+            .on_action(
+                cx.listener(|this, _: &GoToSettings, _, cx| this.go_to(Module::Settings, cx)),
+            )
+            .flex()
+            .flex_row()
+            .size_full()
+            .bg(t.background)
+            .text_color(t.text)
+            .text_size(TEXT_MD)
+            .child(self.render_rail(active, &t))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .h_full()
+                    .child(self.render_top_bar(active, &t))
+                    .child(div().flex_1().min_h(px(0.)).child(content)),
+            )
+    }
+}
