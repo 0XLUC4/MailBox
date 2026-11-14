@@ -150,11 +150,23 @@ impl ComposeView {
             cx.subscribe_in(
                 &body,
                 window,
-                |this, _, event: &InputEvent, window, cx| match event {
+                |this, body, event: &InputEvent, window, cx| match event {
                     InputEvent::Change => this.mark_dirty(cx),
                     InputEvent::PressEnter {
                         secondary: true, ..
-                    } => this.send(window, cx),
+                    } => {
+                        // The textarea already inserted a line break for Ctrl+Enter.
+                        body.update(cx, |body, cx| {
+                            let caret = body.selected_range().start;
+                            let text = body.value();
+                            if text.get(..caret).is_some_and(|t| t.ends_with('\n')) {
+                                body.set_selected_range(caret - 1..caret, cx);
+                                body.replace("", window, cx);
+                            }
+                        });
+                        this.send(window, cx)
+                    }
+                    InputEvent::PressEnter { shift: false, .. } => this.continue_list(window, cx),
                     _ => {}
                 },
             ),
@@ -414,12 +426,6 @@ impl ComposeView {
             self.to.update(cx, |field, cx| field.focus(window, cx));
             return;
         }
-        if !self.bcc.read(cx).addresses(cx).is_empty() {
-            self.state.update(cx, |state, cx| {
-                state.report_error("Bcc is not supported for sending yet: use To or Cc", cx)
-            });
-            return;
-        }
         self.status = SaveStatus::Unsaved;
         if !self.save(cx) || self.message_id() == 0 {
             return;
@@ -652,6 +658,20 @@ impl ComposeView {
                 range: selection,
                 text: plain,
             }
+        });
+    }
+
+    /// After Enter on a list or quote line: repeats its marker (next number), or ends the
+    /// list when the item was left empty.
+    fn continue_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.body.update(cx, |body, cx| {
+            let text = body.value();
+            let Some(edit) = list_continuation(&text, body.selected_range().start) else {
+                return;
+            };
+            body.set_selected_range(edit.range, cx);
+            body.replace(edit.text, window, cx);
+            body.set_selected_range(edit.select, cx);
         });
     }
 
@@ -914,7 +934,7 @@ impl ComposeView {
                             )
                         }),
                 )
-                .children(menu),
+                .when_some(menu, |el, menu| el.child(div().h_0().child(menu))),
         )
     }
 
@@ -930,6 +950,19 @@ impl ComposeView {
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.show_cc = true;
                             this.cc.update(cx, |field, cx| field.focus(window, cx));
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(!self.show_bcc, |el| {
+                el.child(
+                    Button::new("compose-show-bcc")
+                        .ghost()
+                        .compact()
+                        .label("Bcc")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.show_bcc = true;
+                            this.bcc.update(cx, |field, cx| field.focus(window, cx));
                             cx.notify();
                         })),
                 )
@@ -1412,6 +1445,40 @@ fn field_row(label: &'static str, t: &Theme) -> Div {
         )
 }
 
+/// The edit for Enter pressed at `caret` (just after the new line break) when the previous
+/// line is a list item or quote: `- `, `* `, `1. ` (numbered on) or `> `, indent kept.
+fn list_continuation(text: &str, caret: usize) -> Option<Edit> {
+    let before = text.get(..caret)?.strip_suffix('\n')?;
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    let line = &before[line_start..];
+    let indent = line.len() - line.trim_start().len();
+    let rest = &line[indent..];
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    let (marker_len, next) = if ["- ", "* ", "> "].iter().any(|m| rest.starts_with(m)) {
+        (2, rest[..2].to_owned())
+    } else if digits > 0 && rest[digits..].starts_with(". ") {
+        let number: u64 = rest[..digits].parse().ok()?;
+        (digits + 2, format!("{}. ", number + 1))
+    } else {
+        return None;
+    };
+    if rest[marker_len..].trim().is_empty() {
+        // Empty item: drop it and the line break, ending the list.
+        return Some(Edit {
+            range: line_start..caret,
+            text: String::new(),
+            select: line_start..line_start,
+        });
+    }
+    let insert = format!("{}{next}", &line[..indent]);
+    let end = caret + insert.len();
+    Some(Edit {
+        range: caret..caret,
+        text: insert,
+        select: end..end,
+    })
+}
+
 /// "980 B", "12 KB", "3.4 MB".
 fn format_size(bytes: u64) -> String {
     const KB: f64 = 1024.;
@@ -1422,5 +1489,31 @@ fn format_size(bytes: u64) -> String {
         format!("{:.0} KB", size / KB)
     } else {
         format!("{:.1} MB", size / (KB * KB))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::list_continuation;
+
+    fn enter(text: &str) -> Option<String> {
+        let edit = list_continuation(text, text.len())?;
+        let mut out = text.to_owned();
+        out.replace_range(edit.range, &edit.text);
+        Some(out)
+    }
+
+    #[test]
+    fn lists_continue_and_end_on_an_empty_item() {
+        assert_eq!(enter("- agenda\n").as_deref(), Some("- agenda\n- "));
+        assert_eq!(
+            enter("x\n  9. nine\n").as_deref(),
+            Some("x\n  9. nine\n  10. ")
+        );
+        assert_eq!(enter("> quoted\n").as_deref(), Some("> quoted\n> "));
+        assert_eq!(enter("- a\n- \n").as_deref(), Some("- a\n"));
+        assert_eq!(enter("plain\n"), None);
+        assert_eq!(enter("-dash\n"), None);
+        assert_eq!(enter("no break"), None);
     }
 }

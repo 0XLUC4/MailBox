@@ -9,6 +9,7 @@ Mailbox is a mail + calendar + contacts + tasks desktop client in Rust, UI in GP
 | `mailbox-core` | `crates/core` | Domain model, SQLite store (rusqlite, migrations), `Command` + undo/redo. No UI, no network. Sample data (`sample`) only under `cfg(test)` or the `dev` feature. |
 | `mailbox-sync` | `crates/sync` | Protocol backends behind `trait MailBackend` (IMAP/SMTP), sync engine + worker threads, OAuth2, server discovery, .eml/.mbox. |
 | `mailbox-ui` | `crates/ui` | GPUI app: `AppState`, theme, shell, module views, components, `sync_bridge`, onboarding. |
+| `mailbox-devserver` | `crates/devserver` | Local test IMAP + SMTP server (in-memory, any login), library + binary. Tests and manual runs only. |
 | `mailbox` | `apps/mailbox` | Binary: `mailbox [--data <path>]`, default `<data dir>/mailbox.db` (`mailbox_ui::data_dir()`). |
 
 ## Mail sync
@@ -28,8 +29,10 @@ compose Send ──▶ <data>/outbox/<id>.json (Bcc, In-Reply-To, References, re
 - A failed send stays in the Outbox with an error toast + Retry (no silent auto-retry).
 - `Command::DeleteAccount` removes an account's local data (not undoable); the bridge also drops
   its sync state, attachments and keychain secrets.
-- Tests: `crates/sync/tests/fake_servers.rs` runs the real backend against in-process fake IMAP
-  and SMTP servers on 127.0.0.1.
+- Tests: `crates/sync/tests/fake_servers.rs` and `crates/sync/tests/devserver.rs` run the real
+  backend against in-process IMAP/SMTP servers on 127.0.0.1. `mailbox-devserver`
+  (`crates/devserver`) is that server as a library + binary for manual end-to-end runs
+  (see `docs/agent-testing.md`).
 
 ## Data flow
 

@@ -317,6 +317,7 @@ pub fn install<E: InteractiveElement>(
         crate::shortcuts::open(window, cx)
     });
     let element = crate::everyday::install(element, &state);
+    let element = crate::compose::install(element, &state);
     handle::<_, OpenAbout>(element, &state, |_, window, cx| {
         dialogs::open_about(window, cx)
     })

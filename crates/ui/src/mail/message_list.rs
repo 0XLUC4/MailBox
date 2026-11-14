@@ -749,7 +749,9 @@ impl MessageListView {
             .child(quick)
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.focus_handle.focus(window, cx);
-                if event.click_count() >= 2 {
+                if event.click_count() >= 2 && crate::compose::is_draft(this.state.read(cx), id) {
+                    crate::compose::edit_draft(&this.state, id, window, cx);
+                } else if event.click_count() >= 2 {
                     message_window::open(this.state.clone(), id, cx);
                 } else {
                     this.click(id, event.modifiers(), cx);

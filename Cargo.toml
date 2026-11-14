@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/sync", "crates/ui", "apps/mailbox"]
+members = ["crates/core", "crates/sync", "crates/ui", "crates/devserver", "apps/mailbox"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ publish = false
 mailbox-core = { path = "crates/core" }
 mailbox-sync = { path = "crates/sync" }
 mailbox-ui = { path = "crates/ui" }
+mailbox-devserver = { path = "crates/devserver" }
 
 # Exact versions are pinned by Cargo.lock; GPUI is pinned exactly because its crates move together.
 chrono = { version = "0.4.45", features = ["serde"] }

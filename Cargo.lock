@@ -3879,6 +3879,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mailbox-devserver"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
 name = "mailbox-sync"
 version = "0.1.0"
 dependencies = [
@@ -3888,6 +3895,7 @@ dependencies = [
  "lettre",
  "mail-parser",
  "mailbox-core",
+ "mailbox-devserver",
  "oauth2",
  "roxmltree 0.21.2",
  "serde",
