@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::command::Command;
 use crate::error::{Error, Result};
-use crate::model::{CalendarEvent, Contact, Id, Message};
+use crate::model::{Address, CalendarEvent, Contact, Id, Message};
 use crate::store::{Record, Store};
 
 /// Schema for this module, appended to `store::MIGRATIONS`.
@@ -35,6 +35,12 @@ CREATE TABLE contact_groups (
     name TEXT NOT NULL,
     members_json TEXT NOT NULL
 );
+"#;
+
+/// Labels for emails and phones ("work", "home", "mobile"...), appended to `store::MIGRATIONS`.
+pub(crate) const MIGRATION_LABELS: &str = r#"
+ALTER TABLE contact_details ADD COLUMN email_labels_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE contact_details ADD COLUMN phone_labels_json TEXT NOT NULL DEFAULT '[]';
 "#;
 
 /// A postal address. `label` is free text ("home", "work"...).
@@ -96,6 +102,35 @@ pub struct ContactDetails {
     pub addresses: Vec<PostalAddress>,
     /// Category names (see [`crate::Category`]).
     pub categories: Vec<String>,
+    /// Label of `contact.emails[i]` ("work", "home"...); missing or empty = no label.
+    #[serde(default)]
+    pub email_labels: Vec<String>,
+    /// Label of `contact.phones[i]` ("mobile", "work"...); missing or empty = no label.
+    #[serde(default)]
+    pub phone_labels: Vec<String>,
+}
+
+impl ContactDetails {
+    /// Label of the email at `index` (empty when none).
+    pub fn email_label(&self, index: usize) -> &str {
+        self.email_labels
+            .get(index)
+            .map_or("", |label| label.trim())
+    }
+
+    /// Label of the phone at `index` (empty when none).
+    pub fn phone_label(&self, index: usize) -> &str {
+        self.phone_labels
+            .get(index)
+            .map_or("", |label| label.trim())
+    }
+}
+
+/// Drops trailing empty labels so "no labels" is always an empty list.
+pub fn trim_labels(labels: &mut Vec<String>) {
+    while labels.last().is_some_and(|label| label.trim().is_empty()) {
+        labels.pop();
+    }
 }
 
 /// A contact with its details: what the People module reads and writes.
@@ -332,6 +367,104 @@ pub fn upcoming_events_with(
     Ok(events)
 }
 
+/// Someone you exchanged mail with who is not a contact yet ("Recent contacts").
+#[derive(Debug, Clone, PartialEq)]
+pub struct Suggestion {
+    pub address: Address,
+    /// Messages (among the latest scanned) they appear in.
+    pub messages: usize,
+    pub last: DateTime<Utc>,
+}
+
+/// How many recent messages [`suggested_contacts`] scans.
+const SUGGESTION_SCAN: i64 = 1000;
+
+/// People from the latest messages (sender, To, Cc) who are not contacts, not one of your
+/// accounts and not automated senders; most recent first.
+pub fn suggested_contacts(
+    store: &Store,
+    cards: &[ContactCard],
+    limit: usize,
+) -> Result<Vec<Suggestion>> {
+    let mut known: HashSet<String> = cards
+        .iter()
+        .flat_map(|card| &card.contact.emails)
+        .map(|email| email.trim().to_lowercase())
+        .collect();
+    known.extend(
+        store
+            .list_accounts()?
+            .into_iter()
+            .map(|account| account.email.trim().to_lowercase()),
+    );
+    let messages: Vec<Message> =
+        store.query("ORDER BY date DESC, id DESC LIMIT ?1", [SUGGESTION_SCAN])?;
+    let mut found: Vec<Suggestion> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for message in messages {
+        let addresses = std::iter::once(&message.from)
+            .chain(&message.to)
+            .chain(&message.cc);
+        for address in addresses {
+            let email = address.email.trim().to_lowercase();
+            if !email.contains('@') || known.contains(&email) || is_automated(&email) {
+                continue;
+            }
+            match index.get(&email) {
+                Some(&at) => {
+                    let suggestion = &mut found[at];
+                    suggestion.messages += 1;
+                    if suggestion.address.name.trim().is_empty() {
+                        suggestion.address.name = address.name.trim().to_owned();
+                    }
+                }
+                None => {
+                    index.insert(email.clone(), found.len());
+                    found.push(Suggestion {
+                        address: Address::new(address.name.trim(), address.email.trim()),
+                        messages: 1,
+                        last: message.date,
+                    });
+                }
+            }
+        }
+    }
+    found.truncate(limit);
+    Ok(found)
+}
+
+/// `noreply@`, `mailer-daemon@`, `notifications@`...: not worth suggesting as a contact.
+fn is_automated(email: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "noreply",
+        "no-reply",
+        "no_reply",
+        "donotreply",
+        "do-not-reply",
+        "mailer-daemon",
+        "postmaster",
+        "notification",
+        "bounce",
+    ];
+    let local = email.split('@').next().unwrap_or_default();
+    PREFIXES.iter().any(|prefix| local.starts_with(prefix))
+}
+
+/// A new contact from a suggestion (name split into first/last when it has two words or more).
+pub fn card_from_address(address: &Address, account_id: Id) -> ContactCard {
+    let mut card = ContactCard::new(account_id);
+    let name = address.name.trim();
+    card.contact.display_name = name.to_owned();
+    card.contact.emails = vec![address.email.trim().to_owned()];
+    if let Some((first, last)) = name.rsplit_once(' ')
+        && !name.contains('@')
+    {
+        card.details.first_name = first.trim().to_owned();
+        card.details.last_name = last.trim().to_owned();
+    }
+    card
+}
+
 /// Groups of probable duplicates (same email, or same name ignoring case and spacing).
 /// Each group has 2+ ids, oldest first (the natural one to keep).
 pub fn find_duplicates(cards: &[ContactCard]) -> Vec<Vec<Id>> {
@@ -416,6 +549,28 @@ pub fn merge_cards(keep: &ContactCard, others: &[ContactCard]) -> ContactCard {
         }
     }
 
+    /// Unions values, keeping each value's label aligned (a known value gains a missing label).
+    fn union_labeled<K: PartialEq>(
+        (values, labels): (&mut Vec<String>, &mut Vec<String>),
+        (source, source_labels): (&[String], &[String]),
+        key: impl Fn(&str) -> K,
+    ) {
+        labels.resize(values.len(), String::new());
+        for (index, value) in source.iter().enumerate() {
+            let label = source_labels.get(index).cloned().unwrap_or_default();
+            let value_key = key(value.as_str());
+            match values.iter().position(|v| key(v.as_str()) == value_key) {
+                Some(found) => fill(&mut labels[found], &label),
+                None if !value.trim().is_empty() => {
+                    values.push(value.clone());
+                    labels.push(label);
+                }
+                None => {}
+            }
+        }
+        trim_labels(labels);
+    }
+
     let mut merged = keep.clone();
     for other in others {
         let (contact, details) = (&mut merged.contact, &mut merged.details);
@@ -431,10 +586,16 @@ pub fn merge_cards(keep: &ContactCard, others: &[ContactCard]) -> ContactCard {
             };
         }
         contact.favorite |= other.contact.favorite;
-        union_by(&mut contact.emails, &other.contact.emails, |email| {
-            email.trim().to_lowercase()
-        });
-        union_by(&mut contact.phones, &other.contact.phones, phone_digits);
+        union_labeled(
+            (&mut contact.emails, &mut details.email_labels),
+            (&other.contact.emails, &other.details.email_labels),
+            |email| email.trim().to_lowercase(),
+        );
+        union_labeled(
+            (&mut contact.phones, &mut details.phone_labels),
+            (&other.contact.phones, &other.details.phone_labels),
+            phone_digits,
+        );
 
         fill(&mut details.first_name, &other.details.first_name);
         fill(&mut details.last_name, &other.details.last_name);
@@ -656,6 +817,8 @@ impl Record for ContactDetails {
         "photo",
         "addresses_json",
         "categories_json",
+        "email_labels_json",
+        "phone_labels_json",
     ];
 
     fn id(&self) -> Id {
@@ -676,6 +839,8 @@ impl Record for ContactDetails {
             self.photo.clone().map_or(Value::Null, Value::Text),
             json(&self.addresses)?,
             json(&self.categories)?,
+            json(&self.email_labels)?,
+            json(&self.phone_labels)?,
         ])
     }
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
@@ -691,6 +856,8 @@ impl Record for ContactDetails {
             photo: row.get(6)?,
             addresses: from_json(row, 7)?,
             categories: from_json(row, 8)?,
+            email_labels: from_json(row, 9)?,
+            phone_labels: from_json(row, 10)?,
         })
     }
 }
@@ -757,6 +924,8 @@ mod tests {
                 ..Default::default()
             }],
             categories: vec!["Friends".into()],
+            email_labels: vec!["work".into()],
+            phone_labels: vec!["mobile".into()],
         };
         card
     }
@@ -1085,5 +1254,65 @@ mod tests {
             upcoming_events_with(&store, &emails, now, 30).unwrap(),
             vec![meeting]
         );
+    }
+    #[test]
+    fn suggestions_skip_contacts_accounts_and_robots() {
+        let store = store();
+        let account = account(&store);
+        let inbox = folder(&store, account.id, crate::model::FolderRole::Inbox);
+        let mut first = message(account.id, inbox.id);
+        first.from = Address::new("Ada Lovelace", "Ada@Example.com");
+        first.cc = vec![
+            Address::new("", "noreply@shop.example"),
+            Address::new("Known", "known@example.com"),
+        ];
+        store.save(&mut first).unwrap();
+        let mut second = message(account.id, inbox.id);
+        second.date += Duration::days(1);
+        second.from = Address::new("Grace", "grace@example.com");
+        second.cc = vec![Address::new("", "ada@example.com")];
+        store.save(&mut second).unwrap();
+
+        let known = card(&account, "Known", "known@example.com");
+        let found = suggested_contacts(&store, &[known], 10).unwrap();
+        let emails: Vec<&str> = found.iter().map(|s| s.address.email.as_str()).collect();
+        assert_eq!(emails, vec!["grace@example.com", "ada@example.com"]);
+        assert_eq!(found[1].messages, 2);
+        assert_eq!(
+            found[1].address.name, "Ada Lovelace",
+            "a name fills a bare address"
+        );
+
+        let saved = card_from_address(&found[1].address, account.id);
+        assert_eq!(saved.details.first_name, "Ada");
+        assert_eq!(saved.details.last_name, "Lovelace");
+        assert_eq!(saved.contact.emails, vec!["ada@example.com"]);
+    }
+
+    #[test]
+    fn labels_persist_and_merge_aligned() {
+        let store = store();
+        let account = account(&store);
+        let mut history = History::new();
+        let saved = rich_card(&account);
+        run(
+            &store,
+            &mut history,
+            PeopleCommand::SaveContact(Box::new(saved)),
+        );
+        let stored = list_contact_cards(&store).unwrap().remove(0);
+        assert_eq!(stored.details.email_label(0), "work");
+        assert_eq!(stored.details.phone_label(0), "mobile");
+        assert_eq!(stored.details.phone_label(5), "");
+
+        let mut other = card(&account, "Ada", "ADA@example.com");
+        other.contact.emails.push("ada@home.example".into());
+        other.details.email_labels = vec!["".into(), "home".into()];
+        let merged = merge_cards(&stored, &[other]);
+        assert_eq!(
+            merged.contact.emails,
+            vec!["ada@example.com", "ada@home.example"]
+        );
+        assert_eq!(merged.details.email_labels, vec!["work", "home"]);
     }
 }

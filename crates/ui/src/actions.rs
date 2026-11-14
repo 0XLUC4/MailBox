@@ -231,6 +231,14 @@ pub fn install<E: InteractiveElement>(
         window.dispatch_action(action, cx);
     });
     let element = handle::<_, DeleteSelection>(element, &state, delete_selection);
+    // Reaches People whatever has focus (the ribbon takes focus when clicked).
+    let element = handle::<_, NewContact>(element, &state, |state, window, cx| {
+        if !crate::people::new_contact(window, cx) {
+            state.update(cx, |state, cx| {
+                state.report_error("Contacts are not available", cx)
+            });
+        }
+    });
     let element = handle::<_, Archive>(element, &state, |state, _, cx| {
         move_selection_to_role(state, FolderRole::Archive, cx)
     });
@@ -458,6 +466,9 @@ fn move_selection_to_role(state: &Entity<AppState>, role: FolderRole, cx: &mut A
 }
 
 fn delete_selection(state: &Entity<AppState>, window: &mut Window, cx: &mut App) {
+    if state.read(cx).module() == Module::People && crate::people::delete_selection(window, cx) {
+        return;
+    }
     if state.read(cx).module() != Module::Mail {
         return state.update(cx, |state, cx| {
             state.notify_info("Delete is handled by the active view", cx)

@@ -200,7 +200,8 @@ impl Render for Shell {
             .list_accounts()
             .is_ok_and(|accounts| !accounts.is_empty());
         let content = match active {
-            _ if !has_account && active != Module::Settings => {
+            // People stays reachable: its empty state explains accounts and offers CardDAV.
+            _ if !has_account && !matches!(active, Module::Settings | Module::People) => {
                 crate::onboarding::onboarding(self.state.clone(), cx).into_any_element()
             }
             Module::Mail => self.mail.clone().into_any_element(),

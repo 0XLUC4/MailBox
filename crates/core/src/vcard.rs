@@ -7,7 +7,7 @@
 use chrono::NaiveDate;
 
 use crate::model::Id;
-use crate::people::{ContactCard, PostalAddress};
+use crate::people::{ContactCard, PostalAddress, trim_labels};
 
 /// Non-standard property carrying the favourite flag through export/import.
 const FAVORITE_PROPERTY: &str = "X-MAILBOX-FAVORITE";
@@ -26,6 +26,8 @@ pub fn parse_vcards(input: &str, account_id: Id) -> Vec<ContactCard> {
             }
             "END" if property.value.eq_ignore_ascii_case("VCARD") => {
                 if let Some(mut card) = current.take() {
+                    trim_labels(&mut card.details.email_labels);
+                    trim_labels(&mut card.details.phone_labels);
                     let name = card.name();
                     if !name.is_empty() {
                         card.contact.display_name = name;
@@ -60,8 +62,32 @@ fn apply_property(card: &mut ContactCard, property: &Property) {
                 .next()
                 .unwrap_or_default();
         }
-        "EMAIL" => push_non_empty(&mut contact.emails, strip_scheme(&text(), "mailto:")),
-        "TEL" => push_non_empty(&mut contact.phones, strip_scheme(&text(), "tel:")),
+        "EMAIL" => {
+            let value = text();
+            let value = strip_scheme(&value, "mailto:").trim();
+            if !value.is_empty() {
+                details
+                    .email_labels
+                    .resize(contact.emails.len(), String::new());
+                details.email_labels.push(property.label());
+                contact.emails.push(value.to_owned());
+            }
+        }
+        "TEL" => {
+            let value = text();
+            let value = strip_scheme(&value, "tel:").trim();
+            if !value.is_empty() {
+                let label = match property.label().as_str() {
+                    "cell" => "mobile".to_owned(),
+                    other => other.to_owned(),
+                };
+                details
+                    .phone_labels
+                    .resize(contact.phones.len(), String::new());
+                details.phone_labels.push(label);
+                contact.phones.push(value.to_owned());
+            }
+        }
         "ADR" => {
             let parts = property.components(';');
             let part = |index: usize| parts.get(index).cloned().unwrap_or_default();
@@ -111,13 +137,6 @@ fn apply_property(card: &mut ContactCard, property: &Property) {
         }
         FAVORITE_PROPERTY => contact.favorite = text().eq_ignore_ascii_case("true"),
         _ => {}
-    }
-}
-
-fn push_non_empty(list: &mut Vec<String>, value: &str) {
-    let value = value.trim();
-    if !value.is_empty() {
-        list.push(value.to_owned());
     }
 }
 
@@ -343,27 +362,25 @@ pub fn write_vcard(card: &ContactCard) -> String {
         }
     };
     push("NICKNAME", &details.nickname);
-    for email in &contact.emails {
-        push("EMAIL", email);
+    for (index, email) in contact.emails.iter().enumerate() {
+        push(
+            &format!("EMAIL{}", type_param(details.email_label(index))),
+            email,
+        );
     }
-    for phone in &contact.phones {
-        push("TEL", phone);
+    for (index, phone) in contact.phones.iter().enumerate() {
+        let label = match details.phone_label(index) {
+            "mobile" => "cell",
+            other => other,
+        };
+        push(&format!("TEL{}", type_param(label)), phone);
     }
     push("ORG", &contact.company);
     push("TITLE", &contact.job_title);
     push("URL", &details.website);
     push("NOTE", &contact.notes);
     for address in &details.addresses {
-        let label: String = address
-            .label
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .collect();
-        let params = if label.is_empty() {
-            String::new()
-        } else {
-            format!(";TYPE={}", label.to_ascii_lowercase())
-        };
+        let params = type_param(&address.label);
         lines.push(format!(
             "ADR{params}:;;{};{};{};{};{}",
             escape(&address.street),
@@ -398,6 +415,16 @@ pub fn write_vcard(card: &ContactCard) -> String {
         out.push_str("\r\n");
     }
     out
+}
+
+/// `;TYPE=work` for a label (ASCII letters and digits kept), empty for none.
+fn type_param(label: &str) -> String {
+    let label: String = label.chars().filter(char::is_ascii_alphanumeric).collect();
+    if label.is_empty() {
+        String::new()
+    } else {
+        format!(";TYPE={}", label.to_ascii_lowercase())
+    }
 }
 
 fn escape(value: &str) -> String {
@@ -551,6 +578,8 @@ END:VCARD\r\n";
             vec!["ada@example.com", "ada@home.example"]
         );
         assert_eq!(ada.contact.phones, vec!["+44 20 1234 5678"]);
+        assert_eq!(ada.details.phone_labels, vec!["mobile"]);
+        assert_eq!(ada.details.email_labels, vec!["work", "home"]);
         assert_eq!(
             ada.details.addresses,
             vec![PostalAddress {
@@ -630,6 +659,8 @@ TEL;WORK;VOICE:0102030405\r\nEND:VCARD\r\n";
                 country: "Ireland".into(),
             }],
             categories: vec!["Work".into(), "A,B".into()],
+            email_labels: vec!["home".into(), "work".into()],
+            phone_labels: vec!["mobile".into()],
         };
         let text = write_vcards(std::slice::from_ref(&card));
         assert!(text.starts_with("BEGIN:VCARD\r\nVERSION:4.0\r\n"));

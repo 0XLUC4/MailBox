@@ -359,6 +359,9 @@ fn account_cycle_syncs_calendars_and_contacts() {
     let mut card = ContactCard::new(1);
     card.contact.display_name = "Grace Hopper".into();
     card.contact.emails = vec!["grace@example.com".into()];
+    card.contact.phones = vec!["+1 555 0100".into()];
+    card.details.email_labels = vec!["work".into()];
+    card.details.phone_labels = vec!["mobile".into()];
     let contacts_url = mock.url("/card/me/contacts/");
     let local = HashMap::from([(
         contacts_url.clone(),
@@ -392,4 +395,7 @@ fn account_cycle_syncs_calendars_and_contacts() {
         (parsed.contact.display_name.as_str(), uid.as_str()),
         ("Grace Hopper", "grace")
     );
+    // Email/phone labels travel as vCard TYPE params.
+    assert_eq!(parsed.details.email_labels, vec!["work"]);
+    assert_eq!(parsed.details.phone_labels, vec!["mobile"]);
 }
