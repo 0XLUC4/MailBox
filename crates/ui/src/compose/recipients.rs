@@ -381,7 +381,8 @@ impl Render for RecipientField {
             .enumerate()
             .map(|(index, chip)| self.render_chip(index, chip, cx).into_any_element())
             .collect::<Vec<_>>();
-        let suggestions = (!self.suggestions.is_empty()).then(|| self.render_suggestions(cx));
+        let suggestions =
+            (!self.suggestions.is_empty()).then(|| self.render_suggestions(cx).into_any_element());
         div()
             .flex()
             .flex_col()

@@ -112,6 +112,12 @@ CREATE TABLE rules (
     actions_json TEXT NOT NULL
 );
 "#,
+    r#"
+CREATE TABLE message_flag_due (
+    id INTEGER PRIMARY KEY,
+    due TEXT NOT NULL
+);
+"#,
     crate::compose::SCHEMA,
 ];
 

@@ -57,6 +57,8 @@ pub struct AppState {
     selected_folder: Option<Id>,
     selected_message: Option<Id>,
     search_query: String,
+    /// Sync status line (set by `sync_bridge`).
+    sync_status: SharedString,
 }
 
 impl EventEmitter<AppEvent> for AppState {}
@@ -82,6 +84,7 @@ impl AppState {
             selected_folder,
             selected_message: None,
             search_query: String::new(),
+            sync_status: SharedString::default(),
         }
     }
 
@@ -191,6 +194,21 @@ impl AppState {
         let query = query.into();
         if self.search_query != query {
             self.search_query = query;
+            cx.notify();
+        }
+    }
+
+    // ---------- sync status (set by sync_bridge) ----------
+
+    /// e.g. "Up to date", "Syncing me@example.com…", "Working offline". Empty = no sync.
+    pub fn sync_status(&self) -> &SharedString {
+        &self.sync_status
+    }
+
+    pub fn set_sync_status(&mut self, status: impl Into<SharedString>, cx: &mut Context<Self>) {
+        let status = status.into();
+        if self.sync_status != status {
+            self.sync_status = status;
             cx.notify();
         }
     }

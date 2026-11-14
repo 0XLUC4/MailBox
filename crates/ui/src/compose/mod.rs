@@ -2,8 +2,8 @@
 //!
 //! [`open_compose`] docks the editor over the right side of the main window (several at once, as
 //! tabs); "Pop out" moves one into its own window. Drafts autosave (untracked) into Drafts;
-//! Send waits 5 s with an Undo toast, then queues the RFC 5322 message with
-//! `Command::QueueSend` (the sync layer delivers it). Body markup, MIME and recipients logic
+//! Send waits 5 s with an Undo toast, then `Command::QueueSend` moves the draft into the
+//! account's Outbox folder, which the sync engine sends. Body markup and recipients logic
 //! live in `mailbox_core::compose` (tested there).
 
 mod dock;
@@ -39,6 +39,8 @@ gpui::actions!(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComposeRequest {
     New,
+    /// New message to these people (contact cards, People module).
+    To(Vec<Address>),
     Reply(Id),
     ReplyAll(Id),
     Forward(Id),
@@ -195,6 +197,10 @@ fn seed(state: &AppState, request: &ComposeRequest) -> mailbox_core::Result<Draf
     };
 
     match (request, &original) {
+        (ComposeRequest::To(addresses), _) => {
+            message.to = addresses.clone();
+            meta.markup = body(&[&signature.new_message]);
+        }
         (ComposeRequest::Mailto(url), _) => {
             let mailto = compose::parse_mailto(url);
             message.to = mailto.to;

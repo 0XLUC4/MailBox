@@ -55,14 +55,26 @@ pub enum Command {
     DeleteRule(Id),
     /// Applied in order, atomically.
     Batch(Vec<Command>),
+    /// Duplicates messages into a folder (new ids); undo deletes the copies.
+    CopyMessages {
+        ids: Vec<Id>,
+        folder_id: Id,
+    },
+    /// Sets or clears the follow-up flag; `due` is kept only while flagged.
+    FlagMessages {
+        ids: Vec<Id>,
+        flagged: bool,
+        due: Option<chrono::NaiveDate>,
+    },
     /// Compose: save a draft message with its metadata (see `compose`).
     SaveDraft(Box<crate::compose::Draft>),
     /// Compose: delete a draft message (by message id) and its metadata.
     DeleteDraft(Id),
-    /// Compose: queue a message for delivery; its draft moves to Sent.
-    QueueSend(Box<crate::compose::OutboxItem>),
-    /// Remove a delivered (or cancelled) message from the outbox.
-    DeleteOutboxItem(Id),
+    /// Compose: move a draft into the Outbox folder, where the sync engine sends it.
+    QueueSend {
+        message_id: Id,
+        folder_id: Id,
+    },
     SaveSignature(Box<crate::compose::Signature>),
 }
 
@@ -139,10 +151,17 @@ impl Command {
                 [single] => single.label(),
                 _ => format!("{} changes", commands.len()),
             },
+            Self::CopyMessages { ids, .. } => format!("Copy {}", count(ids)),
+            Self::FlagMessages { ids, flagged, .. } => {
+                format!(
+                    "{} {}",
+                    if *flagged { "Flag" } else { "Unflag" },
+                    count(ids)
+                )
+            }
             Self::SaveDraft(_) => "Save draft".into(),
             Self::DeleteDraft(_) => "Discard draft".into(),
-            Self::QueueSend(_) => "Send message".into(),
-            Self::DeleteOutboxItem(_) => "Remove from outbox".into(),
+            Self::QueueSend { .. } => "Send message".into(),
             Self::SaveSignature(_) => "Save signature".into(),
         }
     }
@@ -251,10 +270,18 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
             inverses.reverse();
             Ok(Command::Batch(inverses))
         }
+        Command::CopyMessages { ids, folder_id } => {
+            crate::mail_ops::apply_copy(store, &ids, folder_id)
+        }
+        Command::FlagMessages { ids, flagged, due } => {
+            crate::mail_ops::apply_flag(store, &ids, flagged, due)
+        }
         Command::SaveDraft(draft) => crate::compose::apply_save_draft(store, *draft),
         Command::DeleteDraft(id) => crate::compose::apply_delete_draft(store, id),
-        Command::QueueSend(item) => crate::compose::apply_queue_send(store, *item),
-        Command::DeleteOutboxItem(id) => crate::compose::apply_delete_outbox_item(store, id),
+        Command::QueueSend {
+            message_id,
+            folder_id,
+        } => crate::compose::apply_queue_send(store, message_id, folder_id),
         Command::SaveSignature(signature) => {
             crate::compose::apply_save_signature(store, *signature)
         }

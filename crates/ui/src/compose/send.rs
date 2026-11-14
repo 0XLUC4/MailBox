@@ -1,20 +1,21 @@
-//! Undo send: the draft is already saved; after [`UNDO_SEND_DELAY`] it is built into an RFC 5322
-//! message and queued with `Command::QueueSend`. "Undo" in the toast re-opens the draft instead.
+//! Undo send: the draft is already saved; after [`UNDO_SEND_DELAY`] its attachments are copied
+//! where the sync engine reads them and `Command::QueueSend` moves it into the account's Outbox
+//! folder, then Send/Receive starts. "Undo" in the toast re-opens the draft instead.
 
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use chrono::Utc;
 use gpui::component::WindowExt as _;
 use gpui::component::button::Button;
 use gpui::component::notification::Notification;
 use gpui::*;
-use mailbox_core::compose::{self, OutboxItem, OutgoingAttachment};
+use mailbox_core::compose;
 use mailbox_core::{Command, Id};
 
 use super::{ComposeRequest, dock, open_compose};
 use crate::app_state::AppState;
+use crate::sync_bridge;
 
 pub const UNDO_SEND_DELAY: Duration = Duration::from_secs(5);
 
@@ -76,41 +77,50 @@ pub fn schedule(state: Entity<AppState>, message_id: Id, subject: String, cx: &m
     .detach();
 }
 
-/// Builds the message from the saved draft and queues it (draft moves to Sent).
+/// Moves the saved draft into the Outbox (the sync engine sends it and files it in Sent).
 fn queue(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
-    let item = build_item(state.read(cx), message_id);
-    state.update(cx, |state, cx| match item {
-        Ok(item) => {
-            if state.run(Command::QueueSend(Box::new(item)), cx) {
-                state.notify_info("Message sent to the outbox", cx);
-            }
-        }
-        Err(err) => state.report_error(format!("Not sent: {err}. It is still in Drafts."), cx),
+    let account_id = match prepare(state.read(cx), message_id) {
+        Ok(account_id) => account_id,
+        Err(err) => return fail(state, err, cx),
+    };
+    let Some(folder_id) = sync_bridge::outbox_folder(account_id, cx) else {
+        return fail(state, "the Outbox folder could not be created".into(), cx);
+    };
+    let queued = state.update(cx, |state, cx| {
+        state.run_untracked(
+            Command::QueueSend {
+                message_id,
+                folder_id,
+            },
+            cx,
+        )
     });
+    if queued {
+        state.update(cx, |state, cx| {
+            state.notify_info("Message moved to the Outbox", cx)
+        });
+        sync_bridge::send_receive(cx);
+    }
 }
 
-fn build_item(state: &AppState, message_id: Id) -> Result<OutboxItem, String> {
+/// Copies attachments where the sync engine reads them. Returns the draft's account.
+fn prepare(state: &AppState, message_id: Id) -> Result<Id, String> {
     let draft = compose::load_draft(state.store(), message_id)
         .map_err(|err| err.to_string())?
         .ok_or("the draft was deleted")?;
-    let mut files = Vec::with_capacity(draft.meta.attachments.len());
     for attachment in &draft.meta.attachments {
-        let data = std::fs::read(&attachment.path)
+        let target = sync_bridge::attachment_path(message_id, &attachment.name);
+        if let Some(dir) = target.parent() {
+            std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+        }
+        std::fs::copy(&attachment.path, &target)
             .map_err(|err| format!("cannot read {}: {err}", attachment.name))?;
-        files.push(OutgoingAttachment {
-            name: attachment.name.clone(),
-            mime: attachment.mime.clone(),
-            data,
-        });
     }
-    let now = Utc::now();
-    let outgoing = compose::outgoing(&draft, files, now);
-    Ok(OutboxItem {
-        id: 0,
-        account_id: draft.message.account_id,
-        message_id: Some(message_id),
-        envelope: outgoing.envelope(),
-        raw: compose::build_message(&outgoing),
-        queued_at: now,
-    })
+    Ok(draft.message.account_id)
+}
+
+fn fail(state: &Entity<AppState>, err: String, cx: &mut App) {
+    state.update(cx, |state, cx| {
+        state.report_error(format!("Not sent: {err}. It is still in Drafts."), cx)
+    });
 }

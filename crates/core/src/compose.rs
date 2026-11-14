@@ -1,21 +1,20 @@
-//! Compose domain: drafts (+ compose metadata), signatures, outbox, recipient suggestions,
-//! reply/forward helpers. Body markup lives in [`markup`], RFC 5322 building in [`mime`].
+//! Compose domain: drafts (+ compose metadata), signatures, recipient suggestions,
+//! reply/forward helpers. Body markup lives in [`markup`].
 //!
-//! Sending: the UI runs `Command::QueueSend` with the built message. The item lands in the
-//! `outbox` table and the draft moves to the Sent folder (the Sent copy). The sync layer reads
-//! [`list_outbox`], delivers `raw` to [`OutboxItem::envelope`], then runs
-//! `Command::DeleteOutboxItem(id)`.
+//! Sending: `Command::QueueSend` moves the draft into the account's local "Outbox" folder
+//! (`sync_bridge::outbox_folder`); the sync engine builds the RFC 5322 message from it,
+//! delivers it and moves it to Sent.
 
 pub mod address;
 pub mod markup;
-pub mod mime;
 
 pub use address::{
     Mailto, display_recipient, is_valid_email, parse_address, parse_mailto, parse_recipients,
 };
-pub use mime::{Outgoing, OutgoingAttachment, build_message, guess_mime, new_message_id};
 
-use chrono::{DateTime, Local, SecondsFormat, Utc};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use chrono::{DateTime, Local, Utc};
 use rusqlite::Row;
 use rusqlite::types::{Type, Value};
 use serde::de::DeserializeOwned;
@@ -41,14 +40,6 @@ CREATE TABLE compose_drafts (
     markup TEXT NOT NULL
 );
 CREATE INDEX compose_drafts_key ON compose_drafts(key);
-CREATE TABLE outbox (
-    id INTEGER PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES accounts(id),
-    message_id INTEGER,
-    envelope_json TEXT NOT NULL,
-    raw TEXT NOT NULL,
-    queued_at TEXT NOT NULL
-);
 CREATE TABLE signatures (
     id INTEGER PRIMARY KEY,
     account_id INTEGER NOT NULL UNIQUE REFERENCES accounts(id),
@@ -90,20 +81,6 @@ pub struct DraftMeta {
 pub struct Draft {
     pub message: Message,
     pub meta: DraftMeta,
-}
-
-/// A message waiting for the sync layer to deliver it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OutboxItem {
-    pub id: Id,
-    pub account_id: Id,
-    /// The draft to move to Sent when queued (then the Sent copy).
-    pub message_id: Option<Id>,
-    /// SMTP recipients (To + Cc + Bcc).
-    pub envelope: Vec<String>,
-    /// Full RFC 5322 message, CRLF line endings.
-    pub raw: String,
-    pub queued_at: DateTime<Utc>,
 }
 
 /// Per-account signatures (markup): one for new messages, one for replies/forwards.
@@ -149,11 +126,6 @@ pub fn load_draft(store: &Store, message_id: Id) -> Result<Option<Draft>> {
         },
     };
     Ok(Some(Draft { message, meta }))
-}
-
-/// Queued messages, oldest first.
-pub fn list_outbox(store: &Store) -> Result<Vec<OutboxItem>> {
-    store.query("ORDER BY queued_at, id", [])
 }
 
 pub fn signature(store: &Store, account_id: Id) -> Result<Option<Signature>> {
@@ -400,32 +372,72 @@ pub fn preview_text(text: &str) -> String {
     collapsed.chars().take(120).collect()
 }
 
-/// The RFC 5322 view of a draft. `attachments` carries the file contents.
-pub fn outgoing(
-    draft: &Draft,
-    attachments: Vec<OutgoingAttachment>,
-    date: DateTime<Utc>,
-) -> Outgoing {
-    let blocks = markup::parse(&draft.meta.markup);
-    Outgoing {
-        from: draft.message.from.clone(),
-        to: draft.message.to.clone(),
-        cc: draft.message.cc.clone(),
-        bcc: draft.meta.bcc.clone(),
-        subject: draft.message.subject.clone(),
-        text: markup::to_plain(&blocks),
-        html: markup::html_document(&markup::to_html(&blocks)),
-        date,
-        message_id: draft.meta.key.clone(),
-        in_reply_to: draft.meta.in_reply_to.clone(),
-        references: draft.meta.references.clone(),
-        importance: draft.message.importance,
-        read_receipt: draft.meta.read_receipt,
-        attachments,
+/// A fresh, unique `Message-ID` on the sender's domain.
+pub fn new_message_id(from_email: &str, now: DateTime<Utc>) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let domain = from_email
+        .rsplit_once('@')
+        .map(|(_, domain)| domain)
+        .filter(|domain| !domain.is_empty())
+        .unwrap_or("mailbox.local");
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = now.timestamp_nanos_opt().unwrap_or_default();
+    format!("<{nanos:x}.{count}.{:x}@{domain}>", std::process::id())
+}
+
+/// MIME type from a file extension (common types; `application/octet-stream` otherwise).
+pub fn guess_mime(name: &str) -> &'static str {
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "json" => "application/json",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ics" => "text/calendar",
+        "vcf" => "text/vcard",
+        "txt" | "log" | "md" => "text/plain",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "mp3" => "audio/mpeg",
+        "mp4" => "video/mp4",
+        _ => "application/octet-stream",
     }
 }
 
 // ---------- command handlers (called from `command::apply_inner`) ----------
+
+/// Moves the draft into `folder_id` (the Outbox) and drops its compose metadata.
+/// The inverse restores the draft exactly.
+pub(crate) fn apply_queue_send(store: &Store, message_id: Id, folder_id: Id) -> Result<Command> {
+    let message = store.require::<Message>(message_id)?;
+    let folder = store.require::<Folder>(folder_id)?;
+    let meta = draft_meta(store, message_id)?;
+    if let Some(meta) = &meta {
+        store.delete::<DraftMeta>(meta.id)?;
+    }
+    let mut queued = message.clone();
+    queued.folder_id = folder.id;
+    queued.account_id = folder.account_id;
+    queued.flags.read = true;
+    store.save(&mut queued)?;
+    Ok(match meta {
+        Some(meta) => Command::SaveDraft(Box::new(Draft { message, meta })),
+        None => Command::SaveMessage(Box::new(message)),
+    })
+}
 
 pub(crate) fn apply_save_draft(store: &Store, draft: Draft) -> Result<Command> {
     let Draft {
@@ -465,49 +477,6 @@ pub(crate) fn apply_delete_draft(store: &Store, message_id: Id) -> Result<Comman
         Some(meta) => Command::SaveDraft(Box::new(Draft { message, meta })),
         None => Command::SaveMessage(Box::new(message)),
     })
-}
-
-pub(crate) fn apply_queue_send(store: &Store, mut item: OutboxItem) -> Result<Command> {
-    let draft = match item.message_id {
-        Some(id) => store
-            .get::<Message>(id)?
-            .map(|message| draft_meta(store, id).map(|meta| (message, meta)))
-            .transpose()?,
-        None => None,
-    };
-    if let Some((message, meta)) = &draft {
-        if let Some(meta) = meta {
-            store.delete::<DraftMeta>(meta.id)?;
-        }
-        match store.folder_by_role(message.account_id, FolderRole::Sent)? {
-            Some(sent) => {
-                let mut sent_copy = message.clone();
-                sent_copy.folder_id = sent.id;
-                sent_copy.date = item.queued_at;
-                sent_copy.flags.read = true;
-                store.save(&mut sent_copy)?;
-            }
-            None => {
-                store.delete::<Message>(message.id)?;
-                item.message_id = None;
-            }
-        }
-    }
-    let id = store.save(&mut item)?;
-    let mut inverse = vec![Command::DeleteOutboxItem(id)];
-    if let Some((message, meta)) = draft {
-        inverse.push(match meta {
-            Some(meta) => Command::SaveDraft(Box::new(Draft { message, meta })),
-            None => Command::SaveMessage(Box::new(message)),
-        });
-    }
-    Ok(Command::Batch(inverse))
-}
-
-pub(crate) fn apply_delete_outbox_item(store: &Store, id: Id) -> Result<Command> {
-    let item = store.require::<OutboxItem>(id)?;
-    store.delete::<OutboxItem>(id)?;
-    Ok(Command::QueueSend(Box::new(item)))
 }
 
 pub(crate) fn apply_save_signature(store: &Store, mut signature: Signature) -> Result<Command> {
@@ -584,49 +553,6 @@ impl Record for DraftMeta {
             references: get_json(row, 7)?,
             attachments: get_json(row, 8)?,
             markup: row.get(9)?,
-        })
-    }
-}
-
-impl Record for OutboxItem {
-    const KIND: &'static str = "outbox item";
-    const TABLE: &'static str = "outbox";
-    const COLUMNS: &'static [&'static str] = &[
-        "account_id",
-        "message_id",
-        "envelope_json",
-        "raw",
-        "queued_at",
-    ];
-
-    fn id(&self) -> Id {
-        self.id
-    }
-    fn set_id(&mut self, id: Id) {
-        self.id = id;
-    }
-    fn values(&self) -> Result<Vec<Value>> {
-        Ok(vec![
-            Value::Integer(self.account_id),
-            self.message_id.map_or(Value::Null, Value::Integer),
-            json(&self.envelope)?,
-            text(&self.raw),
-            text(&self.queued_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
-        ])
-    }
-    fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let queued_at: String = row.get(5)?;
-        Ok(Self {
-            id: row.get(0)?,
-            account_id: row.get(1)?,
-            message_id: row.get(2)?,
-            envelope: get_json(row, 3)?,
-            raw: row.get(4)?,
-            queued_at: DateTime::parse_from_rfc3339(&queued_at)
-                .map(|value| value.with_timezone(&Utc))
-                .map_err(|err| {
-                    rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
-                })?,
         })
     }
 }
@@ -799,51 +725,48 @@ mod tests {
     }
 
     #[test]
-    fn queue_send_moves_draft_to_sent_and_undoes() {
+    fn queue_send_moves_draft_to_outbox_and_undoes() {
         let store = store();
         let me = account(&store);
         let drafts = folder(&store, me.id, FolderRole::Drafts);
-        let sent = folder(&store, me.id, FolderRole::Sent);
+        let outbox = folder(&store, me.id, FolderRole::Custom);
         let mut history = History::new();
         history
             .run(&store, Command::SaveDraft(Box::new(draft(&me, &drafts))))
             .unwrap();
         let meta = draft_by_key(&store, "<k1@example.com>").unwrap().unwrap();
         let saved = load_draft(&store, meta.message_id).unwrap().unwrap();
-        let raw = build_message(&outgoing(&saved, vec![], Utc::now()));
-        let item = OutboxItem {
-            id: 0,
-            account_id: me.id,
-            message_id: Some(saved.message.id),
-            envelope: outgoing(&saved, vec![], Utc::now()).envelope(),
-            raw,
-            queued_at: Utc::now(),
+        let queue = Command::QueueSend {
+            message_id: saved.message.id,
+            folder_id: outbox.id,
         };
-        history
-            .run(&store, Command::QueueSend(Box::new(item)))
-            .unwrap();
-        let outbox = list_outbox(&store).unwrap();
-        assert_eq!(outbox.len(), 1);
-        assert_eq!(outbox[0].envelope, vec!["bob@x.org", "hidden@y.org"]);
-        assert!(outbox[0].raw.contains("\r\nHello Bob\r\n"));
+        assert_eq!(queue.label(), "Send message");
+        history.run(&store, queue).unwrap();
         assert!(store.list_messages(drafts.id).unwrap().is_empty());
-        assert_eq!(store.list_messages(sent.id).unwrap().len(), 1);
+        let queued = store.list_messages(outbox.id).unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].body_text, saved.message.body_text);
         assert!(draft_meta(&store, saved.message.id).unwrap().is_none());
 
         history.undo(&store).unwrap();
-        assert!(list_outbox(&store).unwrap().is_empty());
+        assert!(store.list_messages(outbox.id).unwrap().is_empty());
         assert_eq!(
             load_draft(&store, saved.message.id).unwrap().unwrap(),
             saved
         );
-
         history.redo(&store).unwrap();
-        assert_eq!(list_outbox(&store).unwrap().len(), 1);
-        assert_eq!(store.list_messages(sent.id).unwrap().len(), 1);
-        history
-            .run(&store, Command::DeleteOutboxItem(outbox[0].id))
-            .unwrap();
-        assert!(list_outbox(&store).unwrap().is_empty());
+        assert_eq!(store.list_messages(outbox.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn guesses_mime_and_unique_ids() {
+        assert_eq!(guess_mime("Report.PDF"), "application/pdf");
+        assert_eq!(guess_mime("noext"), "application/octet-stream");
+        assert!(new_message_id("a@b.co", Utc::now()).ends_with("@b.co>"));
+        assert_ne!(
+            new_message_id("a@b.co", Utc::now()),
+            new_message_id("a@b.co", Utc::now())
+        );
     }
 
     #[test]

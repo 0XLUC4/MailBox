@@ -409,6 +409,12 @@ impl ComposeView {
             self.to.update(cx, |field, cx| field.focus(window, cx));
             return;
         }
+        if !self.bcc.read(cx).addresses(cx).is_empty() {
+            self.state.update(cx, |state, cx| {
+                state.report_error("Bcc is not supported for sending yet: use To or Cc", cx)
+            });
+            return;
+        }
         self.status = SaveStatus::Unsaved;
         if !self.save(cx) || self.message_id() == 0 {
             return;
@@ -499,11 +505,6 @@ impl ComposeView {
         } else {
             importance
         };
-        self.mark_dirty(cx);
-    }
-
-    fn toggle_read_receipt(&mut self, cx: &mut Context<Self>) {
-        self.draft.meta.read_receipt = !self.draft.meta.read_receipt;
         self.mark_dirty(cx);
     }
 
@@ -920,19 +921,6 @@ impl ComposeView {
                         })),
                 )
             })
-            .when(!self.show_bcc, |el| {
-                el.child(
-                    Button::new("compose-show-bcc")
-                        .ghost()
-                        .compact()
-                        .label("Bcc")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.show_bcc = true;
-                            this.bcc.update(cx, |field, cx| field.focus(window, cx));
-                            cx.notify();
-                        })),
-                )
-            })
             .child(
                 IconButton::new("compose-check-names", IconName::UserCheck)
                     .tooltip("Check names")
@@ -1310,12 +1298,6 @@ impl ComposeView {
                         cx.listener(|this, _, _, cx| this.toggle_importance(Importance::Low, cx)),
                     ),
             )
-            .child(
-                IconButton::new("compose-receipt", IconName::MailCheck)
-                    .tooltip("Request a read receipt")
-                    .active(self.draft.meta.read_receipt)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_read_receipt(cx))),
-            )
             .child(toolbar_separator(cx))
             .child(
                 IconButton::new("compose-discard", IconName::Trash)
@@ -1330,8 +1312,8 @@ impl Render for ComposeView {
         let t = theme(cx).clone();
         let drop_bg = t.accent_subtle;
         let panel = self.panel.map(|panel| self.render_panel(panel, &t, cx));
-        let attachments =
-            (!self.draft.meta.attachments.is_empty()).then(|| self.render_attachments(&t, cx));
+        let attachments = (!self.draft.meta.attachments.is_empty())
+            .then(|| self.render_attachments(&t, cx).into_any_element());
         let editor = if self.preview {
             let source = self.body.read(cx).value();
             div()

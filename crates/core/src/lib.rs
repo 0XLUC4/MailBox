@@ -5,6 +5,7 @@
 pub mod command;
 pub mod compose;
 pub mod error;
+pub mod mail_ops;
 pub mod model;
 pub mod sample;
 pub mod store;
