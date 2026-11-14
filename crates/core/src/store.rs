@@ -156,7 +156,7 @@ impl Store {
         Self::init(Connection::open(path)?)
     }
 
-    /// In-memory database (tests, `--sample` without `--data`).
+    /// In-memory database (tests).
     pub fn open_in_memory() -> Result<Self> {
         Self::init(Connection::open_in_memory()?)
     }
@@ -368,6 +368,55 @@ impl Store {
 
     pub fn list_rules(&self, account_id: Id) -> Result<Vec<Rule>> {
         self.query("WHERE account_id = ?1 ORDER BY id", [account_id])
+    }
+
+    /// Deletes an account with its mail, folders, calendars, rules and `account.<id>.*`
+    /// settings. Contacts and tasks move to another account when there is one (they are not
+    /// synced, so deleting them would lose data), otherwise they are deleted too.
+    pub fn delete_account(&self, account_id: Id) -> Result<()> {
+        self.transaction(|store| {
+            let other: Option<Id> = store
+                .conn
+                .query_row(
+                    "SELECT id FROM accounts WHERE id <> ?1 ORDER BY id LIMIT 1",
+                    [account_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match other {
+                Some(other) => {
+                    for table in ["contacts", "tasks"] {
+                        store.conn.execute(
+                            &format!("UPDATE {table} SET account_id = ?1 WHERE account_id = ?2"),
+                            [other, account_id],
+                        )?;
+                    }
+                }
+                None => {
+                    for table in ["contacts", "tasks"] {
+                        store.conn.execute(
+                            &format!("DELETE FROM {table} WHERE account_id = ?1"),
+                            [account_id],
+                        )?;
+                    }
+                }
+            }
+            const STATEMENTS: &[&str] = &[
+                "DELETE FROM message_flag_due WHERE id IN                  (SELECT id FROM messages WHERE account_id = ?1)",
+                "DELETE FROM messages WHERE account_id = ?1",
+                "DELETE FROM events WHERE calendar_id IN                  (SELECT id FROM calendars WHERE account_id = ?1)",
+                "DELETE FROM calendars WHERE account_id = ?1",
+                "DELETE FROM rules WHERE account_id = ?1",
+                "DELETE FROM signatures WHERE account_id = ?1",
+                "DELETE FROM folders WHERE account_id = ?1",
+                "DELETE FROM settings WHERE key LIKE 'account.' || ?1 || '.%'",
+                "DELETE FROM accounts WHERE id = ?1",
+            ];
+            for sql in STATEMENTS {
+                store.conn.execute(sql, [account_id])?;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -1013,5 +1062,39 @@ pub(crate) mod tests {
         });
         assert!(result.is_err());
         assert!(store.list_accounts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_account_removes_its_data_only() {
+        let store = store();
+        let gone = account(&store);
+        let kept = account(&store);
+        let inbox = folder(&store, gone.id, FolderRole::Inbox);
+        let mut child = folder(&store, gone.id, FolderRole::Custom);
+        child.parent_id = Some(inbox.id);
+        store.save(&mut child).unwrap();
+        store.save(&mut message(gone.id, child.id)).unwrap();
+        let other_inbox = folder(&store, kept.id, FolderRole::Inbox);
+        store.save(&mut message(kept.id, other_inbox.id)).unwrap();
+        crate::settings::apply_set(
+            &store,
+            format!("account.{}.servers", gone.id),
+            Some("{}".into()),
+        )
+        .unwrap();
+
+        crate::command::apply(&store, crate::Command::DeleteAccount(gone.id)).unwrap();
+
+        let accounts = store.list_accounts().unwrap();
+        assert_eq!(
+            accounts.iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![kept.id]
+        );
+        assert!(store.list_folders(gone.id).unwrap().is_empty());
+        assert_eq!(store.list_messages(other_inbox.id).unwrap().len(), 1);
+        assert_eq!(
+            crate::settings::get(&store, &format!("account.{}.servers", gone.id)).unwrap(),
+            None
+        );
     }
 }

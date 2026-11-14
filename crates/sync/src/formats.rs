@@ -2,6 +2,7 @@
 //! `>From ` quoting), plus building RFC 5322 sources from core messages (export and SMTP).
 
 use std::io::Write;
+use std::path::Path;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
@@ -9,6 +10,7 @@ use lettre::address::Envelope;
 use lettre::message::header::{ContentType, HeaderName, HeaderValue};
 use lettre::message::{Attachment as MimeAttachment, Mailbox, MultiPart, SinglePart};
 use mailbox_core::{Address, Importance, Message};
+use serde::{Deserialize, Serialize};
 
 use crate::mime::{AttachmentData, ParsedMail, parse_message};
 use crate::thread::{ThreadIndex, normalize_id};
@@ -119,12 +121,56 @@ fn strip_separator(mut message: Vec<u8>) -> Vec<u8> {
     message
 }
 
+/// Outgoing headers that [`Message`] does not hold (they come from the compose draft).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OutgoingHeaders {
+    /// RFC 5322 `Message-ID` (with or without angle brackets).
+    pub message_id: Option<String>,
+    /// Envelope-only recipients: never written into the message.
+    pub bcc: Vec<Address>,
+    pub in_reply_to: Option<String>,
+    pub references: Vec<String>,
+    /// Asks for a read receipt (`Disposition-Notification-To: <sender>`).
+    pub read_receipt: bool,
+}
+
+impl OutgoingHeaders {
+    /// Reads headers saved with [`OutgoingHeaders::save`]; `None` if missing or unreadable.
+    pub fn load(path: &Path) -> Option<Self> {
+        let bytes = std::fs::read(path).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    pub fn save(&self, path: &Path) -> SyncResult<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, serde_json::to_vec_pretty(self)?)?;
+        Ok(())
+    }
+}
+
 /// Builds an RFC 5322 source: text (+ HTML alternative), attachments, `Importance`.
 /// Invalid addresses are skipped (an invalid sender becomes `unknown@localhost`) so an export
 /// never fails on one odd message.
 pub fn build_rfc5322(
     message: &Message,
     message_id: Option<&str>,
+    attachments: &[AttachmentData],
+) -> SyncResult<Vec<u8>> {
+    let headers = OutgoingHeaders {
+        message_id: message_id.map(str::to_owned),
+        ..OutgoingHeaders::default()
+    };
+    build_outgoing(message, &headers, attachments)
+}
+
+/// Like [`build_rfc5322`], plus reply threading (`In-Reply-To`, `References`) and the
+/// read-receipt request. Bcc stays out of the headers (pass it to the SMTP envelope).
+pub fn build_outgoing(
+    message: &Message,
+    headers: &OutgoingHeaders,
     attachments: &[AttachmentData],
 ) -> SyncResult<Vec<u8>> {
     let from = mailbox(&message.from)
@@ -138,6 +184,7 @@ pub fn build_rfc5322(
     let to: Vec<Mailbox> = message.to.iter().filter_map(mailbox).collect();
     let cc: Vec<Mailbox> = message.cc.iter().filter_map(mailbox).collect();
 
+    let sender_email = from.email.to_string();
     // The SMTP envelope is never written into the message; it only has to be valid.
     let mut recipients: Vec<_> = to.iter().chain(&cc).map(|mb| mb.email.clone()).collect();
     if recipients.is_empty() {
@@ -157,8 +204,31 @@ pub fn build_rfc5322(
     for mailbox in cc {
         builder = builder.cc(mailbox);
     }
-    if let Some(id) = message_id {
-        builder = builder.message_id(Some(format!("<{}>", normalize_id(id))));
+    let angle = |id: &str| format!("<{}>", normalize_id(id));
+    if let Some(id) = &headers.message_id {
+        builder = builder.message_id(Some(angle(id)));
+    }
+    if let Some(id) = headers
+        .in_reply_to
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    {
+        builder = builder.in_reply_to(angle(id));
+    }
+    let references: Vec<String> = headers
+        .references
+        .iter()
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| angle(id))
+        .collect();
+    if !references.is_empty() {
+        builder = builder.references(references.join(" "));
+    }
+    if headers.read_receipt {
+        builder = builder.raw_header(HeaderValue::new(
+            HeaderName::new_from_ascii_str("Disposition-Notification-To"),
+            format!("<{}>", sender_email),
+        ));
     }
     let importance = match message.importance {
         Importance::High => Some("high"),

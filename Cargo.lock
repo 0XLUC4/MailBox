@@ -3862,7 +3862,6 @@ dependencies = [
 name = "mailbox"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "mailbox-core",
  "mailbox-ui",
 ]

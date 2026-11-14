@@ -9,6 +9,7 @@ pub mod components;
 pub mod compose;
 pub mod dialogs;
 pub mod mail;
+pub mod onboarding;
 pub mod people;
 pub mod ribbon;
 pub mod search;
@@ -28,6 +29,8 @@ use mailbox_core::Store;
 
 use crate::app_state::AppState;
 use crate::shell::Shell;
+
+pub use crate::sync_bridge::data_dir;
 
 gpui::actions!(
     mailbox,

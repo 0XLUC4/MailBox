@@ -1,6 +1,8 @@
 //! Undo send: the draft is already saved; after [`UNDO_SEND_DELAY`] its attachments are copied
-//! where the sync engine reads them and `Command::QueueSend` moves it into the account's Outbox
-//! folder, then Send/Receive starts. "Undo" in the toast re-opens the draft instead.
+//! where the sync engine reads them, its Bcc / reply headers / read-receipt request are saved
+//! next to them (`QueueSend` drops the draft metadata), and `Command::QueueSend` moves it into
+//! the account's Outbox folder, then Send/Receive starts. "Undo" in the toast re-opens the
+//! draft instead.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -12,6 +14,7 @@ use gpui::component::notification::Notification;
 use gpui::*;
 use mailbox_core::compose;
 use mailbox_core::{Command, Id};
+use mailbox_sync::formats::OutgoingHeaders;
 
 use super::{ComposeRequest, dock, open_compose};
 use crate::app_state::AppState;
@@ -103,11 +106,23 @@ fn queue(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
     }
 }
 
-/// Copies attachments where the sync engine reads them. Returns the draft's account.
+/// Copies attachments and saves the outgoing headers where the sync engine reads them.
+/// Returns the draft's account.
 fn prepare(state: &AppState, message_id: Id) -> Result<Id, String> {
     let draft = compose::load_draft(state.store(), message_id)
         .map_err(|err| err.to_string())?
         .ok_or("the draft was deleted")?;
+    let meta = &draft.meta;
+    let headers = OutgoingHeaders {
+        message_id: Some(meta.key.clone()).filter(|key| !key.trim().is_empty()),
+        bcc: meta.bcc.clone(),
+        in_reply_to: meta.in_reply_to.clone(),
+        references: meta.references.clone(),
+        read_receipt: meta.read_receipt,
+    };
+    headers
+        .save(&sync_bridge::outgoing_headers_path(message_id))
+        .map_err(|err| format!("cannot save the message headers: {err}"))?;
     for attachment in &draft.meta.attachments {
         let target = sync_bridge::attachment_path(message_id, &attachment.name);
         if let Some(dir) = target.parent() {

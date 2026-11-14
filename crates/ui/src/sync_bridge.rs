@@ -1,18 +1,23 @@
 //! Bridge between [`AppState`] and the background sync workers (`mailbox-sync`).
 //!
-//! - One worker per account configured in `<data dir>/sync.json` (matched by email); the
-//!   password/refresh token comes from the OS credential store.
+//! - One worker per account with server settings: the `AccountServers` saved by the account
+//!   wizard (plus its `account.<id>.auth` setting), or an entry of the optional
+//!   `<data dir>/sync.json` (matched by email, wins). The password/refresh token comes from the
+//!   OS credential store.
 //! - Every [`POLL_INTERVAL`] the bridge drains worker events and turns them into
 //!   `mailbox_core::Command`s applied with `command::apply` (not the undo history: undoing
 //!   "a message arrived" makes no sense), then refreshes `AppState::sync_status`.
 //! - Local edits are found by diffing the store against the sync state, so changes made while
 //!   offline are pushed on the next sync. Messages placed in the account's "Outbox" folder
-//!   are sent, then moved to Sent.
+//!   are sent (headers from compose in `<data dir>/outbox/<id>.json`: Bcc, reply threading,
+//!   read receipt), then moved to Sent. A failed send stays in the Outbox with an error toast
+//!   and a Retry button; it is not retried automatically until Send/Receive or Retry.
 //! - Actions: [`SendReceive`] (F9) syncs now, [`ToggleWorkOffline`].
 //!
 //! Entry points for other modules: [`send_receive`], [`set_offline`], [`is_offline`],
 //! [`request_body`], [`outbox_folder`], [`import_file`], [`export_folder`],
-//! [`export_message`], [`attachment_path`], [`reload`].
+//! [`export_message`], [`attachment_path`], [`outgoing_headers_path`], [`reload`],
+//! [`start_account`], [`remove_account`], [`retry_outbox`], [`data_dir`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -20,11 +25,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
+use gpui::component::WindowExt as _;
+use gpui::component::button::Button;
+use gpui::component::notification::Notification;
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
-use mailbox_core::{Address, Command, Folder, FolderRole, Id, Message, command};
-use mailbox_sync::config::{self, AccountConfig};
+use mailbox_core::settings::{self as core_settings, AccountServers};
+use mailbox_core::{Account, Address, Command, Folder, FolderRole, Id, Message, Store, command};
+use mailbox_sync::config::{self, AccountConfig, AuthConfig, credentials};
 use mailbox_sync::engine::{FetchedMessage, SyncInput};
-use mailbox_sync::formats::{self, MboxEntry};
+use mailbox_sync::formats::{self, MboxEntry, OutgoingHeaders};
 use mailbox_sync::imap_smtp::ImapSmtpBackend;
 use mailbox_sync::mime::preview;
 use mailbox_sync::state::{Link, LocalMessage};
@@ -35,7 +44,7 @@ use mailbox_sync::{
     SyncEvent, SyncResult, SyncState, WorkerHandle,
 };
 
-use crate::app_state::AppState;
+use crate::app_state::{AppState, SyncPhase, SyncSummary};
 use crate::{SendReceive, ToggleWorkOffline};
 
 /// How often worker events are applied to the store.
@@ -98,6 +107,27 @@ pub fn reload(cx: &mut App) {
     with_bridge(cx, |bridge, cx| bridge.reload(cx));
 }
 
+/// Starts (or restarts) sync for one account right away (after adding it).
+pub fn start_account(account_id: Id, cx: &mut App) {
+    with_bridge(cx, |bridge, cx| bridge.start_account(account_id, cx));
+}
+
+/// Stops sync, deletes the account's local data (store rows, sync state, attachments) and
+/// its keychain secrets. Not undoable: confirm first.
+pub fn remove_account(account_id: Id, cx: &mut App) {
+    with_bridge(cx, |bridge, cx| bridge.remove_account(account_id, cx));
+}
+
+/// Sends the Outbox again, including messages whose last attempt failed.
+pub fn retry_outbox(cx: &mut App) {
+    send_receive(cx);
+}
+
+/// Where compose leaves the extra headers of a queued message ([`OutgoingHeaders`] as JSON).
+pub fn outgoing_headers_path(message_id: Id) -> PathBuf {
+    data_dir().join("outbox").join(format!("{message_id}.json"))
+}
+
 /// The account's Outbox folder, created if missing. Compose saves messages there to send.
 pub fn outbox_folder(account_id: Id, cx: &mut App) -> Option<Id> {
     bridge(cx)?.update(cx, |bridge, cx| bridge.outbox_folder(account_id, cx))
@@ -137,6 +167,8 @@ struct AccountSync {
     progress: String,
     /// Outbox messages handed to the worker.
     sending: HashSet<Id>,
+    /// Outbox messages whose last send failed, with the error (kept until a retry).
+    failed: HashMap<Id, String>,
     /// Bodies requested on demand.
     fetching: HashSet<Id>,
     /// Unread messages that arrived in the inbox during the current cycle.
@@ -180,14 +212,16 @@ impl SyncBridge {
 
     // ---------- lifecycle ----------
 
+    /// `sync.json` entries (optional manual overrides).
+    fn overrides(&self, cx: &mut Context<Self>) -> Vec<AccountConfig> {
+        config::load_accounts(&self.data_dir.join("sync.json")).unwrap_or_else(|err| {
+            self.report(format!("Cannot read sync.json: {err}"), cx);
+            Vec::new()
+        })
+    }
+
     fn start_accounts(&mut self, cx: &mut Context<Self>) {
-        let configs = match config::load_accounts(&self.data_dir.join("sync.json")) {
-            Ok(configs) => configs,
-            Err(err) => {
-                self.report(format!("Cannot read sync settings: {err}"), cx);
-                return;
-            }
-        };
+        let overrides = self.overrides(cx);
         let accounts = match self.state.read(cx).store().list_accounts() {
             Ok(accounts) => accounts,
             Err(err) => {
@@ -196,13 +230,11 @@ impl SyncBridge {
             }
         };
         for account in accounts {
-            let Some(config) = configs
-                .iter()
-                .find(|config| config.email.eq_ignore_ascii_case(&account.email))
+            let Some(config) = account_config(self.state.read(cx).store(), &account, &overrides)
             else {
                 continue;
             };
-            if let Err(err) = self.start(account.id, config.clone()) {
+            if let Err(err) = self.start(account.id, config) {
                 self.report(
                     format!("Cannot start sync for {}: {err}", account.email),
                     cx,
@@ -212,11 +244,75 @@ impl SyncBridge {
         self.refresh_status(cx);
     }
 
+    fn start_account(&mut self, account_id: Id, cx: &mut Context<Self>) {
+        let overrides = self.overrides(cx);
+        let store = self.state.read(cx).store();
+        let config = store
+            .get::<Account>(account_id)
+            .ok()
+            .flatten()
+            .and_then(|account| account_config(store, &account, &overrides));
+        let Some(config) = config else {
+            return self.report("This account has no server settings", cx);
+        };
+        if let Some(old) = self.accounts.remove(&account_id) {
+            self.save_state(&old, cx);
+        }
+        let email = config.email.clone();
+        if let Err(err) = self.start(account_id, config) {
+            self.report(format!("Cannot start sync for {email}: {err}"), cx);
+        }
+        self.poll(cx);
+    }
+
+    fn remove_account(&mut self, account_id: Id, cx: &mut Context<Self>) {
+        let store = self.state.read(cx).store();
+        let Some(account) = store.get::<Account>(account_id).ok().flatten() else {
+            return;
+        };
+        let message_ids: Vec<Id> = store
+            .list_folders(account_id)
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|folder| store.list_messages(folder.id).unwrap_or_default())
+            .map(|message| message.id)
+            .collect();
+        // Dropping the handle stops the worker threads.
+        self.accounts.remove(&account_id);
+        if self.apply(Command::DeleteAccount(account_id), cx).is_none() {
+            return;
+        }
+        credentials::forget_account(&account.email);
+        let data_dir = self.data_dir.clone();
+        self.background(
+            cx,
+            move || {
+                // Best effort: missing files are fine, the store rows are already gone.
+                let _ = std::fs::remove_file(state_path(&data_dir, account_id));
+                for id in message_ids {
+                    let _ = std::fs::remove_dir_all(attachments_dir(&data_dir, id));
+                    let _ = std::fs::remove_file(outgoing_headers_file(&data_dir, id));
+                }
+            },
+            |_, (), _| {},
+        );
+        self.state.update(cx, |state, cx| {
+            let inbox = state
+                .store()
+                .list_accounts()
+                .ok()
+                .and_then(|accounts| accounts.first().map(|account| account.id))
+                .and_then(|id| state.store().folder_by_role(id, FolderRole::Inbox).ok())
+                .flatten()
+                .map(|folder| folder.id);
+            state.select_folder(inbox, cx);
+            state.notify_info(format!("Account {} removed", account.email), cx);
+        });
+        self.refresh_status(cx);
+    }
+
     fn start(&mut self, account_id: Id, config: AccountConfig) -> SyncResult<()> {
-        let state_path = self
-            .data_dir
-            .join("sync")
-            .join(format!("{account_id}.json"));
+        let state_path = state_path(&self.data_dir, account_id);
         let sync = SyncState::load(&state_path)?;
         let factory: BackendFactory = {
             let config = config.clone();
@@ -247,6 +343,7 @@ impl SyncBridge {
                 last_error: None,
                 progress: String::new(),
                 sending: HashSet::new(),
+                failed: HashMap::new(),
                 fetching: HashSet::new(),
                 new_mail: Vec::new(),
             },
@@ -275,6 +372,7 @@ impl SyncBridge {
         for account in self.accounts.values_mut() {
             account.next_sync = now;
             account.failures = 0;
+            account.failed.clear();
         }
         self.poll(cx);
     }
@@ -415,7 +513,12 @@ impl SyncBridge {
             SyncEvent::Sent { local_id } => self.after_sent(account, local_id, cx),
             SyncEvent::SendFailed { local_id, error } => {
                 account.sending.remove(&local_id);
-                self.report(format!("Could not send the message: {error}"), cx);
+                account.failed.insert(local_id, error.clone());
+                let subject = self
+                    .existing(local_id, cx)
+                    .map(|message| message.subject)
+                    .unwrap_or_default();
+                self.notify_send_failure(subject, error, cx);
             }
             SyncEvent::RemoteChanged => {
                 let soon = Instant::now() + Duration::from_secs(2);
@@ -711,26 +814,31 @@ impl SyncBridge {
         // Messages that came from a server folder named "Outbox" are never (re)sent.
         let linked: HashSet<Id> = account.sync.linked_ids().collect();
         for mut message in messages {
-            if account.sending.contains(&message.id) || linked.contains(&message.id) {
+            if account.sending.contains(&message.id)
+                || account.failed.contains_key(&message.id)
+                || linked.contains(&message.id)
+            {
                 continue;
             }
             if message.from.email.trim().is_empty() {
                 message.from =
                     Address::new(message.from.name.clone(), account.config.email.clone());
             }
-            let message_id = outgoing_message_id(&message, &account.config.email);
+            let headers = outgoing_headers(&self.data_dir, &message, &account.config.email);
             let attachments = read_attachments(&self.data_dir, &message);
-            let raw = match formats::build_rfc5322(&message, Some(&message_id), &attachments) {
+            let raw = match formats::build_outgoing(&message, &headers, &attachments) {
                 Ok(raw) => raw,
                 Err(err) => {
                     self.report(format!("Cannot send “{}”: {err}", message.subject), cx);
                     continue;
                 }
             };
+            // Bcc only goes to the SMTP envelope (never into the headers).
             let recipients: Vec<String> = message
                 .to
                 .iter()
                 .chain(&message.cc)
+                .chain(&headers.bcc)
                 .map(|address| address.email.trim().to_owned())
                 .filter(|email| !email.is_empty())
                 .collect();
@@ -754,8 +862,11 @@ impl SyncBridge {
         };
         // When the server copy shows up in Sent (our APPEND or the provider's own), it is
         // linked to this local message instead of duplicating it.
-        let message_id = normalize_id(&outgoing_message_id(&message, &account.config.email));
+        let headers = outgoing_headers(&self.data_dir, &message, &account.config.email);
+        let message_id = normalize_id(headers.message_id.as_deref().unwrap_or_default());
         account.sync.pending_adoptions.insert(message_id, local_id);
+        // Best effort: a leftover file is only read again if the message is re-queued.
+        let _ = std::fs::remove_file(outgoing_headers_file(&self.data_dir, local_id));
 
         let sent = self
             .state
@@ -936,38 +1047,133 @@ impl SyncBridge {
             .update(cx, |state, cx| state.notify_info(message, cx));
     }
 
+    /// "Message not sent" toast with a Retry button (the message stays in the Outbox).
+    fn notify_send_failure(&self, subject: String, error: String, cx: &mut Context<Self>) {
+        let window = cx.active_window().or_else(|| cx.windows().first().copied());
+        let Some(window) = window else {
+            return self.report(format!("Could not send the message: {error}"), cx);
+        };
+        let subject = if subject.trim().is_empty() {
+            "(no subject)".to_owned()
+        } else {
+            subject
+        };
+        let notification = Notification::error(format!("“{subject}” stays in the Outbox. {error}"))
+            .title("Message not sent")
+            .action(|_, _, _| {
+                Button::new("retry-send")
+                    .label("Retry")
+                    .on_click(|_, _, cx| retry_outbox(cx))
+            });
+        // Deferred: a window may be mid-update when the event is applied.
+        cx.defer(move |cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    window.push_notification(notification, cx)
+                })
+                .ok();
+        });
+    }
+
     fn refresh_status(&self, cx: &mut Context<Self>) {
-        let status = if self.accounts.is_empty() {
-            String::new()
-        } else if self.offline {
-            "Working offline".to_owned()
-        } else if let Some(account) = self.accounts.values().find(|account| account.busy) {
-            if account.progress.is_empty() {
-                format!("Syncing {}…", account.config.email)
-            } else {
-                format!("{}: {}", account.config.email, account.progress)
-            }
-        } else if let Some((email, error)) = self.accounts.values().find_map(|account| {
+        let unsent = self
+            .accounts
+            .values()
+            .map(|account| account.failed.len())
+            .sum();
+        let busy = self.accounts.values().find(|account| account.busy);
+        let error = self.accounts.values().find_map(|account| {
             account
                 .last_error
                 .as_ref()
                 .map(|error| (&account.config.email, error))
-        }) {
-            format!("{email}: {error}")
+        });
+        let (phase, detail) = if self.accounts.is_empty() {
+            (SyncPhase::NoAccount, String::new())
+        } else if self.offline {
+            (SyncPhase::Offline, "Working offline".to_owned())
+        } else if let Some(account) = busy {
+            let detail = if account.progress.is_empty() {
+                format!("Syncing {}…", account.config.email)
+            } else {
+                format!("{}: {}", account.config.email, account.progress)
+            };
+            (SyncPhase::Syncing, detail)
+        } else if let Some((email, error)) = error {
+            (SyncPhase::Error, format!("{email}: {error}"))
         } else if let Some(time) = self.last_success {
-            format!("Up to date · {}", time.format("%H:%M"))
+            (
+                SyncPhase::Idle,
+                format!("Up to date · {}", time.format("%H:%M")),
+            )
         } else {
-            "Waiting to sync".to_owned()
+            (SyncPhase::Syncing, "Waiting to sync".to_owned())
         };
-        self.state
-            .update(cx, |state, cx| state.set_sync_status(status, cx));
+        let summary = SyncSummary {
+            phase,
+            last_synced: self.last_success,
+            detail: detail.clone().into(),
+            unsent,
+        };
+        self.state.update(cx, |state, cx| {
+            state.set_sync_status(detail, cx);
+            state.set_sync_summary(summary, cx);
+        });
     }
 }
 
 // ---------- free helpers (no UI state) ----------
 
-/// `MAILBOX_DATA_DIR`, else %APPDATA%/mailbox, $XDG_DATA_HOME/mailbox or ~/.local/share/mailbox.
-fn data_dir() -> PathBuf {
+/// Sync settings of a stored account: its `sync.json` override, else the servers saved by the
+/// account wizard. `None` = not set up for sync.
+fn account_config(
+    store: &Store,
+    account: &Account,
+    overrides: &[AccountConfig],
+) -> Option<AccountConfig> {
+    if let Some(config) = overrides
+        .iter()
+        .find(|config| config.email.eq_ignore_ascii_case(&account.email))
+    {
+        return Some(config.clone());
+    }
+    let servers = AccountServers::load(store, account.id).ok().flatten()?;
+    if servers.imap.host.trim().is_empty() || servers.smtp.host.trim().is_empty() {
+        return None;
+    }
+    let auth: AuthConfig = core_settings::get_json(store, &config::auth_setting_key(account.id))
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    Some(AccountConfig::from_servers(&account.email, &servers, auth))
+}
+
+fn state_path(data_dir: &Path, account_id: Id) -> PathBuf {
+    data_dir.join("sync").join(format!("{account_id}.json"))
+}
+
+fn outgoing_headers_file(data_dir: &Path, message_id: Id) -> PathBuf {
+    data_dir.join("outbox").join(format!("{message_id}.json"))
+}
+
+/// Compose headers of a queued message (defaults when compose left none), with a stable
+/// Message-ID so a retried send keeps the same one.
+fn outgoing_headers(data_dir: &Path, message: &Message, email: &str) -> OutgoingHeaders {
+    let mut headers =
+        OutgoingHeaders::load(&outgoing_headers_file(data_dir, message.id)).unwrap_or_default();
+    if headers
+        .message_id
+        .as_deref()
+        .is_none_or(|id| id.trim().is_empty())
+    {
+        headers.message_id = Some(outgoing_message_id(message, email));
+    }
+    headers
+}
+
+/// `MAILBOX_DATA_DIR`, else %APPDATA%/mailbox, $XDG_DATA_HOME/mailbox or ~/.local/share/mailbox:
+/// the database (`mailbox.db`), sync state, attachments and the Outbox headers live there.
+pub fn data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("MAILBOX_DATA_DIR") {
         return PathBuf::from(dir);
     }
@@ -1101,6 +1307,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn outgoing_headers_fall_back_to_a_stable_id() {
+        let dir = std::env::temp_dir().join(format!("mailbox-outgoing-{}", std::process::id()));
+        let mut message = test_message();
+        message.id = 42;
+        let headers = outgoing_headers(&dir, &message, "me@example.com");
+        assert_eq!(
+            headers.message_id.as_deref(),
+            Some("<mailbox.42.1700000000@example.com>")
+        );
+        assert!(headers.bcc.is_empty());
+
+        let saved = OutgoingHeaders {
+            message_id: Some("<draft@example.com>".into()),
+            bcc: vec![Address::new("", "hidden@example.com")],
+            ..OutgoingHeaders::default()
+        };
+        saved.save(&outgoing_headers_file(&dir, 42)).unwrap();
+        assert_eq!(outgoing_headers(&dir, &message, "me@example.com"), saved);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn backoff_grows_and_caps() {
         assert_eq!(backoff(1), Duration::from_secs(30));
         assert_eq!(backoff(2), Duration::from_secs(60));
@@ -1124,9 +1352,8 @@ mod tests {
         assert_eq!(created_id(&Command::Batch(vec![])), None);
     }
 
-    #[test]
-    fn outgoing_ids_are_stable() {
-        let message = Message {
+    fn test_message() -> Message {
+        Message {
             id: 3,
             account_id: 1,
             folder_id: 1,
@@ -1143,7 +1370,12 @@ mod tests {
             importance: Default::default(),
             categories: vec![],
             attachments: vec![],
-        };
+        }
+    }
+
+    #[test]
+    fn outgoing_ids_are_stable() {
+        let message = test_message();
         assert_eq!(
             outgoing_message_id(&message, "me@example.com"),
             "<mailbox.3.1700000000@example.com>"
