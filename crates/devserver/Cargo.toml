@@ -1,0 +1,16 @@
+[package]
+name = "mailbox-devserver"
+description = "Tiny local IMAP4rev1 + SMTP server with in-memory mailboxes, for testing Mailbox end to end"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "mailbox-devserver"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+
+[lints]
+workspace = true
