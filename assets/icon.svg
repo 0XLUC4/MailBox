@@ -1,6 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Mailbox app icon: black rounded square, white geometric "M". Source of assets/png/*.png and assets/icon.ico
-       (regenerate: cargo run -p mailbox, example make_icon). -->
-  <rect x="16" y="16" width="480" height="480" rx="108" fill="#111111"/>
-  <path fill="#ffffff" d="M152 346 V166 H196 L256 258 L316 166 H360 V346 H318 V242 L272 312 H240 L194 242 V346 Z"/>
+  <!-- Mailbox app icon: dark rounded square, light closed envelope with a V flap. Source of
+       assets/png/*.png and assets/icon.ico from 48 px up; 16/24/32 px come from the hand-tuned
+       icon-16/24/32.svg (regenerate with the make_icon example of the mailbox crate). -->
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2e33"/>
+      <stop offset="1" stop-color="#0d0d0f"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eceef2"/>
+      <stop offset="1" stop-color="#d6dae1"/>
+    </linearGradient>
+    <linearGradient id="flap" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f3f4f7"/>
+    </linearGradient>
+    <clipPath id="envelope">
+      <rect x="96" y="148" width="320" height="216" rx="28"/>
+    </clipPath>
+    <filter id="drop" x="-25%" y="-25%" width="150%" height="170%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+    <filter id="soft" x="-10%" y="-10%" width="120%" height="140%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#base)"/>
+  <rect x="17" y="17" width="478" height="478" rx="107" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"/>
+  <rect x="96" y="148" width="320" height="216" rx="28" fill="url(#body)" filter="url(#drop)"/>
+  <g clip-path="url(#envelope)">
+    <!-- side folds meeting under the flap -->
+    <path d="M96 364 L232 262 Q256 246 280 262 L416 364 Z" fill="#ffffff" fill-opacity="0.45"/>
+    <!-- flap shadow, then the flap with a rounded tip -->
+    <path d="M90 140 L226 262 Q256 290 286 262 L422 140 Z" fill="#000000" fill-opacity="0.28" filter="url(#soft)"/>
+    <path d="M90 140 L230 252 Q256 273 282 252 L422 140 Z" fill="url(#flap)"/>
+  </g>
 </svg>
