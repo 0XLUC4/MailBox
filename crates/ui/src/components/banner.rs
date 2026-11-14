@@ -211,7 +211,7 @@ pub fn shorten(text: &str, max_chars: usize) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{BREAK, breakable, shorten};
 
     #[test]
     fn breakable_adds_break_after_separators() {
