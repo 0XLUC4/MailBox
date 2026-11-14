@@ -102,10 +102,12 @@ impl ReadingPaneView {
         {
             return blocks.clone();
         }
-        let blocks = Rc::new(match &message.body_html {
+        let mut blocks = match &message.body_html {
             Some(body) if !body.trim().is_empty() => html::parse(body),
             _ => html::parse_plain(&message.body_text),
-        });
+        };
+        crate::attachments::resolve_inline_images(message, &mut blocks);
+        let blocks = Rc::new(blocks);
         self.bodies
             .insert(message.id, (source.len(), blocks.clone()));
         blocks
@@ -363,82 +365,165 @@ impl ReadingPaneView {
     }
 
     fn attachments(&self, message: &Message, t: &Theme) -> Div {
-        div().flex().flex_row().flex_wrap().gap(SPACE_2).children(
-            message
-                .attachments
-                .iter()
-                .enumerate()
-                .map(|(index, attachment)| {
-                    let key = (message.id as u64) * 1000 + index as u64;
-                    let (open_state, save_state) = (self.state.clone(), self.state.clone());
+        let message_id = message.id;
+        let all_state = self.state.clone();
+        // Downloaded pictures are previewed above the chips (click opens them).
+        let previews = message
+            .attachments
+            .iter()
+            .enumerate()
+            .filter(|(_, attachment)| crate::attachments::is_image(attachment))
+            .filter_map(|(index, attachment)| {
+                let path = crate::attachments::stored(message_id, &attachment.name)?;
+                let (state, name) = (self.state.clone(), attachment.name.clone());
+                Some(
+                    div()
+                        .id(("att-preview", (message_id as u64) * 1000 + index as u64))
+                        .cursor_pointer()
+                        .rounded(RADIUS_MD)
+                        .border_1()
+                        .border_color(t.border_subtle)
+                        .overflow_hidden()
+                        .child(img(path).h(px(96.)).max_w(px(160.)))
+                        .on_click(move |_, _, cx| {
+                            crate::attachments::open(&state, message_id, &name, cx)
+                        }),
+                )
+            })
+            .collect::<Vec<_>>();
+        let chips = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(SPACE_2)
+            .children(
+                message
+                    .attachments
+                    .iter()
+                    .enumerate()
+                    .map(|(index, attachment)| {
+                        let key = (message.id as u64) * 1000 + index as u64;
+                        let (open_state, save_state) = (self.state.clone(), self.state.clone());
+                        let (open_name, save_name) =
+                            (attachment.name.clone(), attachment.name.clone());
+                        let (preview_state, preview_name) =
+                            (self.state.clone(), attachment.name.clone());
+                        div()
+                            .id(("att-chip", key))
+                            .cursor_pointer()
+                            // Double-click opens, like a file in Explorer.
+                            .on_click(move |event, _, cx| {
+                                if event.click_count() >= 2 {
+                                    crate::attachments::open(
+                                        &preview_state,
+                                        message_id,
+                                        &preview_name,
+                                        cx,
+                                    )
+                                }
+                            })
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(SPACE_2)
+                            .h(px(44.))
+                            .pl(SPACE_2)
+                            .pr(SPACE_1)
+                            .rounded(RADIUS_LG)
+                            .border_1()
+                            .border_color(t.border)
+                            .bg(t.elevated)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(28.))
+                                    .rounded(RADIUS_MD)
+                                    .bg(t.accent_subtle)
+                                    .text_color(t.accent)
+                                    .child(
+                                        Icon::new(attachment_icon(attachment)).size(ICON_SIZE_SM),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .max_w(px(180.))
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_size(TEXT_SM)
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(attachment.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(TEXT_XS)
+                                            .text_color(t.text_subtle)
+                                            .child(human_size(attachment.size)),
+                                    ),
+                            )
+                            .child(
+                                IconButton::new(("att-open", key), IconName::ExternalLink)
+                                    .size(px(24.))
+                                    .icon_size(px(13.))
+                                    .tooltip("Open")
+                                    .on_click(move |_, _, cx| {
+                                        crate::attachments::open(
+                                            &open_state,
+                                            message_id,
+                                            &open_name,
+                                            cx,
+                                        )
+                                    }),
+                            )
+                            .child(
+                                IconButton::new(("att-save", key), IconName::Download)
+                                    .size(px(24.))
+                                    .icon_size(px(13.))
+                                    .tooltip("Save")
+                                    .on_click(move |_, _, cx| {
+                                        crate::attachments::save(
+                                            &save_state,
+                                            message_id,
+                                            &save_name,
+                                            cx,
+                                        )
+                                    }),
+                            )
+                    }),
+            );
+        let chips = if message.attachments.len() > 1 {
+            chips.child(
+                Button::new(("att-save-all", message_id as u64))
+                    .compact()
+                    .icon(IconName::Download)
+                    .label("Save all")
+                    .on_click(move |_, _, cx| {
+                        crate::attachments::save_all(&all_state, message_id, cx)
+                    }),
+            )
+        } else {
+            chips
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(SPACE_2)
+            .when(!previews.is_empty(), |el| {
+                el.child(
                     div()
                         .flex()
                         .flex_row()
-                        .items_center()
+                        .flex_wrap()
                         .gap(SPACE_2)
-                        .h(px(44.))
-                        .pl(SPACE_2)
-                        .pr(SPACE_1)
-                        .rounded(RADIUS_LG)
-                        .border_1()
-                        .border_color(t.border)
-                        .bg(t.elevated)
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size(px(28.))
-                                .rounded(RADIUS_MD)
-                                .bg(t.accent_subtle)
-                                .text_color(t.accent)
-                                .child(Icon::new(attachment_icon(attachment)).size(ICON_SIZE_SM)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .max_w(px(180.))
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(TEXT_SM)
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child(attachment.name.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(TEXT_XS)
-                                        .text_color(t.text_subtle)
-                                        .child(human_size(attachment.size)),
-                                ),
-                        )
-                        .child(
-                            IconButton::new(("att-open", key), IconName::ExternalLink)
-                                .size(px(24.))
-                                .icon_size(px(13.))
-                                .tooltip("Open")
-                                .on_click(move |_, _, cx| {
-                                    open_state.update(cx, |state, cx| {
-                                        state
-                                            .notify_info("This attachment isn't downloaded yet", cx)
-                                    })
-                                }),
-                        )
-                        .child(
-                            IconButton::new(("att-save", key), IconName::Download)
-                                .size(px(24.))
-                                .icon_size(px(13.))
-                                .tooltip("Save")
-                                .on_click(move |_, _, cx| {
-                                    save_state.update(cx, |state, cx| {
-                                        state
-                                            .notify_info("This attachment isn't downloaded yet", cx)
-                                    })
-                                }),
-                        )
-                }),
-        )
+                        .children(previews),
+                )
+            })
+            .child(chips)
     }
 
     /// One message of the conversation. Collapsed cards show a one-line summary.

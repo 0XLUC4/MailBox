@@ -81,7 +81,7 @@ pub fn schedule(state: Entity<AppState>, message_id: Id, subject: String, cx: &m
 }
 
 /// Moves the saved draft into the Outbox (the sync engine sends it and files it in Sent).
-fn queue(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
+pub(super) fn queue(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
     let account_id = match prepare(state.read(cx), message_id) {
         Ok(account_id) => account_id,
         Err(err) => return fail(state, err, cx),

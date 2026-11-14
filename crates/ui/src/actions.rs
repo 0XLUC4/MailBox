@@ -13,6 +13,10 @@ use mailbox_core::{Command, FolderRole, Message, rules};
 pub use crate::SendReceive; // defined with the sync bridge
 use crate::app_state::{AppState, Module};
 use crate::components::IconName;
+use crate::everyday::{
+    ExportMailbox, ImportMailbox, MuteConversation, OpenAutoReply, OpenReadReceipts, PrintMessage,
+    SaveAllAttachments, SaveMessageAs, SetDefaultMailApp, SnoozeMessage,
+};
 use crate::search::SearchView;
 use crate::settings::{prefs, update_settings};
 use crate::{GoToCalendar, GoToMail, GoToPeople, GoToSettings, GoToTasks, Redo, Undo, dialogs};
@@ -127,6 +131,16 @@ pub static ACTIONS: &[ActionSpec] = &[
     spec!("mark-all-read", "Mark all as read", MailCheck, None, "folder seen", MarkAllRead),
     spec!("rules", "Rules", ListFilter, None, "filters automation manage", OpenRules),
     spec!("run-rules", "Run rules", WandSparkles, None, "apply filters now", RunRules),
+    spec!("snooze", "Snooze", AlarmClock, Some("mod+shift+H"), "later remind reappear", SnoozeMessage),
+    spec!("mute", "Mute conversation", BellOff, None, "ignore silence thread", MuteConversation),
+    spec!("print", "Print", Printer, Some("mod+P"), "paper pdf", PrintMessage),
+    spec!("save-eml", "Save as .eml", FileDown, Some("F12"), "export message file", SaveMessageAs),
+    spec!("save-attachments", "Save all attachments", Download, None, "files download", SaveAllAttachments),
+    spec!("export-mailbox", "Export mailbox (.mbox)", FolderOutput, None, "backup file mbox", ExportMailbox),
+    spec!("import-mailbox", "Import .mbox / .eml", FolderInput, None, "restore file mbox eml", ImportMailbox),
+    spec!("auto-reply", "Automatic replies", PlaneTakeoff, None, "out of office vacation away", OpenAutoReply),
+    spec!("read-receipts", "Read receipts", MailCheck, None, "disposition notification", OpenReadReceipts),
+    spec!("default-mail-app", "Set as default mail app", Mail, None, "mailto handler windows", SetDefaultMailApp),
     spec!("send-receive", "Send / receive all", RefreshCw, Some("F9"), "sync fetch", SendReceive),
     spec!("today", "Today", Calendar1, None, "calendar now", CalendarToday),
     spec!("day-view", "Day", CalendarDays, None, "calendar view", CalendarDayView),
@@ -186,6 +200,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(primary!("q"), MarkRead, shell),
         KeyBinding::new(primary!("u"), MarkUnread, shell),
         KeyBinding::new(primary!("/"), OpenShortcuts, shell),
+        KeyBinding::new(primary!("shift-h"), SnoozeMessage, shell),
+        KeyBinding::new(primary!("p"), PrintMessage, shell),
+        KeyBinding::new("f12", SaveMessageAs, shell),
         KeyBinding::new("delete", DeleteSelection, shell),
         KeyBinding::new("insert", ToggleFlag, shell),
     ]);
@@ -297,8 +314,9 @@ pub fn install<E: InteractiveElement>(
         }
     });
     let element = handle::<_, OpenShortcuts>(element, &state, |_, window, cx| {
-        dialogs::open_shortcuts(window, cx)
+        crate::shortcuts::open(window, cx)
     });
+    let element = crate::everyday::install(element, &state);
     handle::<_, OpenAbout>(element, &state, |_, window, cx| {
         dialogs::open_about(window, cx)
     })
@@ -553,7 +571,10 @@ pub fn is_enabled(id: &str, state: &AppState) -> bool {
         | "flag" | "mark-read" | "mark-unread" => {
             state.module() != Module::Mail || state.selected_message().is_some()
         }
-        "mark-all-read" | "run-rules" => state.selected_folder().is_some(),
+        id if crate::everyday::NEEDS_MESSAGE.contains(&id) => {
+            state.module() == Module::Mail && state.selected_message().is_some()
+        }
+        "mark-all-read" | "run-rules" | "import-mailbox" => state.selected_folder().is_some(),
         "undo" => state.history().can_undo(),
         "redo" => state.history().can_redo(),
         _ => true,

@@ -76,6 +76,8 @@ const MAIL_HOME: &[Group] = &[
         7,
         &["categorize", "flag", "mark-read", "mark-unread"],
     ),
+    group("Later", 6, &["snooze", "mute"]),
+    group("Message", 4, &["print", "save-eml", "save-attachments"]),
     UNDO,
 ];
 const CALENDAR_HOME: &[Group] = &[
@@ -94,8 +96,23 @@ const TASKS_HOME: &[Group] = &[
     group("Manage", 8, &["complete-task", "delete"]),
     UNDO,
 ];
-const SETTINGS_HOME: &[Group] = &[ACCOUNTS, group("Rules", 7, &["rules"]), UNDO];
-const MAIL_SEND_RECEIVE: &[Group] = &[SYNC, group("Folder", 6, &["mark-all-read"]), ACCOUNTS];
+const SETTINGS_HOME: &[Group] = &[
+    ACCOUNTS,
+    group("Rules", 7, &["rules"]),
+    group("Automatic", 6, &["auto-reply", "read-receipts"]),
+    group("System", 4, &["default-mail-app"]),
+    UNDO,
+];
+const MAIL_SEND_RECEIVE: &[Group] = &[
+    SYNC,
+    group("Folder", 6, &["mark-all-read"]),
+    group(
+        "Mailbox",
+        5,
+        &["export-mailbox", "import-mailbox", "auto-reply"],
+    ),
+    ACCOUNTS,
+];
 const SEND_RECEIVE: &[Group] = &[SYNC, ACCOUNTS];
 const MAIL_VIEW: &[Group] = &[
     group("Layout", 8, &["reading-pane", "conversations"]),

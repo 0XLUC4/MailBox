@@ -4,17 +4,21 @@
 //! `$XDG_DATA_HOME/mailbox` or `~/.local/share/mailbox` elsewhere, `MAILBOX_DATA_DIR`
 //! overrides), or the SQLite file given with `--data`. A new database has no account: the app
 //! starts on the onboarding screen.
+//!
+//! `mailto:...`: open compose (how Windows launches the default mail app). When Mailbox is
+//! already running, the URL is handed to that window and this process exits.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use mailbox_core::Store;
 
-const USAGE: &str = "usage: mailbox [--data <path>]";
+const USAGE: &str = "usage: mailbox [--data <path>] [mailto:...]";
 
 #[derive(Debug, Default)]
 struct Args {
     data: Option<PathBuf>,
+    mailto: Option<String>,
 }
 
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -26,6 +30,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 parsed.data = Some(PathBuf::from(path));
             }
             "-h" | "--help" => return Err(USAGE.to_owned()),
+            other if mailbox_ui::system_integration::mailto_from_args([other]).is_some() => {
+                parsed.mailto = Some(other.to_owned())
+            }
             other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
         }
     }
@@ -52,9 +59,13 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Single instance: a running Mailbox takes the request (and comes to the front).
+    if mailbox_ui::system_integration::forward_to_running(args.mailto.as_deref()) {
+        return ExitCode::SUCCESS;
+    }
     match open_store(&args) {
         Ok(store) => {
-            mailbox_ui::run(store);
+            mailbox_ui::run_with(store, args.mailto);
             ExitCode::SUCCESS
         }
         Err(message) => {
@@ -80,6 +91,8 @@ mod tests {
         assert!(parse(&["--data"]).is_err());
         assert!(parse(&["--sample"]).is_err(), "sample data is not shipped");
         assert!(parse(&["--nope"]).is_err());
+        let mailto = parse(&["mailto:a@b.co?subject=Hi"]).unwrap();
+        assert_eq!(mailto.mailto.as_deref(), Some("mailto:a@b.co?subject=Hi"));
     }
 
     #[test]
@@ -88,6 +101,7 @@ mod tests {
         let path = dir.join("nested").join("mailbox.db");
         let store = open_store(&Args {
             data: Some(path.clone()),
+            mailto: None,
         })
         .unwrap();
         assert!(store.list_accounts().unwrap().is_empty());

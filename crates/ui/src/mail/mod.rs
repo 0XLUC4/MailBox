@@ -6,7 +6,7 @@
 //! [`crate::compose::open_compose`] (see [`ops::compose_from`]).
 
 mod folder_pane;
-mod html;
+pub(crate) mod html;
 mod list_model;
 mod message_list;
 mod message_menu;
@@ -14,10 +14,10 @@ mod message_window;
 mod ops;
 mod reading_pane;
 
-pub use ops::ComposeKind;
 pub use folder_pane::FolderPaneView;
 pub use message_list::MessageListView;
 pub use message_window::open as open_message_window;
+pub use ops::ComposeKind;
 pub use reading_pane::{PaneSource, ReadingPaneView};
 
 use gpui::*;

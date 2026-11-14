@@ -292,6 +292,9 @@ impl SettingsView {
             )
             .into_any_element(),
         ]
+        .into_iter()
+        .chain(everyday_rows(cx))
+        .collect()
     }
 
     fn render_calendar(&self, settings: &Settings, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -559,6 +562,53 @@ impl SettingsView {
 }
 
 /// Moves an hour by `step`, kept within `[min, max]`.
+/// Out of office, read receipts and the default mail app (see `crate::everyday`).
+fn everyday_rows(cx: &App) -> Vec<AnyElement> {
+    let row = |id: &'static str,
+               title: &'static str,
+               hint: &'static str,
+               label: &'static str,
+               icon: IconName,
+               action: fn() -> Box<dyn Action>| {
+        setting_row(
+            tr(cx, title),
+            Some(hint.into()),
+            Button::new(id)
+                .icon(icon)
+                .label(tr(cx, label))
+                .on_click(move |_, window, cx| window.dispatch_action(action(), cx)),
+            cx,
+        )
+        .into_any_element()
+    };
+    vec![
+        row(
+            "auto-reply",
+            "Automatic replies",
+            "Out of office: answer each sender once during a date range.",
+            "Set up",
+            IconName::PlaneTakeoff,
+            || Box::new(crate::everyday::OpenAutoReply),
+        ),
+        row(
+            "read-receipts",
+            "Read receipts",
+            "What to do when a message asks to know you read it.",
+            "Choose",
+            IconName::MailCheck,
+            || Box::new(crate::everyday::OpenReadReceipts),
+        ),
+        row(
+            "default-mail-app",
+            "Default mail app",
+            "Open mailto: links with Mailbox (Windows asks you to confirm).",
+            "Set as default mail app",
+            IconName::Mail,
+            || Box::new(crate::everyday::SetDefaultMailApp),
+        ),
+    ]
+}
+
 fn shift_hour(hour: u8, step: i32, min: u8, max: u8) -> u8 {
     (i32::from(hour) + step).clamp(i32::from(min), i32::from(max)) as u8
 }

@@ -31,6 +31,9 @@ oauth2 = { version = "5", default-features = false, features = ["ureq"] }
 roxmltree = "0.21"
 ureq = "2.12"
 url = "2.5"
+# Windows integration (notifications, mailto handler); already in the lock file via deps.
+tauri-winrt-notification = "0.8.1"
+windows-registry = "0.6.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

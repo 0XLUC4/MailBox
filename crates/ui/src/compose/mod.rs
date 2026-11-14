@@ -90,6 +90,12 @@ pub fn open_compose(
     state.update(cx, |_, cx| cx.notify());
 }
 
+/// Queues saved draft `message_id` for sending now (Outbox, then Send/Receive). Used by
+/// "send later", automatic replies and read receipts.
+pub fn queue_draft(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
+    send::queue(state, message_id, cx);
+}
+
 /// The compose dock to overlay on the main window content, when something is being written.
 pub fn dock(cx: &App) -> Option<Entity<ComposeDock>> {
     cx.try_global::<ComposeGlobal>()
