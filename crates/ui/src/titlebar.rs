@@ -112,7 +112,6 @@ impl Render for WindowFrame {
                     .border_color(t.border_subtle)
                     .items_center()
                     .when(IS_MACOS, |el| el.pl(MACOS_TRAFFIC_LIGHTS_WIDTH))
-                    .when(!IS_MACOS, |el| el.pl(px(10.)).child(app_icon(px(16.))))
                     .child(drag_area(div().id("title-bar-drag").flex_1().h_full()))
                     .child(WindowControls),
             )
