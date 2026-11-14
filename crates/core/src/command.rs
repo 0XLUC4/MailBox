@@ -55,6 +55,10 @@ pub enum Command {
     DeleteRule(Id),
     /// Applied in order, atomically.
     Batch(Vec<Command>),
+    /// Contacts with details, groups, merge (see [`crate::people`]).
+    People(crate::people::PeopleCommand),
+    /// Tasks with details and lists (see [`crate::todo`]).
+    Todo(crate::todo::TaskCommand),
 }
 
 impl Command {
@@ -130,6 +134,8 @@ impl Command {
                 [single] => single.label(),
                 _ => format!("{} changes", commands.len()),
             },
+            Self::People(command) => command.label(),
+            Self::Todo(command) => command.label(),
         }
     }
 }
@@ -237,6 +243,8 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
             inverses.reverse();
             Ok(Command::Batch(inverses))
         }
+        Command::People(command) => crate::people::apply(store, command),
+        Command::Todo(command) => crate::todo::apply(store, command),
     }
 }
 
