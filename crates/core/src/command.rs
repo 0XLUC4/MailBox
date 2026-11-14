@@ -55,6 +55,15 @@ pub enum Command {
     DeleteRule(Id),
     /// Applied in order, atomically.
     Batch(Vec<Command>),
+    /// Compose: save a draft message with its metadata (see `compose`).
+    SaveDraft(Box<crate::compose::Draft>),
+    /// Compose: delete a draft message (by message id) and its metadata.
+    DeleteDraft(Id),
+    /// Compose: queue a message for delivery; its draft moves to Sent.
+    QueueSend(Box<crate::compose::OutboxItem>),
+    /// Remove a delivered (or cancelled) message from the outbox.
+    DeleteOutboxItem(Id),
+    SaveSignature(Box<crate::compose::Signature>),
 }
 
 impl Command {
@@ -130,6 +139,11 @@ impl Command {
                 [single] => single.label(),
                 _ => format!("{} changes", commands.len()),
             },
+            Self::SaveDraft(_) => "Save draft".into(),
+            Self::DeleteDraft(_) => "Discard draft".into(),
+            Self::QueueSend(_) => "Send message".into(),
+            Self::DeleteOutboxItem(_) => "Remove from outbox".into(),
+            Self::SaveSignature(_) => "Save signature".into(),
         }
     }
 }
@@ -236,6 +250,13 @@ fn apply_inner(store: &Store, command: Command) -> Result<Command> {
                 .collect::<Result<Vec<_>>>()?;
             inverses.reverse();
             Ok(Command::Batch(inverses))
+        }
+        Command::SaveDraft(draft) => crate::compose::apply_save_draft(store, *draft),
+        Command::DeleteDraft(id) => crate::compose::apply_delete_draft(store, id),
+        Command::QueueSend(item) => crate::compose::apply_queue_send(store, *item),
+        Command::DeleteOutboxItem(id) => crate::compose::apply_delete_outbox_item(store, id),
+        Command::SaveSignature(signature) => {
+            crate::compose::apply_save_signature(store, *signature)
         }
     }
 }

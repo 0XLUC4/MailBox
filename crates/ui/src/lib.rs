@@ -60,12 +60,21 @@ pub fn run(store: Store) {
                 theme::init(window, cx);
                 cx.new(|cx| Shell::new(state, window, cx))
             });
-            if let Err(err) = opened {
-                eprintln!("mailbox: failed to open window: {err:#}");
-                cx.quit();
-                return;
-            }
-            cx.on_window_closed(|cx, _| cx.quit()).detach();
+            let main_window = match opened {
+                Ok((handle, _)) => handle.window_id(),
+                Err(err) => {
+                    eprintln!("mailbox: failed to open window: {err:#}");
+                    cx.quit();
+                    return;
+                }
+            };
+            // Secondary windows (popped-out compose) close without quitting.
+            cx.on_window_closed(move |cx, closed| {
+                if closed == main_window {
+                    cx.quit();
+                }
+            })
+            .detach();
             cx.activate(true);
         });
 }

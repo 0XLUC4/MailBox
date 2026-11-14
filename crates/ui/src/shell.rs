@@ -205,7 +205,14 @@ impl Render for Shell {
                     .min_w(px(0.))
                     .h_full()
                     .child(self.render_top_bar(active, &t))
-                    .child(div().flex_1().min_h(px(0.)).child(content)),
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(content)
+                            .children(crate::compose::dock(cx)),
+                    ),
             )
     }
 }
