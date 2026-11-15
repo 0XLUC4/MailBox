@@ -391,6 +391,15 @@ impl SyncBridge {
             account.failed.clear();
         }
         self.poll(cx);
+        // An account still busy with a sync did not start a cycle above: send its Outbox now
+        // (the worker's send thread does not wait for the sync; already queued ones are skipped).
+        let ids: Vec<Id> = self.accounts.keys().copied().collect();
+        for id in ids {
+            if let Some(mut account) = self.accounts.remove(&id) {
+                self.send_outbox(&mut account, cx);
+                self.accounts.insert(id, account);
+            }
+        }
     }
 
     fn set_offline(&mut self, offline: bool, cx: &mut Context<Self>) {
