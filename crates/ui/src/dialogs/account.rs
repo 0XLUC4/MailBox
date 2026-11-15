@@ -31,7 +31,9 @@ use crate::components::{Banner, Button, IconName};
 use crate::settings::controls::{segmented, swatches};
 use crate::settings::tr;
 use crate::sync_bridge;
-use crate::theme::{ACCENTS, DEFAULT_ACCENT, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_SM, theme};
+use crate::theme::{
+    ACCENTS, DEFAULT_ACCENT, DIALOG_LG, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_SM, theme,
+};
 
 /// Server source shown when the provider was not found anywhere.
 const GUESSED: &str =
@@ -145,10 +147,15 @@ impl EndpointInputs {
         self.security = endpoint.security;
     }
 
-    fn read(&self, what: &str, cx: &App) -> Result<ServerEndpoint, String> {
+    fn read(&self, incoming: bool, cx: &App) -> Result<ServerEndpoint, String> {
         let host = self.host.read(cx).value().trim().to_owned();
         if host.is_empty() || host.contains(char::is_whitespace) {
-            return Err(format!("Enter the {what} server name"));
+            let message = if incoming {
+                "Enter the incoming server name"
+            } else {
+                "Enter the outgoing server name"
+            };
+            return Err(tr(cx, message).to_owned());
         }
         let port = self
             .port
@@ -158,7 +165,17 @@ impl EndpointInputs {
             .parse::<u16>()
             .ok()
             .filter(|port| *port > 0)
-            .ok_or_else(|| format!("Enter a valid {what} port"))?;
+            .ok_or_else(|| {
+                tr(
+                    cx,
+                    if incoming {
+                        "Enter a valid incoming port"
+                    } else {
+                        "Enter a valid outgoing port"
+                    },
+                )
+                .to_owned()
+            })?;
         Ok(ServerEndpoint::new(host, port, self.security))
     }
 }
@@ -219,7 +236,7 @@ impl AccountDialog {
 
         let name = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(tr(cx, "Work, Personal..."))
+                .placeholder(tr(cx, "Work, Personal…"))
                 .default_value(name)
         });
         let email = cx.new(|cx| {
@@ -426,8 +443,8 @@ impl AccountDialog {
             } else {
                 username
             },
-            imap: self.imap.read("incoming", cx)?,
-            smtp: self.smtp.read("outgoing", cx)?,
+            imap: self.imap.read(true, cx)?,
+            smtp: self.smtp.read(false, cx)?,
         })
     }
 
@@ -435,15 +452,17 @@ impl AccountDialog {
         if !self.use_oauth {
             return Ok(AuthConfig::Password);
         }
-        let provider = self
-            .oauth_provider(cx)
-            .ok_or("Sign-in with a browser only works with Gmail and Outlook servers")?;
+        let provider = self.oauth_provider(cx).ok_or(tr(
+            cx,
+            "Sign-in with a browser only works with Gmail and Outlook servers",
+        ))?;
         let client_id = self.client_id.read(cx).value().trim().to_owned();
         if client_id.is_empty() {
-            return Err(format!(
+            return Err(tr(
+                cx,
                 "Enter the OAuth client id of your {} app, or use an app password",
-                provider.label()
-            ));
+            )
+            .replace("{}", provider.label()));
         }
         Ok(AuthConfig::OAuth2 {
             provider,
@@ -454,7 +473,7 @@ impl AccountDialog {
     fn config(&self, cx: &App) -> Result<AccountConfig, String> {
         let email = self.email_value(cx);
         if email_domain(&email).is_none() {
-            return Err("Enter a valid email address".into());
+            return Err(tr(cx, "Enter a valid email address").into());
         }
         Ok(AccountConfig::from_servers(
             &email,
@@ -536,7 +555,10 @@ impl AccountDialog {
             && let Err(err) = move_secrets(old, &config.email)
         {
             return self.fail(
-                format!("The password could not be moved to the new address: {err}"),
+                format!(
+                    "{}: {err}",
+                    tr(cx, "The password could not be moved to the new address")
+                ),
                 cx,
             );
         }
@@ -544,7 +566,10 @@ impl AccountDialog {
             && let Err(err) = credentials::set_password(&config.email, &password)
         {
             return self.fail(
-                format!("The password could not be saved in the system keychain: {err}"),
+                format!(
+                    "{}: {err}",
+                    tr(cx, "The password could not be saved in the system keychain")
+                ),
                 cx,
             );
         }
@@ -1049,7 +1074,7 @@ fn create_account(
                 .max()
         });
         let Some(account_id) = account_id else {
-            state.report_error("The new account could not be found", cx);
+            state.report_error(tr(cx, "The new account could not be found"), cx);
             return None;
         };
 
@@ -1153,7 +1178,7 @@ fn open(view: Entity<AccountDialog>, window: &mut Window, cx: &mut App) {
         if first.replace(false) {
             focus.update(cx, |input, cx| input.focus(window, cx));
         }
-        dialog.w(px(540.)).child(view.clone())
+        dialog.w(DIALOG_LG).child(view.clone())
     });
 }
 

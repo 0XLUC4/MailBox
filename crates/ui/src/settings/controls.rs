@@ -8,8 +8,8 @@ use gpui::*;
 
 use crate::components::{Icon, IconButton, IconName};
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_FULL, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, TEXT_MD, TEXT_SM,
-    hex, theme,
+    ICON_SIZE_SM, ICON_SIZE_XS, RADIUS_FULL, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3,
+    TEXT_MD, TEXT_SM, hex, text_on, theme,
 };
 
 type SelectHandler<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
@@ -179,13 +179,13 @@ pub fn swatches(
                         .size(px(18.))
                         .rounded(RADIUS_FULL)
                         .bg(hex(color))
-                        .text_color(t.on_accent)
+                        .text_color(text_on(hex(color)))
                         .when(selected, |el| {
-                            el.child(Icon::new(IconName::Check).size(px(12.)))
+                            el.child(Icon::new(IconName::Check).size(ICON_SIZE_XS))
                         }),
                 )
                 .tooltip(move |window, cx| {
-                    gpui::component::tooltip::Tooltip::new(name).build(window, cx)
+                    gpui::component::tooltip::Tooltip::new(super::tr(cx, name)).build(window, cx)
                 })
                 .on_click(move |_, window, cx| on_select(color, window, cx))
         }))

@@ -3,7 +3,7 @@
 
 use chrono::{Local, NaiveDate, Utc};
 use gpui::component::WindowExt as _;
-use gpui::component::input::{Input, InputState, Textarea, TextareaState};
+use gpui::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui::component::switch::Switch;
 use gpui::*;
 use mailbox_core::auto_reply::AutoReply;
@@ -13,7 +13,8 @@ use mailbox_core::{Account, Command, FolderRole, Id, Message};
 use crate::app_state::AppState;
 use crate::components::{Button, IconName};
 use crate::dialogs::field;
-use crate::theme::{SPACE_2, SPACE_3, TEXT_SM, TEXT_XS, theme};
+use crate::settings::tr;
+use crate::theme::{DIALOG_MD, SPACE_2, SPACE_3, TEXT_SM, TEXT_XS, theme};
 
 /// Saves `draft` in Drafts (untracked) and queues it for sending. Used for automatic replies
 /// and read receipts.
@@ -99,10 +100,10 @@ pub fn process(state: &Entity<AppState>, ids: &[Id], cx: &mut App) {
 /// The "Automatic replies" dialog.
 pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
     let form = cx.new(|cx| AutoReplyForm::new(state, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, _, cx| {
         dialog
-            .w(px(480.))
-            .title("Automatic replies")
+            .w(DIALOG_MD)
+            .title(tr(cx, "Automatic replies"))
             .child(form.clone())
     });
 }
@@ -122,14 +123,12 @@ fn date_text(date: Option<NaiveDate>) -> String {
 }
 
 /// Empty → `None`; otherwise a `YYYY-MM-DD` date.
-fn parse_date(text: &str, what: &str) -> Result<Option<NaiveDate>, String> {
+fn parse_date(text: &str) -> Result<Option<NaiveDate>, chrono::ParseError> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);
     }
-    NaiveDate::parse_from_str(text, "%Y-%m-%d")
-        .map(Some)
-        .map_err(|_| format!("{what}: use the format YYYY-MM-DD"))
+    NaiveDate::parse_from_str(text, "%Y-%m-%d").map(Some)
 }
 
 impl AutoReplyForm {
@@ -141,17 +140,22 @@ impl AutoReplyForm {
                      cx: &mut Context<Self>| {
             cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder(placeholder)
+                    .placeholder(tr(cx, placeholder))
                     .default_value(value)
             })
         };
         let start = input("YYYY-MM-DD (optional)", date_text(rule.start), window, cx);
         let end = input("YYYY-MM-DD (optional)", date_text(rule.end), window, cx);
         let subject = input("Automatic reply", rule.subject.clone(), window, cx);
+        // Re-render on date edits so Save follows their validity.
+        for date in [&start, &end] {
+            cx.subscribe(date, |_, _, _: &InputEvent, cx| cx.notify())
+                .detach();
+        }
         let body = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(4, 10)
-                .placeholder("Your message")
+                .placeholder(tr(cx, "Your message"))
                 .default_value(rule.body.clone())
         });
         Self {
@@ -165,17 +169,21 @@ impl AutoReplyForm {
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let dates = parse_date(&self.start.read(cx).value(), "Start")
-            .and_then(|start| Ok((start, parse_date(&self.end.read(cx).value(), "End")?)));
+        let invalid = |what: &'static str| {
+            tr(cx, "{}: use the format YYYY-MM-DD").replace("{}", tr(cx, what))
+        };
+        let start = parse_date(&self.start.read(cx).value()).map_err(|_| invalid("Start date"));
+        let end = parse_date(&self.end.read(cx).value()).map_err(|_| invalid("End date"));
+        let dates = start.and_then(|start| Ok((start, end?)));
         let body = self.body.read(cx).value().to_string();
         let checked = dates.and_then(|(start, end)| {
             if let (Some(start), Some(end)) = (start, end)
                 && end < start
             {
-                return Err("The end date is before the start date".to_owned());
+                return Err(tr(cx, "The end date is before the start date").to_owned());
             }
             if self.rule.enabled && body.trim().is_empty() {
-                return Err("Write the message to send".to_owned());
+                return Err(tr(cx, "Write the message to send").to_owned());
             }
             Ok((start, end))
         });
@@ -210,11 +218,14 @@ impl AutoReplyForm {
             }
         };
         if saved {
-            let message = if rule.enabled {
-                "Automatic replies are on"
-            } else {
-                "Automatic replies are off"
-            };
+            let message = tr(
+                cx,
+                if rule.enabled {
+                    "Automatic replies are on"
+                } else {
+                    "Automatic replies are off"
+                },
+            );
             self.state
                 .update(cx, |state, cx| state.notify_info(message, cx));
             window.close_dialog(cx);
@@ -225,6 +236,8 @@ impl AutoReplyForm {
 impl Render for AutoReplyForm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
+        let dates_valid = parse_date(&self.start.read(cx).value()).is_ok()
+            && parse_date(&self.end.read(cx).value()).is_ok();
         div()
             .flex()
             .flex_col()
@@ -243,30 +256,39 @@ impl Render for AutoReplyForm {
                                 cx.notify();
                             })),
                     )
-                    .child(div().text_size(TEXT_SM).child("Send automatic replies")),
+                    .child(
+                        div()
+                            .text_size(TEXT_SM)
+                            .child(tr(cx, "Send automatic replies")),
+                    ),
             )
-            .child(div().text_size(TEXT_XS).text_color(t.text_subtle).child(
+            .child(div().text_size(TEXT_XS).text_color(t.text_subtle).child(tr(
+                cx,
                 "Each sender gets one reply per period. Mailing lists and no-reply \
                          senders are skipped. Replies are sent by Mailbox, so it must be running.",
-            ))
+            )))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .gap(SPACE_2)
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(field("From", Input::new(&self.start), cx)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(field("Until", Input::new(&self.end), cx)),
-                    ),
+                    .child(div().flex_1().child(field(
+                        tr(cx, "Start date"),
+                        Input::new(&self.start),
+                        cx,
+                    )))
+                    .child(div().flex_1().child(field(
+                        tr(cx, "End date"),
+                        Input::new(&self.end),
+                        cx,
+                    ))),
             )
-            .child(field("Subject prefix", Input::new(&self.subject), cx))
-            .child(field("Message", Textarea::new(&self.body), cx))
+            .child(field(
+                tr(cx, "Subject prefix"),
+                Input::new(&self.subject),
+                cx,
+            ))
+            .child(field(tr(cx, "Message"), Textarea::new(&self.body), cx))
             .child(
                 div()
                     .flex()
@@ -275,14 +297,15 @@ impl Render for AutoReplyForm {
                     .gap(SPACE_2)
                     .child(
                         Button::new("auto-reply-cancel")
-                            .label("Cancel")
+                            .label(tr(cx, "Cancel"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("auto-reply-save")
                             .primary()
                             .icon(IconName::Check)
-                            .label("Save")
+                            .label(tr(cx, "Save"))
+                            .disabled(!dates_valid)
                             .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     ),
             )
@@ -295,11 +318,11 @@ mod tests {
 
     #[test]
     fn parses_optional_dates() {
-        assert_eq!(parse_date("  ", "Start"), Ok(None));
+        assert_eq!(parse_date("  "), Ok(None));
         assert_eq!(
-            parse_date("2026-07-01", "Start"),
+            parse_date("2026-07-01"),
             Ok(Some("2026-07-01".parse().unwrap()))
         );
-        assert!(parse_date("01/07/2026", "Start").is_err());
+        assert!(parse_date("01/07/2026").is_err());
     }
 }

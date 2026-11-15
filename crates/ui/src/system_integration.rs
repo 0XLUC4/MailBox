@@ -282,21 +282,34 @@ pub fn register_mail_handler(_cx: &App) -> Result<(), String> {
 
 /// macOS only lets the user pick the default mail app (from Apple Mail's settings).
 #[cfg(not(any(windows, target_os = "linux")))]
-pub fn register_mail_handler(_cx: &App) -> Result<(), String> {
-    Err("choose Mailbox in Mail > Settings > General > Default email reader".into())
+pub fn register_mail_handler(cx: &App) -> Result<(), String> {
+    Err(crate::settings::tr(
+        cx,
+        "choose Mailbox in Mail > Settings > General > Default email reader",
+    )
+    .into())
 }
 
 /// Settings / palette entry: registers, then explains what to confirm.
 pub fn set_default_mail_app(state: &Entity<AppState>, cx: &mut App) {
     let result = register_mail_handler(cx);
-    let done = if cfg!(windows) {
-        "Mailbox is registered for mailto: links. Pick it under Email in the Default apps page."
-    } else {
-        "Mailbox now opens mailto: links."
-    };
+    let done = crate::settings::tr(
+        cx,
+        if cfg!(windows) {
+            "Mailbox is registered for mailto: links. Pick it under Email in the Default apps page."
+        } else {
+            "Mailbox now opens mailto: links."
+        },
+    );
     state.update(cx, |state, cx| match result {
         Ok(()) => state.notify_info(done, cx),
-        Err(err) => state.report_error(format!("Could not register Mailbox: {err}"), cx),
+        Err(err) => state.report_error(
+            format!(
+                "{}: {err}",
+                crate::settings::tr(cx, "Could not register Mailbox")
+            ),
+            cx,
+        ),
     });
 }
 

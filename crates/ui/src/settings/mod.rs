@@ -19,8 +19,8 @@ use crate::app_state::AppState;
 use crate::components::{Button, Icon, IconName};
 use crate::dialogs;
 use crate::theme::{
-    ACCENTS, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, SPACE_6, SPACE_8, TEXT_LG, TEXT_MD,
-    TEXT_XL, theme,
+    ACCENTS, ICON_SIZE_SM, NAV_ROW_HEIGHT, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3,
+    SPACE_6, SPACE_8, TEXT_LG, TEXT_MD, TEXT_XL, theme,
 };
 pub use accounts::ordered_accounts;
 use controls::{segmented, setting_row, stepper, swatches};
@@ -132,7 +132,7 @@ impl SettingsView {
                     .flex_row()
                     .items_center()
                     .gap(SPACE_2)
-                    .h(px(30.))
+                    .h(NAV_ROW_HEIGHT)
                     .px(SPACE_2)
                     .rounded(RADIUS_MD)
                     .text_size(TEXT_MD)
@@ -146,7 +146,7 @@ impl SettingsView {
                         el.text_color(t.text_muted)
                             .hover(|style| style.bg(t.hover).text_color(t.text))
                     })
-                    .child(Icon::new(section.icon()).size(px(15.)))
+                    .child(Icon::new(section.icon()).size(ICON_SIZE_SM))
                     .child(tr(cx, section.label()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.section = section;

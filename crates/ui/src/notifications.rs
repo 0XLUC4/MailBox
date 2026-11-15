@@ -19,7 +19,7 @@ use gpui::{AnyWindowHandle, App, Entity, Global};
 use mailbox_core::{FolderRole, Id, Message};
 
 use crate::app_state::{AppState, Module};
-use crate::settings::prefs;
+use crate::settings::{prefs, tr};
 
 /// How often toast clicks are picked up.
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
@@ -179,7 +179,7 @@ fn handle_new_mail(state: &Entity<AppState>, ids: Vec<Id>, cx: &mut App) {
         [first, ..] => {
             let body: Vec<String> = messages.iter().take(3).map(subject_line).collect();
             show(
-                &format!("{} new messages", messages.len()),
+                &tr(cx, "{} new messages").replace("{}", &messages.len().to_string()),
                 &body.join("\n"),
                 Activation::Message(first.id),
                 cx,
@@ -206,7 +206,7 @@ pub fn reminder(title: &str, start: DateTime<Utc>, cx: &App) {
         .format("%a %d %b, %H:%M")
         .to_string();
     let title = if title.trim().is_empty() {
-        "Reminder"
+        tr(cx, "Reminder")
     } else {
         title
     };

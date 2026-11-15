@@ -14,7 +14,9 @@ use crate::ribbon::RibbonView;
 use crate::search::SearchView;
 use crate::settings::SettingsView;
 use crate::tasks::TasksView;
-use crate::theme::{SPACE_1, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TOP_BAR_HEIGHT, Theme, theme};
+use crate::theme::{
+    RADIUS_SM, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TOP_BAR_HEIGHT, Theme, theme,
+};
 use crate::titlebar;
 use crate::updater::Updater;
 use crate::{GoToCalendar, GoToMail, GoToPeople, GoToSettings, GoToTasks, Redo, Undo};
@@ -25,6 +27,9 @@ pub const RAIL_WIDTH: Pixels = if cfg!(target_os = "macos") {
 } else {
     crate::theme::RAIL_WIDTH
 };
+/// Rail buttons (modules, updates) and their icons.
+pub const RAIL_BUTTON_SIZE: Pixels = px(36.);
+pub const RAIL_ICON_SIZE: Pixels = px(18.);
 
 pub struct Shell {
     state: Entity<AppState>,
@@ -132,17 +137,17 @@ impl Shell {
                         div()
                             .absolute()
                             .left(px(0.))
-                            .top(px(8.))
+                            .top(SPACE_2)
                             .w(px(3.))
                             .h(px(20.))
-                            .rounded(px(2.))
+                            .rounded(RADIUS_SM)
                             .bg(t.accent),
                     )
                 })
                 .child(
                     IconButton::new(("rail", module as u64), module.icon())
-                        .size(px(36.))
-                        .icon_size(px(18.))
+                        .size(RAIL_BUTTON_SIZE)
+                        .icon_size(RAIL_ICON_SIZE)
                         .active(is_active)
                         .tooltip(crate::settings::tr(cx, module.label()))
                         .on_click(move |_, _, cx| {
@@ -205,7 +210,13 @@ impl Shell {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(crate::settings::tr(cx, active.label())),
             ))
-            .child(div().flex_shrink_0().w(px(420.)).child(self.search.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .max_w(px(420.))
+                    .min_w(px(0.))
+                    .child(self.search.clone()),
+            )
             .child(titlebar::drag_area(
                 div().id("top-bar-gap").flex_shrink_0().w(SPACE_4).h_full(),
             ))
