@@ -77,6 +77,8 @@ pub struct MailWebView {
     page: Arc<Mutex<Page>>,
     /// Key of the page loaded in the webview.
     loaded: std::cell::RefCell<String>,
+    /// Background painted before and under the page (white for HTML mail, the theme for text).
+    background: Cell<(u8, u8, u8)>,
     visible: Cell<bool>,
     /// Natively shown once (see [`MailWebView::set_visible`]).
     shown: Cell<bool>,
@@ -166,6 +168,7 @@ impl MailWebView {
             webview,
             page,
             loaded: Default::default(),
+            background: Cell::new((255, 255, 255)),
             visible: Cell::new(false),
             shown: Cell::new(false),
             target: Cell::new(None),
@@ -175,10 +178,17 @@ impl MailWebView {
         }))
     }
 
-    /// Shows the page built by `page` unless the page with the same `key` (URL-safe) is loaded.
-    pub fn load(&self, key: String, page: impl FnOnce() -> Page) {
+    /// Shows the page built by `page` unless the page with the same `key` (URL-safe) is loaded,
+    /// over `background` (no white flash before a dark page paints).
+    pub fn load(&self, key: String, background: (u8, u8, u8), page: impl FnOnce() -> Page) {
         if *self.loaded.borrow() == key {
             return;
+        }
+        if self.background.get() != background {
+            let (r, g, b) = background;
+            if self.webview.set_background_color((r, g, b, 255)).is_ok() {
+                self.background.set(background);
+            }
         }
         *self.page.lock().unwrap_or_else(PoisonError::into_inner) = page();
         let url = format!("{ORIGIN}m/{key}");

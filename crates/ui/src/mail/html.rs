@@ -878,8 +878,9 @@ pub fn parse(html: &str) -> Vec<Block> {
     builder.finish()
 }
 
-/// Splits plain text on URLs, making them links.
-fn linkify(line: &str, spans: &mut Vec<Span>) {
+/// Splits plain text on http(s) URLs: `(text, is_url)` runs, in order.
+fn url_runs(line: &str) -> Vec<(&str, bool)> {
+    let mut runs = Vec::new();
     let mut rest = line;
     while !rest.is_empty() {
         let next = ["https://", "http://"]
@@ -887,18 +888,101 @@ fn linkify(line: &str, spans: &mut Vec<Span>) {
             .filter_map(|scheme| rest.find(scheme))
             .min();
         let Some(start) = next else {
-            push_plain(spans, rest, None);
+            runs.push((rest, false));
             break;
         };
-        push_plain(spans, &rest[..start], None);
+        if start > 0 {
+            runs.push((&rest[..start], false));
+        }
         let url_part = &rest[start..];
         let end = url_part
             .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"'))
             .unwrap_or(url_part.len());
         let url = url_part[..end].trim_end_matches(['.', ',', ')', ';', ':', '!', '?']);
-        push_plain(spans, url, Some(url.to_owned()));
-        rest = &rest[start + url.len()..];
+        // A scheme alone ("http://") is text.
+        runs.push((url, !url.ends_with("://")));
+        rest = &rest[start + url.len().max(1)..];
     }
+    runs
+}
+
+/// Splits plain text on URLs, making them links.
+fn linkify(line: &str, spans: &mut Vec<Span>) {
+    for (text, is_url) in url_runs(line) {
+        push_plain(spans, text, is_url.then(|| text.to_owned()));
+    }
+}
+
+/// CSS colors of a plain-text page (the app theme).
+pub struct PageColors {
+    pub background: String,
+    pub text: String,
+    pub muted: String,
+    pub link: String,
+    pub border: String,
+}
+
+/// A plain-text body as an HTML page in the app's colors, for the web view (selectable text):
+/// escaped, wrapped as written, URLs as links, `>` lines as quotes.
+pub fn plain_page(text: &str, colors: &PageColors) -> String {
+    let mut body = String::new();
+    let mut in_quote = false;
+    for line in text.lines() {
+        let quoted = line.trim_start().strip_prefix('>');
+        if quoted.is_some() != in_quote {
+            body.push_str(if in_quote {
+                "</blockquote>"
+            } else {
+                "<blockquote>"
+            });
+            in_quote = quoted.is_some();
+        }
+        let line = quoted.map_or(line, |rest| rest.strip_prefix(' ').unwrap_or(rest));
+        for (run, is_url) in url_runs(line) {
+            let run_html = escape_html(run);
+            if is_url {
+                body.push_str(&format!("<a href=\"{run_html}\">{run_html}</a>"));
+            } else {
+                body.push_str(&run_html);
+            }
+        }
+        body.push('\n');
+    }
+    if in_quote {
+        body.push_str("</blockquote>");
+    }
+    let PageColors {
+        background,
+        text,
+        muted,
+        link,
+        border,
+    } = colors;
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>\
+         html,body{{margin:0;background:{background};color:{text};}}\
+         body{{padding:0 16px 16px;font:14px/1.55 'Segoe UI',system-ui,-apple-system,sans-serif;\
+         white-space:pre-wrap;overflow-wrap:anywhere;}}\
+         a{{color:{link};}}\
+         blockquote{{margin:4px 0;padding-left:10px;border-left:3px solid {border};color:{muted};}}\
+         ::selection{{background:{link};color:#fff;}}\
+         </style></head><body>{body}</body></html>"
+    )
+}
+
+fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn push_plain(spans: &mut Vec<Span>, text: &str, link: Option<String>) {
@@ -1254,7 +1338,10 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
 #[cfg(test)]
 mod tests {
     // Not `super::*`: it would pull in gpui's `test` macro through `use gpui::*`.
-    use super::{Block, cid_references, has_remote_images, parse, parse_plain, sent_html, to_text};
+    use super::{
+        Block, PageColors, cid_references, has_remote_images, parse, parse_plain, plain_page,
+        sent_html, to_text, url_runs,
+    };
 
     #[test]
     fn plain_text_wrapped_by_the_parser_is_not_html() {
@@ -1379,6 +1466,38 @@ mod tests {
         assert!(parse("<").len() == 1);
         assert!(parse("<div").is_empty());
         assert!(parse("").is_empty());
+    }
+
+    #[test]
+    fn plain_page_escapes_links_and_quotes() {
+        let colors = PageColors {
+            background: "#111".into(),
+            text: "#eee".into(),
+            muted: "#999".into(),
+            link: "#39f".into(),
+            border: "#333".into(),
+        };
+        let page = plain_page(
+            "Hi <b>&</b> see https://ex.example/a?b=1&c=2.\n> quoted\n>> deeper\nBye",
+            &colors,
+        );
+        assert!(page.contains("Hi &lt;b&gt;&amp;&lt;/b&gt; see "));
+        assert!(page.contains(
+            "<a href=\"https://ex.example/a?b=1&amp;c=2\">https://ex.example/a?b=1&amp;c=2</a>."
+        ));
+        assert!(page.contains("<blockquote>quoted\n&gt; deeper\n</blockquote>Bye"));
+        assert!(page.contains("background:#111"));
+        assert!(!page.contains("<b>"));
+    }
+
+    #[test]
+    fn url_runs_split_text_and_links() {
+        assert_eq!(
+            url_runs("a http://x.y/z, b"),
+            [("a ", false), ("http://x.y/z", true), (", b", false)]
+        );
+        assert_eq!(url_runs("no link"), [("no link", false)]);
+        assert_eq!(url_runs("http://"), [("http://", false)]);
     }
 
     #[test]

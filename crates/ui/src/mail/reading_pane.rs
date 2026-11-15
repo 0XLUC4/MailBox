@@ -772,7 +772,7 @@ impl ReadingPaneView {
             // if the system fails to show it, the app background shows, not a white void.
             let paper = div().size_full().when_some(web, |el, web| {
                 let key = format!("{}-{}-{}", message.id, u8::from(allowed), html.len());
-                web.load(key, || web_page(message, html, allowed));
+                web.load(key, (255, 255, 255), || web_page(message, html, allowed));
                 el.child(webview::paper(web))
             });
             let paper = div()
@@ -785,6 +785,27 @@ impl ReadingPaneView {
                 .child(paper);
             let remote = remote || self.blocked.contains(&message.id);
             return (paper.into_any_element(), remote);
+        }
+        // Plain text in the web view too, in the app's colors: its text can be selected.
+        #[cfg(any(windows, target_os = "macos"))]
+        if !self.web_failed && !message.body_text.trim().is_empty() {
+            let web = self.web(window, cx);
+            let colors = page_colors(t);
+            let paper = div().size_full().when_some(web, |el, web| {
+                // The colors are in the key: a theme change reloads the page.
+                let key = format!(
+                    "{}-text-{}-{}{}",
+                    message.id,
+                    message.body_text.len(),
+                    colors.background.trim_start_matches('#'),
+                    colors.text.trim_start_matches('#'),
+                );
+                let page = || plain_web_page(message, &colors);
+                web.load(key, rgb_bytes(t.background), page);
+                el.child(webview::paper(web))
+            });
+            let paper = div().flex_1().min_h(px(0.)).mx(SPACE_2).child(paper);
+            return (paper.into_any_element(), false);
         }
         #[cfg(any(windows, target_os = "macos"))]
         if let Some(web) = &self.web {
@@ -876,6 +897,41 @@ impl ReadingPaneView {
 /// Settings key: always load remote pictures from this sender.
 fn pictures_key(email: &str) -> String {
     format!("mail.pictures.sender.{}", email.trim().to_lowercase())
+}
+
+/// A theme color as `(r, g, b)`.
+#[cfg(any(windows, target_os = "macos"))]
+fn rgb_bytes(color: Hsla) -> (u8, u8, u8) {
+    let color = color.to_rgb();
+    let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    (byte(color.r), byte(color.g), byte(color.b))
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn css_color(color: Hsla) -> String {
+    let (r, g, b) = rgb_bytes(color);
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn page_colors(t: &Theme) -> html::PageColors {
+    html::PageColors {
+        background: css_color(t.background),
+        text: css_color(t.text),
+        muted: css_color(t.text_muted),
+        link: css_color(t.accent),
+        border: css_color(t.border),
+    }
+}
+
+/// A plain-text body as a web page (no remote content, no inline parts).
+#[cfg(any(windows, target_os = "macos"))]
+fn plain_web_page(message: &Message, colors: &html::PageColors) -> webview::Page {
+    webview::Page {
+        id: message.id as u64,
+        html: html::plain_page(&message.body_text, colors),
+        ..Default::default()
+    }
 }
 
 /// The page served to the webview: `cid:` pictures map to the stored inline parts.
