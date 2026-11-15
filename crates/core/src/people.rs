@@ -290,6 +290,25 @@ pub fn list_contact_cards(store: &Store) -> Result<Vec<ContactCard>> {
     Ok(cards)
 }
 
+/// The saved contact with this email address (case-insensitive), if any. Reads only the rows
+/// whose address list contains it, not every contact.
+pub fn contact_with_email(store: &Store, email: &str) -> Result<Option<Contact>> {
+    let email = email.trim();
+    if email.is_empty() {
+        return Ok(None);
+    }
+    let candidates: Vec<Contact> = store.query(
+        "WHERE instr(lower(emails_json), lower(?1)) > 0 ORDER BY id",
+        [email],
+    )?;
+    Ok(candidates.into_iter().find(|contact| {
+        contact
+            .emails
+            .iter()
+            .any(|saved| saved.trim().eq_ignore_ascii_case(email))
+    }))
+}
+
 pub fn contact_card(store: &Store, id: Id) -> Result<Option<ContactCard>> {
     let Some(contact) = store.get::<Contact>(id)? else {
         return Ok(None);
@@ -991,6 +1010,26 @@ mod tests {
                 .is_err()
         );
         assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn finds_a_contact_by_exact_email() {
+        let store = store();
+        let account = account(&store);
+        let mut history = History::new();
+        for (name, email) in [("Ada", "Ada@Example.com"), ("Bob", "bob.ada@example.com")] {
+            let card = card(&account, name, email);
+            run(
+                &store,
+                &mut history,
+                PeopleCommand::SaveContact(Box::new(card)),
+            );
+        }
+        let found = contact_with_email(&store, " ada@example.com ").unwrap();
+        assert_eq!(found.map(|c| c.display_name), Some("Ada".to_owned()));
+        // A substring of another address is not a match.
+        assert_eq!(contact_with_email(&store, "ada@example").unwrap(), None);
+        assert_eq!(contact_with_email(&store, "").unwrap(), None);
     }
 
     #[test]

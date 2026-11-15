@@ -5,7 +5,7 @@ use gpui::base::Selectable;
 use gpui::component::popover::Popover;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use mailbox_core::people::{self, ContactCard};
+use mailbox_core::people;
 use mailbox_core::{Address, Command, Id, PeopleCommand};
 
 use crate::app_state::AppState;
@@ -45,9 +45,11 @@ fn card(
 ) -> AnyElement {
     let t = theme(cx).clone();
     let popover = cx.entity();
-    let saved = saved_contact(state.read(cx), &address.email);
-    let detail = saved.as_ref().map(|card| {
-        [card.contact.job_title.clone(), card.contact.company.clone()]
+    let saved = people::contact_with_email(state.read(cx).store(), &address.email)
+        .ok()
+        .flatten();
+    let detail = saved.as_ref().map(|contact| {
+        [contact.job_title.clone(), contact.company.clone()]
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
@@ -165,20 +167,6 @@ fn card(
                 .child(copy),
         )
         .into_any_element()
-}
-
-/// The saved contact with this email (any account), if one exists.
-fn saved_contact(state: &AppState, email: &str) -> Option<ContactCard> {
-    let email = email.trim();
-    people::list_contact_cards(state.store())
-        .ok()?
-        .into_iter()
-        .find(|card| {
-            card.contact
-                .emails
-                .iter()
-                .any(|saved| saved.trim().eq_ignore_ascii_case(email))
-        })
 }
 
 /// A name that looks like text and underlines on hover.
