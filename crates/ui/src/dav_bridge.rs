@@ -438,6 +438,14 @@ impl DavBridge {
         }
         for change in changes {
             let result = match change {
+                // Tasks/journals stored in an event calendar (Nextcloud "Personal"): not
+                // events, so not an error either.
+                RemoteChange::Upsert { text, .. }
+                    if calendar_id.is_some()
+                        && !text.to_ascii_uppercase().contains("BEGIN:VEVENT") =>
+                {
+                    Ok(())
+                }
                 RemoteChange::Upsert {
                     href,
                     etag,
