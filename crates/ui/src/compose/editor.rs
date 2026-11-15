@@ -38,7 +38,7 @@ pub fn page(body: &str, placeholder: &str, colors: &EditorColors) -> String {
          <style>\
          html,body{{margin:0;height:100%;background:{background};color:{text};}}\
          #e{{box-sizing:border-box;min-height:100%;padding:8px 14px 24px;outline:none;\
-         font:14px/1.5 'Segoe UI',-apple-system,system-ui,sans-serif;overflow-wrap:anywhere;}}\
+         font:14px/1.5 {font};overflow-wrap:anywhere;}}\
          #e.empty::before{{content:attr(data-placeholder);color:{muted};pointer-events:none;\
          position:absolute;}}\
          #e a{{color:{link};}}\
@@ -49,6 +49,7 @@ pub fn page(body: &str, placeholder: &str, colors: &EditorColors) -> String {
          <div id=\"e\" contenteditable=\"true\" spellcheck=\"true\" data-placeholder=\"{ph}\">{html}</div>\
          <script>{SCRIPT}</script></body></html>",
         ph = markup::escape_html(placeholder),
+        font = crate::theme::CSS_UI_FONT,
     )
 }
 
