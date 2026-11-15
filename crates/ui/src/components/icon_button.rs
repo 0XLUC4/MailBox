@@ -105,8 +105,7 @@ impl RenderOnce for IconButton {
                 let above = self.tooltip_above;
                 el.tooltip(move |window, cx| {
                     if above {
-                        let text = tooltip.clone();
-                        cx.new(|_| AboveTooltip { text }).into()
+                        tooltip_above(tooltip.clone(), cx)
                     } else {
                         Tooltip::new(tooltip.clone()).build(window, cx)
                     }
@@ -118,8 +117,14 @@ impl RenderOnce for IconButton {
     }
 }
 
-/// A tooltip drawn above the pointer. GPUI lays a tooltip out at the pointer: this one has no
-/// size there and paints its label upward from it.
+/// A tooltip view drawn above the pointer, for `.tooltip(...)` on elements right above a native
+/// child window (a mail body, the compose editor) that would cover one drawn below.
+pub fn tooltip_above(text: SharedString, cx: &mut App) -> AnyView {
+    cx.new(|_| AboveTooltip { text }).into()
+}
+
+/// GPUI lays a tooltip out at the pointer: this one has no size there and paints its label
+/// upward from it.
 struct AboveTooltip {
     text: SharedString,
 }

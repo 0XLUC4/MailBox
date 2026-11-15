@@ -14,7 +14,7 @@ pub use badge::{Badge, BadgeVariant};
 pub use banner::{Banner, BannerKind, toast};
 pub use button::{Button, ButtonVariant};
 pub use empty_state::EmptyState;
-pub use icon_button::IconButton;
+pub use icon_button::{IconButton, tooltip_above};
 pub use toolbar::{Toolbar, toolbar_separator};
 
 /// Full Lucide catalog (e.g. `IconName::Mail`, `IconName::CalendarDays`).

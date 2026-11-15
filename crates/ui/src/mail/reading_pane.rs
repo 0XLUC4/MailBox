@@ -10,7 +10,6 @@ use chrono::Local;
 use gpui::component::Sizable as _;
 use gpui::component::button::{Button as KitButton, ButtonVariants as _};
 use gpui::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui::component::tooltip::Tooltip;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::{
@@ -24,6 +23,7 @@ use super::{ComposeKind, message_menu, message_window, ops, sender_card};
 use crate::app_state::AppState;
 use crate::components::{
     Avatar, Badge, Button, EmptyState, Icon, IconButton, IconName, avatar_color, toolbar_separator,
+    tooltip_above,
 };
 use crate::theme::{
     ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_MD,
@@ -267,6 +267,7 @@ impl ReadingPaneView {
             .when(in_role != Some(FolderRole::Archive), |el| {
                 el.child(
                     IconButton::new("pane-archive", IconName::Archive)
+                        .tooltip_above()
                         .tooltip("Archive")
                         .on_click(move |_, _, cx| {
                             ops::move_to_role(&s_archive, vec![id], FolderRole::Archive, cx)
@@ -275,6 +276,7 @@ impl ReadingPaneView {
             })
             .child(
                 IconButton::new("pane-delete", IconName::Trash)
+                    .tooltip_above()
                     .tooltip(if in_role == Some(FolderRole::Trash) {
                         "Delete permanently"
                     } else {
@@ -285,6 +287,7 @@ impl ReadingPaneView {
             .child(
                 IconButton::new("pane-flag", IconName::Flag)
                     .active(flagged)
+                    .tooltip_above()
                     .tooltip(if flagged { "Clear flag" } else { "Flag" })
                     .on_click(move |_, _, cx| ops::set_flag(&s_flag, vec![id], !flagged, cx)),
             )
@@ -297,6 +300,7 @@ impl ReadingPaneView {
                         IconName::MailOpen
                     },
                 )
+                .tooltip_above()
                 .tooltip(if read {
                     "Mark as unread"
                 } else {
@@ -341,6 +345,7 @@ impl ReadingPaneView {
             .when(show_popout, |el| {
                 el.child(
                     IconButton::new("pane-popout", IconName::SquareArrowOutUpRight)
+                        .tooltip_above()
                         .tooltip("Open in new window")
                         .on_click(move |_, _, cx| {
                             message_window::open(popout_state.clone(), id, cx)
@@ -358,6 +363,7 @@ impl ReadingPaneView {
             .items_center()
             .child(
                 IconButton::new("zoom-out", IconName::ZoomOut)
+                    .tooltip_above()
                     .tooltip("Zoom out")
                     .on_click(cx.listener(|this, _, _, cx| this.step_zoom(-1, cx))),
             )
@@ -373,6 +379,7 @@ impl ReadingPaneView {
             )
             .child(
                 IconButton::new("zoom-in", IconName::ZoomIn)
+                    .tooltip_above()
                     .tooltip("Zoom in")
                     .on_click(cx.listener(|this, _, _, cx| this.step_zoom(1, cx))),
             )
@@ -535,7 +542,7 @@ impl ReadingPaneView {
                         .border_1()
                         .border_color(t.border_subtle)
                         .hover(move |style| style.border_color(accent))
-                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                        .tooltip(move |_, cx| tooltip_above(tooltip.clone(), cx))
                         .overflow_hidden()
                         .w(px(160.))
                         .h(px(96.))
@@ -609,9 +616,7 @@ impl ReadingPaneView {
                             .id(("att-chip", key))
                             .cursor_pointer()
                             .hover(move |style| style.border_color(accent))
-                            .tooltip(move |window, cx| {
-                                Tooltip::new(tooltip.clone()).build(window, cx)
-                            })
+                            .tooltip(move |_, cx| tooltip_above(tooltip.clone(), cx))
                             // Double-click opens, like a file in Explorer.
                             .on_click(move |event, _, cx| {
                                 if event.click_count() >= 2 {
