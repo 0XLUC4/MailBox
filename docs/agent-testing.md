@@ -49,7 +49,10 @@ HTML mail bodies are a WebView2 child window (`crates/ui/src/mail/webview.rs`) o
 window. `PrintWindow` (even with `PW_RENDERFULLCONTENT`) asks each window to draw itself
 off-screen, so it shows the mail even when the user sees nothing: in 0.1.0 GPUI drew through a
 topmost DirectComposition layer (`CreateTargetForHwnd(hwnd, true)` in gpui-pre-windows) that
-covered the webview with a white rectangle, and `PrintWindow` captures looked fine. For anything
+covered the webview with a white rectangle, and `PrintWindow` captures looked fine (fixed by the
+vendored, non-topmost target: `vendor/README.md`). Screen captures cannot show everything either:
+the white flashes on NVIDIA RTX 50 drivers (multi-plane overlay) never appeared in them, only to
+the eye. For anything
 touching the webview (reading pane, pop-out window, overlays over the body) capture what is on
 the screen: check `GetForegroundWindow() == $h` (abort otherwise, another window would be in
 the picture), then `CopyFromScreen` limited to the window rect, as above. Also check that keys

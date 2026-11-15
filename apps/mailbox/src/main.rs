@@ -57,8 +57,6 @@ fn open_store(args: &Args) -> Result<Store, String> {
 }
 
 fn main() -> ExitCode {
-    // First, while the process has one thread: lets the mail webview show (see the function).
-    mailbox_window_handle::host_child_windows();
     // After an in-app update: wait for the previous version to exit, delete its old exe.
     mailbox_updater::finish_pending_update();
     mailbox_ui::log::init();
