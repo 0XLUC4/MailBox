@@ -144,6 +144,8 @@ CREATE INDEX IF NOT EXISTS messages_account ON messages(account_id);
 CREATE INDEX IF NOT EXISTS messages_date ON messages(date DESC, id DESC);
 CREATE INDEX IF NOT EXISTS folders_account ON folders(account_id, position);
 "#,
+    // Sync looks up each downloaded message's unlinked twin by Message-ID (`Store::unlinked_twin`).
+    "CREATE INDEX IF NOT EXISTS messages_folder_message_id ON messages(folder_id, message_id_header);",
 ];
 
 /// Message and unread counts of a folder, see [`Store::folder_counts`].

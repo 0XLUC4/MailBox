@@ -108,9 +108,9 @@ impl WorkerHandle {
         self.request(Request::SetOffline(offline));
     }
 
-    /// Events received so far (non-blocking).
-    pub fn drain(&self) -> Vec<SyncEvent> {
-        self.events.try_iter().collect()
+    /// The next event received, if any (non-blocking).
+    pub fn try_next(&self) -> Option<SyncEvent> {
+        self.events.try_recv().ok()
     }
 
     /// Waits for the next event (tests, CLI).

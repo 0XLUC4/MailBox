@@ -54,6 +54,12 @@ use crate::{SendReceive, ToggleWorkOffline};
 
 /// How often worker events are applied to the store.
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
+/// UI-thread time one poll may spend applying events; the rest waits for the next poll, which
+/// then comes after [`BACKLOG_INTERVAL`]. A big download no longer freezes the app for a
+/// whole drain (hundreds of milliseconds, frames late).
+const POLL_BUDGET: Duration = Duration::from_millis(8);
+/// Wait before the next poll while events are left (about a frame).
+const BACKLOG_INTERVAL: Duration = Duration::from_millis(16);
 /// During a sync the state file is saved at most this often (and at the end of the cycle), so
 /// a crash or kill loses little; the store's server identities cover the rest.
 const STATE_SAVE_INTERVAL: Duration = Duration::from_secs(2);
@@ -201,10 +207,13 @@ pub struct SyncBridge {
 impl SyncBridge {
     fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let poll = cx.spawn(async move |this, cx| {
+            let mut wait = POLL_INTERVAL;
             loop {
-                cx.background_executor().timer(POLL_INTERVAL).await;
-                if this.update(cx, |bridge, cx| bridge.poll(cx)).is_err() {
-                    break;
+                cx.background_executor().timer(wait).await;
+                match this.update(cx, |bridge, cx| bridge.poll(cx)) {
+                    Ok(true) => wait = BACKLOG_INTERVAL,
+                    Ok(false) => wait = POLL_INTERVAL,
+                    Err(_) => break,
                 }
             }
         });
@@ -434,15 +443,26 @@ impl SyncBridge {
 
     // ---------- polling ----------
 
-    fn poll(&mut self, cx: &mut Context<Self>) {
+    /// Applies worker events for at most [`POLL_BUDGET`] (the UI thread draws meanwhile) and
+    /// starts due sync cycles. Returns `true` when events are left for the next call.
+    fn poll(&mut self, cx: &mut Context<Self>) -> bool {
+        let started = Instant::now();
+        let mut backlog = false;
         let ids: Vec<Id> = self.accounts.keys().copied().collect();
         for id in ids {
             // Taken out of the map so handlers can borrow `self` freely.
             let Some(mut account) = self.accounts.remove(&id) else {
                 continue;
             };
-            // A drain can hold thousands of messages: save while applying, not only after.
-            for event in account.worker.drain() {
+            // A download is thousands of messages: save while applying, not only after.
+            loop {
+                if started.elapsed() >= POLL_BUDGET {
+                    backlog = true;
+                    break;
+                }
+                let Some(event) = account.worker.try_next() else {
+                    break;
+                };
                 account.dirty |= !matches!(event, SyncEvent::Progress(_));
                 self.apply_event(&mut account, event, cx);
                 if account.dirty && account.saved_at.elapsed() >= STATE_SAVE_INTERVAL {
@@ -455,6 +475,7 @@ impl SyncBridge {
             self.accounts.insert(id, account);
         }
         self.refresh_status(cx);
+        backlog
     }
 
     fn start_cycle(&mut self, account: &mut AccountSync, cx: &mut Context<Self>) {
@@ -688,14 +709,46 @@ impl SyncBridge {
             .folders
             .get(path)
             .is_some_and(|folder| folder.role == FolderRole::Inbox);
-        for fetched in messages {
-            let account_id = account.account_id;
-            let sync = &mut account.sync;
-            let stored = self.update_store(cx, |store| {
-                store_fetched(store, sync, account_id, path, uid_validity, fetched)
-            });
-            let Some(stored) = stored.flatten() else {
-                continue;
+        // One transaction per batch (runs on the UI thread): a commit per message made a big
+        // download stall the app. Each message keeps its own savepoint, so one that fails is
+        // reported and skipped without undoing the others.
+        let account_id = account.account_id;
+        let new_uids: Vec<_> = messages
+            .iter()
+            .map(|fetched| fetched.uid)
+            .filter(|uid| {
+                account
+                    .sync
+                    .folders
+                    .get(path)
+                    .is_none_or(|folder| !folder.messages.contains_key(uid))
+            })
+            .collect();
+        let sync = &mut account.sync;
+        let results = self.update_store(cx, |store| {
+            store.transaction(|store| {
+                Ok(messages
+                    .into_iter()
+                    .map(|fetched| {
+                        store_fetched(store, sync, account_id, path, uid_validity, fetched)
+                    })
+                    .collect::<Vec<_>>())
+            })
+        });
+        let Some(results) = results else {
+            // Nothing was committed: the links just made would point at missing messages,
+            // which the next sync would push as deletions on the server.
+            account.sync.vanish(path, &new_uids);
+            return;
+        };
+        for stored in results {
+            let stored = match stored {
+                Ok(Some(stored)) => stored,
+                Ok(None) => continue,
+                Err(err) => {
+                    self.report(err, cx);
+                    continue;
+                }
             };
             if is_inbox && stored.created && stored.unread {
                 account.new_mail.push(stored.local_id);

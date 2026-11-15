@@ -55,25 +55,34 @@ impl Store {
 
     /// A message of the same folder without server identity that is this one: same
     /// Message-ID, or same sender, subject and date (a copy stored before identities existed).
+    ///
+    /// Runs for every message a sync downloads: two indexed lookups (`messages_folder_message_id`,
+    /// `messages_identity`), not one `OR` query, which SQLite answers by scanning the whole folder.
     pub fn unlinked_twin(&self, message: &Message, message_id: &str) -> Result<Option<Id>> {
-        Ok(self
-            .conn()
-            .query_row(
-                "SELECT id FROM messages WHERE folder_id = ?1 AND remote_uid IS NULL AND ( \
-                     (?2 <> '' AND message_id_header = ?2) \
-                     OR (from_email = ?3 AND subject = ?4 AND date = ?5 \
-                         AND (message_id_header = '' OR ?2 = ''))) \
-                 ORDER BY id LIMIT 1",
-                params![
-                    message.folder_id,
-                    message_id,
-                    message.from.email,
-                    message.subject,
-                    crate::store::timestamp(&message.date),
-                ],
+        let by_message_id: Option<Id> = if message_id.is_empty() {
+            None
+        } else {
+            self.conn().query_row(
+                "SELECT MIN(id) FROM messages \
+                 WHERE folder_id = ?1 AND message_id_header = ?2 AND remote_uid IS NULL",
+                params![message.folder_id, message_id],
                 |row| row.get(0),
-            )
-            .optional()?)
+            )?
+        };
+        let by_identity: Option<Id> = self.conn().query_row(
+            "SELECT MIN(id) FROM messages \
+             WHERE folder_id = ?1 AND from_email = ?2 AND subject = ?3 AND date = ?4 \
+             AND remote_uid IS NULL AND (message_id_header = '' OR ?5 = '')",
+            params![
+                message.folder_id,
+                message.from.email,
+                message.subject,
+                crate::store::timestamp(&message.date),
+                message_id,
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(by_message_id.into_iter().chain(by_identity).min())
     }
 
     /// Records the server identity of a message (`None` clears it, e.g. after a move) and its
