@@ -998,9 +998,12 @@ pub fn plain_page(text: &str, colors: &PageColors) -> String {
         muted,
         link,
         border,
+        ..
     } = colors;
+    let scheme = colors.scheme();
     format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>\
+         :root{{color-scheme:{scheme};}}\
          html,body{{margin:0;background:{background};color:{text};}}\
          body{{padding:0 16px 16px;font:14px/1.55 'Segoe UI',system-ui,-apple-system,sans-serif;\
          white-space:pre-wrap;overflow-wrap:anywhere;}}\
@@ -1543,7 +1546,7 @@ mod tests {
         ));
         assert!(has_own_colors(r#"<span style="COLOR : #000">x</span>"#));
         assert!(has_own_colors(r#"<font color="red">x</font>"#));
-        assert!(has_own_colors(r#"<table bgcolor="#fff">"#));
+        assert!(has_own_colors(r##"<table bgcolor="#fff">"##));
         assert!(has_own_colors(r#"<td style="background-image:url(x)">"#));
         assert!(has_own_colors(r#"<body background="x.gif">"#));
     }
