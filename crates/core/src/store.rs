@@ -1287,6 +1287,13 @@ pub(crate) mod tests {
             store.folder_counts().unwrap().len()
         });
         time("revision", &mut || store.revision().unwrap().0 as usize);
+        // What every search did before: load all messages, then filter in memory.
+        time("old search: load all 50k", &mut || {
+            store
+                .query::<Message>("ORDER BY date DESC, id DESC", [])
+                .unwrap()
+                .len()
+        });
         for query in [
             "subject 49990",
             "is:unread",
