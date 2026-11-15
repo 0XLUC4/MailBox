@@ -8,6 +8,8 @@ use crate::dialogs::{kbd, shortcut_rows};
 use crate::settings::tr;
 use crate::theme::{SPACE_1, SPACE_3, TEXT_SM, TEXT_XS, theme};
 
+const MAC: bool = cfg!(target_os = "macos");
+
 /// `(section, [(keys, description)])`; `mod` is Ctrl (Cmd on macOS).
 const CONTEXT_KEYS: &[(&str, &[(&str, &str)])] = &[
     (
@@ -19,8 +21,8 @@ const CONTEXT_KEYS: &[(&str, &[(&str, &str)])] = &[
             ("Enter", "Open in a new window"),
             ("Right / Left", "Expand / collapse a conversation"),
             ("Escape", "Clear the selection"),
-            ("Shift+Delete", "Delete permanently"),
-            ("Backspace", "Archive"),
+            (if MAC { "⌫" } else { "Shift+Delete" }, "Delete permanently"),
+            (if MAC { "mod+E" } else { "Backspace" }, "Archive"),
             ("Double-click", "Open in a new window"),
         ],
     ),
@@ -63,7 +65,7 @@ const CONTEXT_KEYS: &[(&str, &[(&str, &str)])] = &[
 ];
 
 fn display(keys: &str) -> String {
-    if cfg!(target_os = "macos") {
+    if MAC {
         keys.replace("mod+", "⌘").replace("shift+", "⇧")
     } else {
         keys.replace("mod+", "Ctrl+").replace("shift+", "Shift+")
@@ -127,7 +129,7 @@ mod tests {
 
     #[test]
     fn shows_platform_modifiers() {
-        if !cfg!(target_os = "macos") {
+        if !super::MAC {
             assert_eq!(display("mod+shift+P"), "Ctrl+Shift+P");
         }
     }

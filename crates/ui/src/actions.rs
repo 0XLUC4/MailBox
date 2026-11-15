@@ -115,7 +115,10 @@ macro_rules! spec {
     };
 }
 
-/// Every user-facing action, in palette order.
+const MAC: bool = cfg!(target_os = "macos");
+
+/// Every user-facing action, in palette order. macOS: Cmd+Q quits, and Mac keyboards have no
+/// Insert or forward Delete key, so those three use Mail-like keys (see [`bind_keys`]).
 #[rustfmt::skip]
 pub static ACTIONS: &[ActionSpec] = &[
     spec!("new", "New item", Plus, Some("mod+N"), "create compose add", NewItem),
@@ -126,12 +129,12 @@ pub static ACTIONS: &[ActionSpec] = &[
     spec!("reply", "Reply", Reply, Some("mod+R"), "respond answer", Reply),
     spec!("reply-all", "Reply all", ReplyAll, Some("mod+shift+R"), "respond", ReplyAll),
     spec!("forward", "Forward", Forward, Some("mod+shift+F"), "send on", Forward),
-    spec!("delete", "Delete", Trash, Some("Delete"), "remove trash bin", DeleteSelection),
+    spec!("delete", "Delete", Trash, Some(if MAC { "mod+⌫" } else { "Delete" }), "remove trash bin", DeleteSelection),
     spec!("archive", "Archive", Archive, Some("mod+shift+E"), "file done", Archive),
     spec!("move", "Move to folder", FolderInput, Some("mod+shift+V"), "file", MoveToFolder),
     spec!("categorize", "Categorize", Tag, None, "label category colour", Categorize),
-    spec!("flag", "Flag / unflag", Flag, Some("Insert"), "follow up star", ToggleFlag),
-    spec!("mark-read", "Mark as read", MailOpen, Some("mod+Q"), "seen", MarkRead),
+    spec!("flag", "Flag / unflag", Flag, Some(if MAC { "mod+shift+L" } else { "Insert" }), "follow up star", ToggleFlag),
+    spec!("mark-read", "Mark as read", MailOpen, Some(if MAC { "mod+T" } else { "mod+Q" }), "seen", MarkRead),
     spec!("mark-unread", "Mark as unread", Mail, Some("mod+U"), "unseen new", MarkUnread),
     spec!("mark-all-read", "Mark all as read", MailCheck, None, "folder seen", MarkAllRead),
     spec!("rules", "Rules", ListFilter, None, "filters automation manage", OpenRules),
@@ -202,7 +205,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(primary!("shift-f"), Forward, shell),
         KeyBinding::new(primary!("shift-e"), Archive, shell),
         KeyBinding::new(primary!("shift-v"), MoveToFolder, shell),
-        KeyBinding::new(primary!("q"), MarkRead, shell),
+        KeyBinding::new(if MAC { "cmd-t" } else { "ctrl-q" }, MarkRead, shell),
         KeyBinding::new(primary!("u"), MarkUnread, shell),
         KeyBinding::new(primary!("/"), OpenShortcuts, shell),
         KeyBinding::new(primary!("shift-h"), SnoozeMessage, shell),
@@ -211,6 +214,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("delete", DeleteSelection, shell),
         KeyBinding::new("insert", ToggleFlag, shell),
     ]);
+    if MAC {
+        cx.bind_keys([
+            KeyBinding::new("cmd-backspace", DeleteSelection, shell),
+            KeyBinding::new("cmd-shift-l", ToggleFlag, shell),
+        ]);
+    }
 }
 
 /// Attaches the default handlers to the shell root element.

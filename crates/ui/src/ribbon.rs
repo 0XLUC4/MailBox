@@ -17,8 +17,7 @@ use crate::app_state::{AppState, Module};
 use crate::components::{Icon, IconName};
 use crate::settings::{prefs, tr};
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_MD, RAIL_WIDTH, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, TEXT_SM, TEXT_XS,
-    theme,
+    ICON_SIZE_SM, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, TEXT_SM, TEXT_XS, theme,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -428,7 +427,8 @@ impl Render for RibbonView {
         let classic = prefs(cx).ribbon == RibbonMode::Classic;
         let groups = groups(module, self.tab);
         // Window minus rail, paddings and the "more" button.
-        let available = f32::from(window.viewport_size().width) - f32::from(RAIL_WIDTH) - 72.;
+        let available =
+            f32::from(window.viewport_size().width) - f32::from(crate::shell::RAIL_WIDTH) - 72.;
         let fits = fit_groups(groups, available, classic, cx);
         let hidden: Vec<&'static Group> = groups
             .iter()
