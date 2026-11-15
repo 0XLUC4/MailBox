@@ -93,7 +93,7 @@ impl CommandPalette {
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Type a command, folder or contact...")
+            InputState::new(window, cx).placeholder(tr(cx, "Type a command, folder or contact…"))
         });
         let subscription = cx.subscribe_in(
             &input,
@@ -125,7 +125,7 @@ impl CommandPalette {
             .iter()
             .map(|spec| Item {
                 title: tr(cx, spec.label).into(),
-                subtitle: "Command".into(),
+                subtitle: tr(cx, "Command").into(),
                 icon: spec.icon,
                 shortcut: spec.shortcut_text(),
                 keywords: format!("{} {}", spec.label, spec.keywords).into(),
@@ -141,8 +141,10 @@ impl CommandPalette {
                 Module::Tasks,
             ]
             .map(|module| Item {
-                title: format!("Open {}", tr(cx, module.label())).into(),
-                subtitle: "Module".into(),
+                title: tr(cx, "Open {}")
+                    .replace("{}", tr(cx, module.label()))
+                    .into(),
+                subtitle: tr(cx, "Module").into(),
                 icon: module.icon(),
                 shortcut: None,
                 keywords: "go to switch".into(),
@@ -155,7 +157,7 @@ impl CommandPalette {
             for folder in store.list_folders(account.id).unwrap_or_default() {
                 items.push(Item {
                     title: folder.name.clone().into(),
-                    subtitle: format!("Folder - {}", account.name).into(),
+                    subtitle: format!("{} · {}", tr(cx, "Folder"), account.name).into(),
                     icon: IconName::Folder,
                     shortcut: None,
                     keywords: format!("go to folder {}", folder.role.as_str()).into(),
@@ -169,9 +171,9 @@ impl CommandPalette {
             items.push(Item {
                 title: contact.display_name.clone().into(),
                 subtitle: if email.is_empty() {
-                    "Contact".into()
+                    tr(cx, "Contact").into()
                 } else {
-                    format!("Contact - {email}").into()
+                    format!("{} · {email}", tr(cx, "Contact")).into()
                 },
                 icon: IconName::User,
                 shortcut: None,
@@ -298,7 +300,9 @@ impl Render for CommandPalette {
                 )
                 .child(
                     div()
-                        .flex_shrink_0()
+                        .min_w(px(0.))
+                        .max_w(px(220.))
+                        .truncate()
                         .text_size(TEXT_XS)
                         .text_color(t.text_subtle)
                         .child(item.subtitle.clone()),
@@ -348,7 +352,7 @@ impl Render for CommandPalette {
                                 .text_center()
                                 .text_size(TEXT_SM)
                                 .text_color(t.text_muted)
-                                .child("No matching command, folder or contact"),
+                                .child(tr(cx, "No matching command, folder or contact")),
                         )
                     }),
             )
@@ -356,15 +360,23 @@ impl Render for CommandPalette {
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
                     .gap(SPACE_3)
-                    .pt(SPACE_1)
+                    .pt(SPACE_2)
                     .border_t_1()
                     .border_color(t.border_subtle)
                     .text_size(TEXT_XS)
                     .text_color(t.text_subtle)
-                    .child("↑↓ navigate")
-                    .child("↵ run")
-                    .child("esc close"),
+                    .children([("↑ ↓", "Navigate"), ("↵", "Run"), ("Esc", "Close")].map(
+                        |(keys, label)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(SPACE_1)
+                                .child(kbd(keys, cx))
+                                .child(tr(cx, label))
+                        },
+                    )),
             )
     }
 }

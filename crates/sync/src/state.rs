@@ -272,6 +272,19 @@ impl SyncState {
         changed
     }
 
+    /// Points server folders at the local folder that absorbed a merged duplicate
+    /// (`removed → kept`). Returns whether anything changed.
+    pub fn remap_local_folders(&mut self, merged: &HashMap<Id, Id>) -> bool {
+        let mut changed = false;
+        for local_id in self.folders.values_mut().filter_map(|folder| folder.local_id.as_mut()) {
+            if let Some(kept) = merged.get(local_id) {
+                *local_id = *kept;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Records remote flag changes; returns `(local id, flags)` to apply locally.
     pub fn remote_flags(
         &mut self,
