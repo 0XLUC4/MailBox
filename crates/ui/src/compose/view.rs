@@ -24,8 +24,8 @@ use crate::components::{Avatar, Button, Icon, IconButton, IconName, Toolbar, too
 use crate::mail::webview::{MailWebView, WebEvent};
 use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE_SM, ICON_SIZE_XS, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2,
-    SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex, theme,
+    ICON_SIZE_SM, ICON_SIZE_XS, PANE_HEADER_HEIGHT, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1,
+    SPACE_1_5, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex, theme,
 };
 
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(1500);
@@ -1071,7 +1071,7 @@ impl ComposeView {
             .flex_shrink_0()
             .items_center()
             .gap(SPACE_1)
-            .h(px(48.))
+            .h(PANE_HEADER_HEIGHT)
             .pl(SPACE_4)
             .pr(SPACE_2)
             .border_b_1()
