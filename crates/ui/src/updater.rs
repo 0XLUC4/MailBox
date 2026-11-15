@@ -1,4 +1,4 @@
-//! In-app updates: the rail button (up arrow, blue dot when a release waits) and its popover.
+//! In-app updates: the rail button (up arrow, accent dot when a release waits) and its popover.
 //! Checks 10 s after start, then every 6 h; download, checksum and exe swap live in
 //! `mailbox-updater`. `MAILBOX_UPDATE_FEED=<latest.json path or URL>` replaces the published
 //! manifest (tests).
@@ -17,8 +17,8 @@ use mailbox_updater::{Error, Release, Version};
 use crate::components::{Icon, IconButton, IconName};
 use crate::settings::tr;
 use crate::theme::{
-    DEFAULT_ACCENT, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3,
-    TEXT_LG, TEXT_MD, TEXT_SM, theme,
+    DISABLED_OPACITY, ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2,
+    SPACE_3, TEXT_LG, TEXT_MD, TEXT_SM, theme,
 };
 
 const FIRST_CHECK: Duration = Duration::from_secs(10);
@@ -243,15 +243,23 @@ fn available_card(updater: &Entity<Updater>, release: &Release, cx: &App) -> Any
         } else {
             tr(cx, "Update and restart")
         };
-        big_button("update-and-restart", label, installing, move |cx| {
-            install_updater.update(cx, |updater, cx| updater.install(cx))
-        })
+        big_button(
+            "update-and-restart",
+            label,
+            installing,
+            move |cx| install_updater.update(cx, |updater, cx| updater.install(cx)),
+            cx,
+        )
     } else {
         // No in-place install for this build: the release page has the download.
         let page_url = release.page_url.clone();
-        big_button("download-update", tr(cx, "Download"), false, move |cx| {
-            cx.open_url(&page_url)
-        })
+        big_button(
+            "download-update",
+            tr(cx, "Download"),
+            false,
+            move |cx| cx.open_url(&page_url),
+            cx,
+        )
     };
     let footer = if mailbox_updater::SUPPORTED {
         tr(cx, "Mailbox restarts to finish the update.")
@@ -298,7 +306,7 @@ fn available_card(updater: &Entity<Updater>, release: &Release, cx: &App) -> Any
         })
         .child(action)
         .when(installing, |el| {
-            el.child(progress_bar(downloaded, release.size, t.border))
+            el.child(progress_bar(downloaded, release.size, t.border, t.accent))
         })
         .child(
             div()
@@ -317,13 +325,16 @@ fn error_text(err: &Error, cx: &App) -> SharedString {
     }
 }
 
-/// Full-width blue button (the popover's one action).
+/// Full-width accent button (the popover's one action).
 fn big_button(
     id: &'static str,
     label: &'static str,
     disabled: bool,
     on_click: impl Fn(&mut App) + 'static,
+    cx: &App,
 ) -> AnyElement {
+    let t = theme(cx);
+    let hover_bg = t.accent_hover;
     div()
         .id(id)
         .flex()
@@ -332,16 +343,16 @@ fn big_button(
         .items_center()
         .justify_center()
         .rounded(RADIUS_LG)
-        .bg(rgb(DEFAULT_ACCENT))
+        .bg(t.accent)
         .text_size(TEXT_LG)
         .font_weight(FontWeight::MEDIUM)
-        .text_color(white())
+        .text_color(t.on_accent)
         .map(|el| {
             if disabled {
-                el.opacity(0.6)
+                el.opacity(DISABLED_OPACITY)
             } else {
                 el.cursor_pointer()
-                    .hover(|style| style.opacity(0.9))
+                    .hover(move |style| style.bg(hover_bg))
                     .on_click(move |_, _, cx| on_click(cx))
             }
         })
@@ -349,8 +360,8 @@ fn big_button(
         .into_any_element()
 }
 
-/// Thin blue bar filled to `done / total`.
-fn progress_bar(done: u64, total: u64, track: Hsla) -> impl IntoElement {
+/// Thin accent bar filled to `done / total`.
+fn progress_bar(done: u64, total: u64, track: Hsla, fill: Hsla) -> impl IntoElement {
     let fraction = if total == 0 {
         0.
     } else {
@@ -367,7 +378,7 @@ fn progress_bar(done: u64, total: u64, track: Hsla) -> impl IntoElement {
                 .h_full()
                 .w(relative(fraction))
                 .rounded(RADIUS_FULL)
-                .bg(rgb(DEFAULT_ACCENT)),
+                .bg(fill),
         )
 }
 
@@ -379,7 +390,7 @@ fn refresh_button(
     cx: &App,
 ) -> impl IntoElement {
     let t = theme(cx).clone();
-    let icon = Icon::new(IconName::RefreshCw).size(px(14.));
+    let icon = Icon::new(IconName::RefreshCw).size(ICON_SIZE_SM);
     let icon = if spinning {
         icon.with_animation(
             "update-check-spin",
@@ -409,7 +420,7 @@ fn refresh_button(
         })
 }
 
-/// The rail's up-arrow button, with a blue dot when an update is available.
+/// The rail's up-arrow button, with an accent dot when an update is available.
 #[derive(IntoElement)]
 struct RailTrigger {
     available: bool,
@@ -435,8 +446,8 @@ impl RenderOnce for RailTrigger {
             .relative()
             .child(
                 IconButton::new("rail-updates", IconName::CircleArrowUp)
-                    .size(px(36.))
-                    .icon_size(px(18.))
+                    .size(crate::shell::RAIL_BUTTON_SIZE)
+                    .icon_size(crate::shell::RAIL_ICON_SIZE)
                     .active(self.selected)
                     // No tooltip over the open popover.
                     .when(!self.selected, |button| button.tooltip(self.tooltip)),
@@ -449,7 +460,7 @@ impl RenderOnce for RailTrigger {
                         .right(px(6.))
                         .size(px(8.))
                         .rounded(RADIUS_FULL)
-                        .bg(rgb(DEFAULT_ACCENT))
+                        .bg(t.accent)
                         .border_1()
                         .border_color(t.rail),
                 )

@@ -10,11 +10,15 @@ use mailbox_core::{Calendar, CalendarEvent, Command, Id, command};
 use super::CalendarView;
 use crate::app_state::AppState;
 use crate::components::{Button, ButtonVariant, Icon, IconName};
-use crate::theme::{ACCENTS, SPACE_2, SPACE_3, SPACE_6, TEXT_LG, TEXT_SM, Theme, hex};
+use crate::settings::tr;
+use crate::theme::{
+    ACCENTS, ICON_SIZE_XS, RADIUS_XL, SPACE_2, SPACE_3, SPACE_6, TEXT_LG, TEXT_SM, Theme, hex,
+    text_on,
+};
 
 /// The calendar being created (`id: None`) or edited.
 pub(super) struct CalendarEdit {
-    id: Option<Id>,
+    pub(super) id: Option<Id>,
     name: Entity<InputState>,
     color: u32,
     _subscription: Subscription,
@@ -59,7 +63,7 @@ impl CalendarView {
         let color = existing.map_or(ACCENTS[calendars.len() % ACCENTS.len()].1, |c| c.color);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Calendar name")
+                .placeholder(tr(cx, "Calendar name"))
                 .default_value(name)
         });
         input.update(cx, |input, cx| input.focus(window, cx));
@@ -117,7 +121,10 @@ impl CalendarView {
         if crate::dav_bridge::is_synced_calendar(id, cx) {
             self.state.update(cx, |state, cx| {
                 state.report_error(
-                    "This calendar is synced with a CalDAV server: delete it on the server.",
+                    tr(
+                        cx,
+                        "This calendar is synced with a CalDAV server: delete it on the server.",
+                    ),
                     cx,
                 )
             });
@@ -178,8 +185,8 @@ impl CalendarView {
                 .when(active, |el| {
                     el.border_2().border_color(t.text).child(
                         Icon::new(IconName::Check)
-                            .size(px(12.))
-                            .text_color(t.on_accent),
+                            .size(ICON_SIZE_XS)
+                            .text_color(text_on(hex(color))),
                     )
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -197,7 +204,7 @@ impl CalendarView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(hsla(0., 0., 0., if t.is_dark { 0.45 } else { 0.25 }))
+                .bg(t.scrim)
                 .occlude()
                 .on_mouse_down(
                     MouseButton::Left,
@@ -214,7 +221,7 @@ impl CalendarView {
                         .flex()
                         .flex_col()
                         .gap(SPACE_3)
-                        .rounded(px(12.))
+                        .rounded(RADIUS_XL)
                         .border_1()
                         .border_color(t.border)
                         .bg(t.elevated)
@@ -225,18 +232,21 @@ impl CalendarView {
                             div()
                                 .text_size(TEXT_LG)
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(if id.is_some() {
-                                    "Edit calendar"
-                                } else {
-                                    "New calendar"
-                                }),
+                                .child(tr(
+                                    cx,
+                                    if id.is_some() {
+                                        "Edit calendar"
+                                    } else {
+                                        "New calendar"
+                                    },
+                                )),
                         )
                         .child(Input::new(&edit.name))
                         .child(
                             div()
                                 .text_size(TEXT_SM)
                                 .text_color(t.text_muted)
-                                .child("Colour"),
+                                .child(tr(cx, "Color")),
                         )
                         .child(
                             div()
@@ -256,7 +266,7 @@ impl CalendarView {
                                     el.child(
                                         Button::new("cal-edit-delete")
                                             .variant(ButtonVariant::Danger)
-                                            .label("Delete")
+                                            .label(tr(cx, "Delete"))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.delete_calendar(id, cx)
                                             })),
@@ -266,7 +276,7 @@ impl CalendarView {
                                 .child(
                                     Button::new("cal-edit-cancel")
                                         .ghost()
-                                        .label("Cancel")
+                                        .label(tr(cx, "Cancel"))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.calendar_edit = None;
                                             cx.notify();
@@ -275,7 +285,7 @@ impl CalendarView {
                                 .child(
                                     Button::new("cal-edit-save")
                                         .primary()
-                                        .label("Save")
+                                        .label(tr(cx, "Save"))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.save_calendar_edit(cx)
                                         })),

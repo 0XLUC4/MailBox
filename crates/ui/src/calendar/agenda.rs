@@ -9,9 +9,10 @@ use mailbox_core::calendar::Occurrence;
 use super::layout;
 use super::{CalendarView, ViewData};
 use crate::components::{Badge, EmptyState, Icon, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    RADIUS_FULL, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_MD,
-    TEXT_SM, TEXT_XL, TEXT_XS, Theme,
+    ICON_SIZE_XS, RADIUS_FULL, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6,
+    TEXT_MD, TEXT_SM, TEXT_XL, TEXT_XS, Theme,
 };
 
 impl CalendarView {
@@ -40,11 +41,11 @@ impl CalendarView {
         if groups.is_empty() {
             let last = data.days.last().copied().unwrap_or(self.anchor);
             return div().id("agenda").size_full().child(
-                EmptyState::new(IconName::CalendarCheck, "Nothing planned").description(format!(
-                    "No events between {} and {}. Press N to create one.",
-                    self.anchor.format("%-d %b"),
-                    last.format("%-d %b")
-                )),
+                EmptyState::new(IconName::CalendarCheck, tr(cx, "Nothing planned")).description(
+                    tr(cx, "No events between {} and {}. Press N to create one.")
+                        .replacen("{}", &self.anchor.format("%-d %b").to_string(), 1)
+                        .replacen("{}", &last.format("%-d %b").to_string(), 1),
+                ),
             );
         }
 
@@ -99,7 +100,7 @@ impl CalendarView {
                                     .text_size(TEXT_XS)
                                     .text_color(if is_today { t.accent } else { t.text_muted })
                                     .child(if (day - data.today).num_days().abs() <= 1 {
-                                        layout::relative_day(day, data.today)
+                                        layout::relative_day(day, data.today, |text| tr(cx, text))
                                     } else {
                                         day.format("%B").to_string()
                                     }),
@@ -142,16 +143,18 @@ impl CalendarView {
         let time = if layout::is_all_day_like(occurrence) {
             let (first, last) = layout::day_span(occurrence);
             if first == last {
-                "All day".to_owned()
+                tr(cx, "All day").to_owned()
             } else {
-                format!(
-                    "Day {} of {}",
-                    (day - first).num_days() + 1,
-                    (last - first).num_days() + 1
-                )
+                tr(cx, "Day {} of {}")
+                    .replacen("{}", &((day - first).num_days() + 1).to_string(), 1)
+                    .replacen("{}", &((last - first).num_days() + 1).to_string(), 1)
             }
         } else {
-            layout::time_range_label(occurrence)
+            layout::time_range_label(occurrence, |text| tr(cx, text))
+        };
+        let guests = match event.attendees.len() {
+            1 => tr(cx, "1 guest").to_owned(),
+            count => tr(cx, "{} guests").replace("{}", &count.to_string()),
         };
         let (id, ts) = occurrence.key();
         let down = occurrence.clone();
@@ -224,7 +227,7 @@ impl CalendarView {
                                         el.line_through().text_color(t.text_subtle)
                                     })
                                     .child(if event.title.trim().is_empty() {
-                                        "(No title)".to_owned()
+                                        tr(cx, "(No title)").to_owned()
                                     } else {
                                         event.title.clone()
                                     }),
@@ -232,14 +235,14 @@ impl CalendarView {
                             .when(occurrence.is_part_of_series(), |el| {
                                 el.child(
                                     Icon::new(IconName::Repeat)
-                                        .size(px(12.))
+                                        .size(ICON_SIZE_XS)
                                         .text_color(t.text_subtle),
                                 )
                             })
                             .when(occurrence.details.private, |el| {
                                 el.child(
                                     Icon::new(IconName::Lock)
-                                        .size(px(12.))
+                                        .size(ICON_SIZE_XS)
                                         .text_color(t.text_subtle),
                                 )
                             }),
@@ -259,29 +262,22 @@ impl CalendarView {
                                         .flex()
                                         .flex_row()
                                         .items_center()
-                                        .gap(px(3.))
-                                        .child(Icon::new(IconName::MapPin).size(px(11.)))
+                                        .min_w(px(0.))
+                                        .gap(SPACE_1)
+                                        .child(Icon::new(IconName::MapPin).size(ICON_SIZE_XS))
                                         .child(div().truncate().child(event.location.clone())),
                                 )
                             })
                             .when(!event.attendees.is_empty(), |el| {
-                                el.child("-").child(format!(
-                                    "{} {}",
-                                    event.attendees.len(),
-                                    if event.attendees.len() == 1 {
-                                        "guest"
-                                    } else {
-                                        "guests"
-                                    }
-                                ))
+                                el.child("-").child(guests)
                             }),
                     ),
             )
             .when(status == ResponseStatus::NeedsAction, |el| {
-                el.child(Badge::new("Invitation").color(t.warning))
+                el.child(Badge::new(tr(cx, "Invitation")).color(t.warning))
             })
             .when(status == ResponseStatus::Tentative, |el| {
-                el.child(Badge::new("Tentative").color(t.text_muted))
+                el.child(Badge::new(tr(cx, "Tentative")).color(t.text_muted))
             })
     }
 }

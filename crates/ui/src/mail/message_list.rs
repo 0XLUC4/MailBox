@@ -24,12 +24,12 @@ use super::{
     message_menu, message_window, ops,
 };
 use crate::actions;
-use crate::app_state::AppState;
+use crate::app_state::{AppState, SyncPhase};
 use crate::components::{Avatar, Badge, EmptyState, Icon, IconButton, IconName};
-use crate::settings::{prefs, update_settings};
+use crate::settings::{prefs, tr, update_settings};
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_FULL, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD,
-    TEXT_SM, TEXT_XS, Theme, hex, theme,
+    ICON_SIZE_SM, ICON_SIZE_XS, PANE_HEADER_HEIGHT, RADIUS_FULL, RADIUS_MD, SPACE_0_5, SPACE_1,
+    SPACE_1_5, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex, theme,
 };
 
 /// Max search results shown.
@@ -57,16 +57,35 @@ pub fn short_date(date: DateTime<Utc>) -> String {
 }
 
 /// "Today", "Tomorrow", "Mon 16", "Overdue" style label for a flag due date.
-fn due_label(due: NaiveDate) -> (String, bool) {
+fn due_label(due: NaiveDate, cx: &App) -> (String, bool) {
     let today = Local::now().date_naive();
     let days = (due - today).num_days();
     match days {
-        d if d < 0 => (format!("Overdue {}", due.format("%d %b")), true),
-        0 => ("Due today".into(), true),
-        1 => ("Due tomorrow".into(), false),
-        _ => (format!("Due {}", due.format("%a %d %b")), false),
+        d if d < 0 => (
+            tr(cx, "Overdue {}").replace("{}", &due.format("%d %b").to_string()),
+            true,
+        ),
+        0 => (tr(cx, "Due today").into(), true),
+        1 => (tr(cx, "Due tomorrow").into(), false),
+        _ => (
+            tr(cx, "Due {}").replace("{}", &due.format("%a %d %b").to_string()),
+            false,
+        ),
     }
 }
+
+/// Group header labels built by `list_model` that are UI text (sender names are not).
+const GROUP_LABELS: [&str; 9] = [
+    "Pinned",
+    "Today",
+    "Yesterday",
+    "This week",
+    "Last week",
+    "Earlier",
+    "High importance",
+    "Normal importance",
+    "Low importance",
+];
 
 pub struct MessageListView {
     state: Entity<AppState>,
@@ -175,10 +194,10 @@ impl MessageListView {
             };
             self.title = if query.is_empty() {
                 folder_id
-                    .and_then(|id| folder_label(store, id))
+                    .and_then(|id| folder_label(store, id, cx))
                     .unwrap_or_default()
             } else {
-                "Search results".into()
+                tr(cx, "Search results").into()
             };
             self.dues = mail_ops::flag_dues(store).unwrap_or_default();
             self.category_colors = store
@@ -587,7 +606,11 @@ impl MessageListView {
 
     // ---------- rendering ----------
 
-    fn render_header_row(&self, label: &str, count: usize, t: &Theme) -> AnyElement {
+    fn render_header_row(&self, label: &str, count: usize, t: &Theme, cx: &App) -> AnyElement {
+        let label = GROUP_LABELS
+            .iter()
+            .find(|known| **known == label)
+            .map_or(label, |known| tr(cx, known));
         div()
             .flex()
             .flex_row()
@@ -652,7 +675,9 @@ impl MessageListView {
         let drag_label: SharedString = if drag_ids.len() == 1 {
             message.subject.clone().into()
         } else {
-            format!("{} messages", drag_ids.len()).into()
+            tr(cx, "{} messages")
+                .replace("{}", &drag_ids.len().to_string())
+                .into()
         };
 
         // A collapsed conversation row marks the whole conversation read / unread.
@@ -662,24 +687,24 @@ impl MessageListView {
             self.with_conversations(&[id])
         };
 
-        // Quick actions (visible on hover).
+        // Quick actions: visible on hover, and on the selected row for keyboard users.
         let quick = {
             let thread_ids = thread_ids.clone();
             let (s1, s2, s3) = (self.state.clone(), self.state.clone(), list.clone());
             div()
                 .absolute()
-                .top(px(6.))
-                .right(px(8.))
+                .top(SPACE_1_5)
+                .right(SPACE_2)
                 .flex()
                 .flex_row()
-                .gap(px(2.))
-                .p(px(2.))
+                .gap(SPACE_0_5)
+                .p(SPACE_0_5)
                 .rounded(RADIUS_MD)
                 .bg(t.elevated)
                 .border_1()
                 .border_color(t.border_subtle)
                 .shadow_sm()
-                .opacity(0.)
+                .opacity(if selected { 1. } else { 0. })
                 .group_hover("message-row", |s| s.opacity(1.))
                 .child(
                     IconButton::new(
@@ -692,11 +717,14 @@ impl MessageListView {
                     )
                     .size(px(24.))
                     .icon_size(ICON_SIZE_SM)
-                    .tooltip(if unread {
-                        "Mark as read"
-                    } else {
-                        "Mark as unread"
-                    })
+                    .tooltip(tr(
+                        cx,
+                        if unread {
+                            "Mark as read"
+                        } else {
+                            "Mark as unread"
+                        },
+                    ))
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         ops::set_read(&s1, thread_ids.clone(), unread, cx);
@@ -707,7 +735,7 @@ impl MessageListView {
                         .size(px(24.))
                         .icon_size(ICON_SIZE_SM)
                         .active(flagged)
-                        .tooltip(if flagged { "Clear flag" } else { "Flag" })
+                        .tooltip(tr(cx, if flagged { "Clear flag" } else { "Flag" }))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             ops::set_flag(&s2, vec![id], !flagged, cx);
@@ -717,7 +745,7 @@ impl MessageListView {
                     IconButton::new(("quick-delete", id as u64), IconName::Trash)
                         .size(px(24.))
                         .icon_size(ICON_SIZE_SM)
-                        .tooltip("Delete")
+                        .tooltip(tr(cx, "Delete"))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             s3.update(cx, |this, cx| {
@@ -762,36 +790,40 @@ impl MessageListView {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(3.))
+            .gap(SPACE_1)
             .flex_shrink_0()
             .when(message.flags.pinned, |el| {
-                el.child(Icon::new(IconName::Pin).size(px(12.)).text_color(t.accent))
+                el.child(
+                    Icon::new(IconName::Pin)
+                        .size(ICON_SIZE_XS)
+                        .text_color(t.accent),
+                )
             })
             .when(self.muted.contains(&message.thread_id), |el| {
                 el.child(
                     Icon::new(IconName::BellOff)
-                        .size(px(12.))
+                        .size(ICON_SIZE_XS)
                         .text_color(t.text_subtle),
                 )
             })
             .when(message.importance == Importance::High, |el| {
                 el.child(
                     Icon::new(IconName::CircleAlert)
-                        .size(px(12.))
+                        .size(ICON_SIZE_XS)
                         .text_color(t.danger),
                 )
             })
             .when(message.importance == Importance::Low, |el| {
                 el.child(
                     Icon::new(IconName::ArrowDown)
-                        .size(px(12.))
+                        .size(ICON_SIZE_XS)
                         .text_color(t.text_subtle),
                 )
             })
             .when(!message.attachments.is_empty(), |el| {
                 el.child(
                     Icon::new(IconName::Paperclip)
-                        .size(px(12.))
+                        .size(ICON_SIZE_XS)
                         .text_color(t.text_subtle),
                 )
             });
@@ -830,7 +862,7 @@ impl MessageListView {
                         el.child(
                             div()
                                 .flex_shrink_0()
-                                .px(px(5.))
+                                .px(SPACE_1)
                                 .rounded(RADIUS_FULL)
                                 .bg(t.active)
                                 .text_size(TEXT_XS)
@@ -843,16 +875,20 @@ impl MessageListView {
             .child(time);
 
         let flag_view = flagged.then(|| {
-            let (label, urgent) = due.map_or((String::new(), false), due_label);
+            let (label, urgent) = due.map_or((String::new(), false), |due| due_label(due, cx));
             div()
                 .flex()
                 .flex_row()
                 .flex_shrink_0()
                 .items_center()
-                .gap(px(3.))
+                .gap(SPACE_1)
                 .text_size(TEXT_XS)
                 .text_color(if urgent { t.danger } else { t.text_muted })
-                .child(Icon::new(IconName::Flag).size(px(12.)).text_color(t.danger))
+                .child(
+                    Icon::new(IconName::Flag)
+                        .size(ICON_SIZE_XS)
+                        .text_color(t.danger),
+                )
                 .when(!label.is_empty(), |el| el.child(label))
         });
 
@@ -875,7 +911,7 @@ impl MessageListView {
                     } else {
                         IconName::ChevronRight
                     })
-                    .size(px(12.)),
+                    .size(ICON_SIZE_XS),
                 )
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
@@ -899,7 +935,7 @@ impl MessageListView {
                         el.font_weight(FontWeight::MEDIUM).text_color(t.accent)
                     })
                     .child(if message.subject.is_empty() {
-                        "(no subject)".to_owned()
+                        tr(cx, "(no subject)").to_owned()
                     } else {
                         message.subject.clone()
                     }),
@@ -1012,7 +1048,7 @@ impl MessageListView {
         range
             .filter_map(|ix| rows.get(ix).map(|row| (ix, row)))
             .map(|(_, row)| match row {
-                Row::Header { label, count } => self.render_header_row(label, *count, &t),
+                Row::Header { label, count } => self.render_header_row(label, *count, &t, cx),
                 Row::Message {
                     index,
                     child,
@@ -1035,16 +1071,16 @@ impl MessageListView {
             .collect()
     }
 
-    fn options_menu(&self, menu: PopupMenu, list: Entity<Self>) -> PopupMenu {
+    fn options_menu(&self, menu: PopupMenu, list: Entity<Self>, cx: &App) -> PopupMenu {
         let options = self.options;
         let set = move |list: &Entity<Self>, options: ListOptions, cx: &mut App| {
             list.update(cx, |this, cx| this.set_options(options, cx));
         };
-        let mut menu = menu.min_w(px(200.)).label("Sort by");
+        let mut menu = menu.min_w(px(200.)).label(tr(cx, "Sort by"));
         for key in SortKey::ALL {
             let list = list.clone();
             menu = menu.item(
-                PopupMenuItem::new(key.label())
+                PopupMenuItem::new(tr(cx, key.label()))
                     .checked(options.sort == key)
                     .on_click(move |_, _, cx| {
                         set(
@@ -1062,11 +1098,14 @@ impl MessageListView {
         menu = menu
             .separator()
             .item(
-                PopupMenuItem::new(if options.sort == SortKey::Date {
-                    "Newest on top"
-                } else {
-                    "Descending"
-                })
+                PopupMenuItem::new(tr(
+                    cx,
+                    if options.sort == SortKey::Date {
+                        "Newest on top"
+                    } else {
+                        "Descending"
+                    },
+                ))
                 .checked(options.descending)
                 .on_click(move |_, _, cx| {
                     set(
@@ -1080,11 +1119,14 @@ impl MessageListView {
                 }),
             )
             .item(
-                PopupMenuItem::new(if options.sort == SortKey::Date {
-                    "Oldest on top"
-                } else {
-                    "Ascending"
-                })
+                PopupMenuItem::new(tr(
+                    cx,
+                    if options.sort == SortKey::Date {
+                        "Oldest on top"
+                    } else {
+                        "Ascending"
+                    },
+                ))
                 .checked(!options.descending)
                 .on_click(move |_, _, cx| {
                     set(
@@ -1098,11 +1140,11 @@ impl MessageListView {
                 }),
             )
             .separator()
-            .label("Group by");
+            .label(tr(cx, "Group by"));
         for grouping in Grouping::ALL {
             let list = list.clone();
             menu = menu.item(
-                PopupMenuItem::new(grouping.label())
+                PopupMenuItem::new(tr(cx, grouping.label()))
                     .checked(options.grouping == grouping)
                     .on_click(move |_, _, cx| {
                         set(
@@ -1119,7 +1161,7 @@ impl MessageListView {
         let state = self.state.clone();
         menu.separator().item(
             // No icon: it would replace the check mark.
-            PopupMenuItem::new("Show as conversations")
+            PopupMenuItem::new(tr(cx, "Show as conversations"))
                 .checked(options.threaded)
                 .on_click(move |_, _, cx| {
                     update_settings(&state, cx, |settings| {
@@ -1133,8 +1175,9 @@ impl MessageListView {
         menu: PopupMenu,
         state: Entity<AppState>,
         current: ReadingPanePosition,
+        cx: &App,
     ) -> PopupMenu {
-        let mut menu = menu.min_w(px(180.)).label("Reading pane");
+        let mut menu = menu.min_w(px(180.)).label(tr(cx, "Reading pane"));
         for (position, label, icon) in [
             (ReadingPanePosition::Right, "Right", IconName::PanelRight),
             (ReadingPanePosition::Bottom, "Bottom", IconName::PanelBottom),
@@ -1142,7 +1185,7 @@ impl MessageListView {
         ] {
             let state = state.clone();
             menu = menu.item(
-                PopupMenuItem::new(label)
+                PopupMenuItem::new(tr(cx, label))
                     .icon(icon)
                     .checked(current == position)
                     .on_click(move |_, _, cx| {
@@ -1168,7 +1211,7 @@ impl MessageListView {
             .flex_shrink_0()
             .items_center()
             .gap(SPACE_2)
-            .h(px(40.))
+            .h(PANE_HEADER_HEIGHT)
             .px(SPACE_3)
             .border_b_1()
             .border_color(t.border_subtle)
@@ -1176,7 +1219,7 @@ impl MessageListView {
                 el.child(
                     IconButton::new("list-show-folders", IconName::PanelLeftOpen)
                         .icon_size(ICON_SIZE_SM)
-                        .tooltip("Show folders")
+                        .tooltip(tr(cx, "Show folders"))
                         .on_click(move |_, _, cx| {
                             expand_prefs.update(cx, |prefs, cx| {
                                 prefs.folders_collapsed = false;
@@ -1199,7 +1242,7 @@ impl MessageListView {
                     div()
                         .text_size(TEXT_SM)
                         .text_color(t.text_subtle)
-                        .child(format!("{unread} unread")),
+                        .child(tr(cx, "{} unread").replace("{}", &unread.to_string())),
                 )
             })
             .child(
@@ -1207,12 +1250,12 @@ impl MessageListView {
                     .ghost()
                     .small()
                     .icon(IconName::ArrowDownWideNarrow)
-                    .tooltip("Sort, group and conversations")
+                    .tooltip(tr(cx, "Sort, group and conversations"))
                     .dropdown_menu({
                         let list = list.clone();
                         move |menu, _, cx| {
                             let view = list.read(cx);
-                            view.options_menu(menu, list.clone())
+                            view.options_menu(menu, list.clone(), cx)
                         }
                     }),
             )
@@ -1225,9 +1268,9 @@ impl MessageListView {
                         ReadingPanePosition::Bottom => IconName::PanelBottom,
                         ReadingPanePosition::Off => IconName::EyeOff,
                     })
-                    .tooltip("Reading pane")
-                    .dropdown_menu(move |menu, _, _| {
-                        Self::layout_menu(menu, layout_state.clone(), pane_position)
+                    .tooltip(tr(cx, "Reading pane"))
+                    .dropdown_menu(move |menu, _, cx| {
+                        Self::layout_menu(menu, layout_state.clone(), pane_position, cx)
                     }),
             )
     }
@@ -1267,15 +1310,15 @@ impl MessageListView {
                             .hover(|s| s.bg(t.hover).text_color(t.text))
                     })
                     .when(filter == Filter::Mentions, |el| {
-                        el.child(Icon::new(IconName::AtSign).size(px(12.)))
+                        el.child(Icon::new(IconName::AtSign).size(ICON_SIZE_XS))
                     })
                     .when(filter == Filter::Attachments, |el| {
-                        el.child(Icon::new(IconName::Paperclip).size(px(12.)))
+                        el.child(Icon::new(IconName::Paperclip).size(ICON_SIZE_XS))
                     })
                     .when(filter == Filter::Flagged, |el| {
-                        el.child(Icon::new(IconName::Flag).size(px(12.)))
+                        el.child(Icon::new(IconName::Flag).size(ICON_SIZE_XS))
                     })
-                    .child(filter.label())
+                    .child(tr(cx, filter.label()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let options = ListOptions {
                             filter,
@@ -1312,24 +1355,24 @@ impl MessageListView {
                         .text_size(TEXT_SM)
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(t.accent)
-                        .child(format!("{count} selected")),
+                        .child(tr(cx, "{} selected").replace("{}", &count.to_string())),
                 )
                 .child(
                     IconButton::new("bulk-read", IconName::MailOpen)
                         .icon_size(ICON_SIZE_SM)
-                        .tooltip("Mark as read / unread")
+                        .tooltip(tr(cx, "Mark as read / unread"))
                         .on_click(move |_, _, cx| ops::toggle_read(&s1, read_ids.clone(), cx)),
                 )
                 .child(
                     IconButton::new("bulk-flag", IconName::Flag)
                         .icon_size(ICON_SIZE_SM)
-                        .tooltip("Flag / clear flag")
+                        .tooltip(tr(cx, "Flag / clear flag"))
                         .on_click(move |_, _, cx| ops::toggle_flag(&s2, flag_ids.clone(), cx)),
                 )
                 .child(
                     IconButton::new("bulk-archive", IconName::Archive)
                         .icon_size(ICON_SIZE_SM)
-                        .tooltip("Archive")
+                        .tooltip(tr(cx, "Archive"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.remove_selection(window, cx, |s, ids, _, cx| {
                                 ops::move_to_role(s, ids, FolderRole::Archive, cx)
@@ -1339,7 +1382,7 @@ impl MessageListView {
                 .child(
                     IconButton::new("bulk-delete", IconName::Trash)
                         .icon_size(ICON_SIZE_SM)
-                        .tooltip("Delete")
+                        .tooltip(tr(cx, "Delete"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.remove_selection(window, cx, ops::delete)
                         })),
@@ -1347,7 +1390,7 @@ impl MessageListView {
                 .child(
                     IconButton::new("bulk-clear", IconName::X)
                         .icon_size(ICON_SIZE_SM)
-                        .tooltip("Clear selection")
+                        .tooltip(tr(cx, "Clear selection"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             let primary = this.anchor;
                             this.set_selection(primary.into_iter().collect(), primary, cx);
@@ -1373,20 +1416,29 @@ impl Render for MessageListView {
         let filters = self.render_filters(&t, cx);
         let selection_bar = self.render_selection_bar(&t, cx);
 
+        // Nothing synced yet in this session: an empty folder may just not be downloaded yet.
+        let sync = self.state.read(cx).sync_summary();
+        let first_sync = sync.phase == SyncPhase::Syncing && sync.last_synced.is_none();
         let body = if self.rows.is_empty() {
             let (icon, title, description) = if !self.source.1.is_empty() {
                 (IconName::Search, "No results", "Try another search.")
-            } else if self.options.filter != Filter::All {
-                (
-                    IconName::ListFilter,
-                    "Nothing here",
-                    "No message matches this filter.",
-                )
             } else if self.source.0.is_none() {
                 (
                     IconName::Inbox,
                     "No folder selected",
                     "Pick a folder on the left.",
+                )
+            } else if first_sync {
+                (
+                    IconName::RefreshCw,
+                    "Loading messages…",
+                    "Your mail appears here once the first sync finishes.",
+                )
+            } else if self.options.filter != Filter::All {
+                (
+                    IconName::ListFilter,
+                    "Nothing here",
+                    "No message matches this filter.",
                 )
             } else {
                 (IconName::Inbox, "All caught up", "This folder is empty.")
@@ -1394,7 +1446,7 @@ impl Render for MessageListView {
             div()
                 .flex_1()
                 .min_h(px(0.))
-                .child(EmptyState::new(icon, title).description(description))
+                .child(EmptyState::new(icon, tr(cx, title)).description(tr(cx, description)))
                 .into_any_element()
         } else {
             div()

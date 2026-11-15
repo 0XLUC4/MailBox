@@ -303,10 +303,13 @@ pub fn format_minutes(minutes: i64) -> String {
     format!("{:02}:{:02}", minutes / 60 % 24, minutes % 60)
 }
 
-/// "09:00 – 10:30" in local time (or "All day").
-pub fn time_range_label(occurrence: &Occurrence) -> String {
+/// "09:00 – 10:30" in local time (or "All day", translated by `tr`).
+pub fn time_range_label(
+    occurrence: &Occurrence,
+    tr: impl Fn(&'static str) -> &'static str,
+) -> String {
     if occurrence.event.all_day {
-        return "All day".into();
+        return tr("All day").into();
     }
     let (start, end) = local_span(occurrence);
     if start.date() == end.date()
@@ -322,12 +325,16 @@ pub fn time_range_label(occurrence: &Occurrence) -> String {
     }
 }
 
-/// "Today", "Tomorrow", "Yesterday" or "Mon 16 Nov".
-pub fn relative_day(day: NaiveDate, today: NaiveDate) -> String {
+/// "Today", "Tomorrow", "Yesterday" (translated by `tr`) or "Mon 16 Nov".
+pub fn relative_day(
+    day: NaiveDate,
+    today: NaiveDate,
+    tr: impl Fn(&'static str) -> &'static str,
+) -> String {
     match (day - today).num_days() {
-        0 => "Today".into(),
-        1 => "Tomorrow".into(),
-        -1 => "Yesterday".into(),
+        0 => tr("Today").into(),
+        1 => tr("Tomorrow").into(),
+        -1 => tr("Yesterday").into(),
         _ if day.year() == today.year() => day.format("%a %-d %b").to_string(),
         _ => day.format("%a %-d %b %Y").to_string(),
     }
@@ -472,9 +479,12 @@ mod tests {
         assert_eq!(snap_down(29), 15);
         assert_eq!(format_minutes(570), "09:30");
         let today = date(2026, 11, 14);
-        assert_eq!(relative_day(today, today), "Today");
-        assert_eq!(relative_day(date(2026, 11, 15), today), "Tomorrow");
-        assert_eq!(relative_day(date(2026, 11, 18), today), "Wed 18 Nov");
-        assert_eq!(relative_day(date(2027, 1, 4), today), "Mon 4 Jan 2027");
+        assert_eq!(relative_day(today, today, |s| s), "Today");
+        assert_eq!(relative_day(date(2026, 11, 15), today, |s| s), "Tomorrow");
+        assert_eq!(relative_day(date(2026, 11, 18), today, |s| s), "Wed 18 Nov");
+        assert_eq!(
+            relative_day(date(2027, 1, 4), today, |s| s),
+            "Mon 4 Jan 2027"
+        );
     }
 }

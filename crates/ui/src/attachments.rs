@@ -11,6 +11,7 @@ use gpui::{App, Entity, PathPromptOptions};
 use mailbox_core::{Attachment, Id, Message};
 
 use crate::app_state::AppState;
+use crate::settings::tr;
 use crate::sync_bridge;
 
 /// Extensions that run code when opened: only "Save" is offered for these.
@@ -42,7 +43,7 @@ fn require(state: &Entity<AppState>, message_id: Id, name: &str, cx: &mut App) -
         sync_bridge::request_body(message_id, cx);
         info(
             state,
-            "Downloading this attachment… try again in a moment",
+            tr(cx, "Downloading this attachment… try again in a moment"),
             cx,
         );
     }
@@ -64,7 +65,10 @@ pub fn open(state: &Entity<AppState>, message_id: Id, name: &str, cx: &mut App) 
     if is_risky(name) {
         return info(
             state,
-            "For your safety this file can't be opened directly: save it, then open it yourself",
+            tr(
+                cx,
+                "For your safety this file can't be opened directly: save it, then open it yourself",
+            ),
             cx,
         );
     }
@@ -84,8 +88,17 @@ pub fn open(state: &Entity<AppState>, message_id: Id, name: &str, cx: &mut App) 
         .and_then(|_| std::fs::copy(&source, &target));
     match copied {
         Ok(_) => cx.open_with_system(&target),
-        Err(err) => error(state, format!("Cannot open {name}: {err}"), cx),
+        Err(err) => {
+            let message = tr(cx, "Cannot open {}: {}")
+                .replacen("{}", name, 1)
+                .replacen("{}", &err.to_string(), 1);
+            error(state, message, cx)
+        }
     }
+}
+
+fn save_failed(err: &std::io::Error, cx: &App) -> String {
+    tr(cx, "Save failed: {}").replace("{}", &err.to_string())
 }
 
 fn home_dir() -> PathBuf {
@@ -111,8 +124,11 @@ pub fn save(state: &Entity<AppState>, message_id: Id, name: &str, cx: &mut App) 
         };
         let result = std::fs::copy(&source, &target);
         cx.update(|cx| match result {
-            Ok(_) => info(&state, format!("Saved {}", target.display()), cx),
-            Err(err) => error(&state, format!("Save failed: {err}"), cx),
+            Ok(_) => {
+                let message = tr(cx, "Saved {}").replace("{}", &target.display().to_string());
+                info(&state, message, cx)
+            }
+            Err(err) => error(&state, save_failed(&err, cx), cx),
         });
     })
     .detach();
@@ -127,7 +143,7 @@ pub fn save_all(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
         .ok()
         .flatten();
     let Some(message) = message.filter(|message| !message.attachments.is_empty()) else {
-        return info(state, "This message has no attachments", cx);
+        return info(state, tr(cx, "This message has no attachments"), cx);
     };
     let sources: Vec<PathBuf> = message
         .attachments
@@ -138,7 +154,7 @@ pub fn save_all(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
         sync_bridge::request_body(message_id, cx);
         return info(
             state,
-            "Downloading the attachments… try again in a moment",
+            tr(cx, "Downloading the attachments… try again in a moment"),
             cx,
         );
     }
@@ -146,7 +162,7 @@ pub fn save_all(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
         files: false,
         directories: true,
         multiple: false,
-        prompt: Some("Save attachments here".into()),
+        prompt: Some(tr(cx, "Save attachments here").into()),
     });
     let state = state.clone();
     cx.spawn(async move |cx| {
@@ -158,12 +174,13 @@ pub fn save_all(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
         };
         let result = copy_all(&sources, &dir);
         cx.update(|cx| match result {
-            Ok(count) => info(
-                &state,
-                format!("Saved {count} attachment(s) to {}", dir.display()),
-                cx,
-            ),
-            Err(err) => error(&state, format!("Save failed: {err}"), cx),
+            Ok(count) => {
+                let message = tr(cx, "Saved {} attachment(s) to {}")
+                    .replacen("{}", &count.to_string(), 1)
+                    .replacen("{}", &dir.display().to_string(), 1);
+                info(&state, message, cx)
+            }
+            Err(err) => error(&state, save_failed(&err, cx), cx),
         });
     })
     .detach();

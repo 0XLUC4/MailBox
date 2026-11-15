@@ -20,7 +20,10 @@ use super::tr;
 use crate::app_state::AppState;
 use crate::components::{Banner, Button, Icon, IconButton, IconName};
 use crate::dialogs::{self, Confirm, confirm, dialog_frame, field, section_title};
-use crate::theme::{RADIUS_FULL, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD, TEXT_SM, hex, theme};
+use crate::theme::{
+    DIALOG_SM, ICON_SIZE, RADIUS_FULL, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD, TEXT_SM, hex,
+    text_on, theme,
+};
 use crate::{dav_bridge, sync_bridge};
 
 /// Setting holding the account order (JSON list of account ids).
@@ -78,7 +81,7 @@ fn auth_of(store: &Store, id: Id) -> AuthConfig {
         .unwrap_or_default()
 }
 
-fn avatar(color: u32, icon: IconName, cx: &App) -> Div {
+fn avatar(color: u32, icon: IconName) -> Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -87,8 +90,8 @@ fn avatar(color: u32, icon: IconName, cx: &App) -> Div {
         .size(px(32.))
         .rounded(RADIUS_FULL)
         .bg(hex(color))
-        .text_color(theme(cx).on_accent)
-        .child(Icon::new(icon).size(px(16.)))
+        .text_color(text_on(hex(color)))
+        .child(Icon::new(icon).size(ICON_SIZE))
 }
 
 fn account_row(
@@ -150,9 +153,9 @@ pub fn rows(state: &Entity<AppState>, cx: &App) -> Vec<AnyElement> {
         let oauth = matches!(auth_of(store, account.id), AuthConfig::OAuth2 { .. });
         let detail = match &servers {
             Some(servers) if !servers.provider.is_empty() => {
-                format!("{} - {}", account.email, servers.provider)
+                format!("{} · {}", account.email, servers.provider)
             }
-            Some(servers) => format!("{} - {}", account.email, servers.imap.host),
+            Some(servers) => format!("{} · {}", account.email, servers.imap.host),
             None => account.email.clone(),
         };
         let id = account.id;
@@ -205,7 +208,7 @@ pub fn rows(state: &Entity<AppState>, cx: &App) -> Vec<AnyElement> {
                 .into_any_element(),
         );
         rows.push(account_row(
-            avatar(account.color, IconName::AtSign, cx),
+            avatar(account.color, IconName::AtSign),
             account.name,
             detail,
             actions,
@@ -260,7 +263,7 @@ pub fn rows(state: &Entity<AppState>, cx: &App) -> Vec<AnyElement> {
         if account.contacts {
             what.push(tr(cx, "People"));
         }
-        let detail = format!("{} - {}", account.provider.label(), what.join(", "));
+        let detail = format!("{} · {}", account.provider.label(), what.join(", "));
         let mut actions = Vec::new();
         if !account.provider.uses_oauth() {
             let target = PasswordTarget::Dav(account.clone());
@@ -286,7 +289,7 @@ pub fn rows(state: &Entity<AppState>, cx: &App) -> Vec<AnyElement> {
                 .into_any_element(),
         );
         rows.push(account_row(
-            avatar(crate::theme::DEFAULT_ACCENT, IconName::CalendarDays, cx),
+            avatar(crate::theme::DEFAULT_ACCENT, IconName::CalendarDays),
             account.email,
             detail,
             actions,
@@ -371,7 +374,11 @@ fn confirm_remove_dav(
                     dav_bridge::reload(cx);
                 }
                 Err(err) => state.update(cx, |state, cx| {
-                    state.report_error(format!("Cannot update {}: {err}", path.display()), cx)
+                    state.report_error(
+                        tr(cx, "Cannot update {}").replace("{}", &path.display().to_string())
+                            + &format!(": {err}"),
+                        cx,
+                    )
                 }),
             }
             cx.refresh_windows();
@@ -566,7 +573,7 @@ fn open_password(
         if first.replace(false) {
             focus.update(cx, |input, cx| input.focus(window, cx));
         }
-        dialog.w(px(420.)).child(view.clone())
+        dialog.w(DIALOG_SM).child(view.clone())
     });
 }
 

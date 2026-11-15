@@ -17,8 +17,8 @@ use crate::actions::ACTIONS;
 use crate::components::Icon;
 use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_SM,
-    TEXT_XS, theme,
+    DIALOG_MD, DIALOG_SM, ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3,
+    SPACE_4, TEXT_LG, TEXT_SM, TEXT_XS, theme,
 };
 
 /// Text of a confirmation dialog.
@@ -63,7 +63,7 @@ pub fn confirm(
 pub fn open_about(window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, |dialog, _, cx| {
         let t = theme(cx).clone();
-        dialog.w(px(380.)).child(
+        dialog.w(DIALOG_SM).child(
             div()
                 .flex()
                 .flex_col()
@@ -138,7 +138,7 @@ pub fn kbd(keys: &str, cx: &App) -> Div {
     div()
         .flex_shrink_0()
         .px(SPACE_1)
-        .py(px(1.))
+        .py(SPACE_0_5)
         .rounded(RADIUS_MD)
         .border_1()
         .border_color(t.border)
@@ -151,7 +151,7 @@ pub fn kbd(keys: &str, cx: &App) -> Div {
 pub fn open_shortcuts(window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, |dialog, _, cx| {
         dialog
-            .w(px(460.))
+            .w(DIALOG_MD)
             .title(tr(cx, "Keyboard shortcuts"))
             .child(
                 div()

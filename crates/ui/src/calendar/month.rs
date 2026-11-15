@@ -8,8 +8,9 @@ use mailbox_core::calendar::Occurrence;
 
 use super::layout::{self, ViewKind};
 use super::time_grid::chip_body;
-use super::{CalendarView, DragKind, HitArea, ViewData, chip_style};
-use crate::theme::{RADIUS_FULL, RADIUS_SM, SPACE_1, SPACE_2, TEXT_SM, TEXT_XS, Theme};
+use super::{CalendarView, DRAG_OPACITY, DragKind, HitArea, ViewData, chip_style};
+use crate::settings::tr;
+use crate::theme::{RADIUS_FULL, RADIUS_SM, SPACE_1, SPACE_2, TEXT_SM, TEXT_XS, Theme, text_on};
 
 const MAX_LANES: usize = 3;
 const LANE_HEIGHT: f32 = 20.;
@@ -187,7 +188,7 @@ impl CalendarView {
                                     .justify_center()
                                     .min_w(px(22.))
                                     .h(px(22.))
-                                    .px(px(5.))
+                                    .px(SPACE_1)
                                     .rounded(RADIUS_FULL)
                                     .text_size(TEXT_SM)
                                     .when(is_today, |el| {
@@ -225,7 +226,7 @@ impl CalendarView {
                                     this.go_to(day, cx);
                                     this.set_kind(ViewKind::Day, cx);
                                 }))
-                                .child(format!("+{more} more")),
+                                .child(tr(cx, "+{} more").replace("{}", &more.to_string())),
                         )
                     })
                     .into_any_element()
@@ -294,6 +295,7 @@ impl CalendarView {
         let target = occurrence.clone();
         let filled = layout::is_all_day_like(occurrence);
         let time = layout::local_span(occurrence).0.format("%H:%M").to_string();
+        let on_color = text_on(color);
 
         div()
             .id(ElementId::Name(
@@ -306,14 +308,16 @@ impl CalendarView {
             .h(px(LANE_HEIGHT - 2.))
             .px(px(3.))
             .cursor_pointer()
-            .when(dragging, |el| el.opacity(0.4))
+            .when(dragging, |el| el.opacity(DRAG_OPACITY))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     this.on_event_mouse_down(&target, DragKind::Move, event, window, cx)
                 }),
             )
-            .when(filled, |el| el.child(chip_body(occurrence, &style, true)))
+            .when(filled, |el| {
+                el.child(chip_body(occurrence, &style, true, cx))
+            })
             .when(!filled, |el| {
                 el.child(
                     div()
@@ -325,19 +329,19 @@ impl CalendarView {
                         .px(SPACE_1)
                         .rounded(RADIUS_SM)
                         .text_size(TEXT_XS)
-                        .when(selected, |el| el.bg(color).text_color(t.on_accent))
+                        .when(selected, |el| el.bg(color).text_color(on_color))
                         .when(!selected, |el| el.hover(|style| style.bg(t.hover)))
                         .child(
                             div()
                                 .flex_shrink_0()
                                 .size(px(7.))
                                 .rounded(RADIUS_FULL)
-                                .bg(if selected { t.on_accent } else { color }),
+                                .bg(if selected { on_color } else { color }),
                         )
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .text_color(if selected { t.on_accent } else { t.text_muted })
+                                .text_color(if selected { on_color } else { t.text_muted })
                                 .child(time),
                         )
                         .child(

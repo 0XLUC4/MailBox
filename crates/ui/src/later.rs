@@ -19,7 +19,8 @@ use mailbox_core::{Command, Folder, FolderRole, Id, Message, mail_ops};
 use crate::app_state::AppState;
 use crate::components::{Button, Icon, IconName};
 use crate::notifications::{self, Activation};
-use crate::theme::{ICON_SIZE_SM, RADIUS_MD, SPACE_1, SPACE_2, TEXT_SM, TEXT_XS, theme};
+use crate::settings::tr;
+use crate::theme::{DIALOG_SM, ICON_SIZE_SM, RADIUS_MD, SPACE_1, SPACE_2, TEXT_SM, TEXT_XS, theme};
 
 /// Called with the moment picked in [`open_time_picker`].
 pub type OnPick = Rc<dyn Fn(DateTime<Utc>, &mut Window, &mut App)>;
@@ -133,7 +134,7 @@ fn wake(state: &Entity<AppState>, id: Id, return_folder: Id, cx: &mut App) {
         );
     });
     notifications::show(
-        &format!("Snoozed: {}", message.from.display()),
+        &tr(cx, "Snoozed: {}").replace("{}", message.from.display()),
         &message.subject,
         Activation::Message(id),
         cx,
@@ -201,7 +202,8 @@ pub fn snooze(state: &Entity<AppState>, ids: &[Id], until: DateTime<Utc>, cx: &m
             cx,
         ) {
             state.select_message(None, cx);
-            state.notify_info(format!("Snoozed until {when}"), cx);
+            let message = tr(cx, "Snoozed until {}").replace("{}", &when.to_string());
+            state.notify_info(message, cx);
         }
     });
 }
@@ -210,7 +212,7 @@ pub fn snooze(state: &Entity<AppState>, ids: &[Id], until: DateTime<Utc>, cx: &m
 pub fn open_snooze_picker(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
     let Some(id) = state.read(cx).selected_message() else {
         return state.update(cx, |state, cx| {
-            state.notify_info("Select a message first", cx)
+            state.notify_info(tr(cx, "Select a message first"), cx)
         });
     };
     open_snooze_picker_for(state, vec![id], window, cx);
@@ -224,7 +226,7 @@ pub fn open_snooze_picker_for(
     cx: &mut App,
 ) {
     let on_pick: OnPick = Rc::new(move |until, _, cx| snooze(&state, &ids, until, cx));
-    open_time_picker("Snooze until", on_pick, window, cx);
+    open_time_picker(tr(cx, "Snooze until"), on_pick, window, cx);
 }
 
 /// Whether the conversation `thread_id` is muted.
@@ -237,7 +239,7 @@ type Submit = dyn Fn(&mut Window, &mut App);
 /// A dialog listing [`LaterPreset`]s; `on_pick` gets the chosen moment.
 pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Window, cx: &mut App) {
     // Custom moment: "YYYY-MM-DD HH:MM" (local time), Enter or "Set".
-    let custom = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD HH:MM"));
+    let custom = cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, "YYYY-MM-DD HH:MM")));
     let submit: Rc<Submit> = {
         let (custom, on_pick) = (custom.clone(), on_pick.clone());
         Rc::new(move |window, cx| {
@@ -247,7 +249,7 @@ pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Windo
                     window.close_dialog(cx);
                     on_pick(at, window, cx);
                 }
-                Err(err) => window.push_notification(err, cx),
+                Err(err) => window.push_notification(tr(cx, err), cx),
             }
         })
     };
@@ -286,7 +288,12 @@ pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Windo
                             .size(ICON_SIZE_SM)
                             .text_color(t.text_muted),
                     )
-                    .child(div().flex_1().text_size(TEXT_SM).child(preset.label()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(TEXT_SM)
+                            .child(tr(cx, preset.label())),
+                    )
                     .child(
                         div().text_size(TEXT_XS).text_color(t.text_subtle).child(
                             at.with_timezone(&Local)
@@ -301,7 +308,7 @@ pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Windo
             });
         let set = submit.clone();
         dialog
-            .w(px(360.))
+            .w(DIALOG_SM)
             .title(title)
             .child(div().flex().flex_col().gap(SPACE_1).children(rows))
             .child(
@@ -317,7 +324,7 @@ pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Windo
                         div()
                             .text_size(TEXT_XS)
                             .text_color(t.text_subtle)
-                            .child("Custom date and time"),
+                            .child(tr(cx, "Custom date and time")),
                     )
                     .child(
                         div()
@@ -329,7 +336,7 @@ pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Windo
                             .child(
                                 Button::new("later-custom")
                                     .primary()
-                                    .label("Set")
+                                    .label(tr(cx, "Set"))
                                     .on_click(move |_, window, cx| set(window, cx)),
                             ),
                     ),
@@ -338,20 +345,21 @@ pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Windo
 }
 
 /// Parses a local "YYYY-MM-DD HH:MM" (or just a date: 08:00) that must be in the future.
-fn parse_when(text: &str, now: DateTime<Local>) -> Result<DateTime<Utc>, String> {
+/// The error is an English message for `tr`.
+fn parse_when(text: &str, now: DateTime<Local>) -> Result<DateTime<Utc>, &'static str> {
     let text = text.trim();
     let naive = NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M")
         .or_else(|_| {
             NaiveDate::parse_from_str(text, "%Y-%m-%d")
                 .map(|date| date.and_time(NaiveTime::from_hms_opt(8, 0, 0).unwrap_or_default()))
         })
-        .map_err(|_| "Use the format YYYY-MM-DD HH:MM".to_owned())?;
+        .map_err(|_| "Use the format YYYY-MM-DD HH:MM")?;
     let at = naive
         .and_local_timezone(Local)
         .earliest()
-        .ok_or_else(|| "That time does not exist here (clock change)".to_owned())?;
+        .ok_or("That time does not exist here (clock change)")?;
     if at <= now {
-        return Err("Pick a moment in the future".to_owned());
+        return Err("Pick a moment in the future");
     }
     Ok(at.with_timezone(&Utc))
 }
@@ -363,10 +371,9 @@ pub fn schedule_send(state: &Entity<AppState>, message_id: Id, at: DateTime<Utc>
     if save(state, &later, cx) {
         let when = at.with_timezone(&Local).format("%a %d %b, %H:%M");
         state.update(cx, |state, cx| {
-            state.notify_info(
-                format!("Will be sent {when} (kept in Drafts until then)"),
-                cx,
-            )
+            let message = tr(cx, "Will be sent {} (kept in Drafts until then)")
+                .replace("{}", &when.to_string());
+            state.notify_info(message, cx)
         });
     }
 }
@@ -376,7 +383,7 @@ pub fn toggle_mute_selected(state: &Entity<AppState>, cx: &mut App) {
     match state.read(cx).selected_message() {
         Some(id) => toggle_mute(state, id, cx),
         None => state.update(cx, |state, cx| {
-            state.notify_info("Select a message first", cx)
+            state.notify_info(tr(cx, "Select a message first"), cx)
         }),
     }
 }
@@ -386,7 +393,7 @@ pub fn toggle_mute(state: &Entity<AppState>, id: Id, cx: &mut App) {
     let message = state.read(cx).store().get::<Message>(id).ok().flatten();
     let Some(message) = message.filter(|message| !message.thread_id.is_empty()) else {
         return state.update(cx, |state, cx| {
-            state.notify_info("Select a message first", cx)
+            state.notify_info(tr(cx, "Select a message first"), cx)
         });
     };
     let mut later = load(state, cx);
@@ -415,9 +422,9 @@ pub fn toggle_mute(state: &Entity<AppState>, id: Id, cx: &mut App) {
                     cx,
                 );
             }
-            state.notify_info("Conversation muted: new replies skip the inbox", cx);
+            state.notify_info(tr(cx, "Conversation muted: new replies skip the inbox"), cx);
         } else {
-            state.notify_info("Conversation unmuted", cx);
+            state.notify_info(tr(cx, "Conversation unmuted"), cx);
         }
     });
 }

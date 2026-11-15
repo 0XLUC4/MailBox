@@ -11,7 +11,8 @@ use crate::dialogs::account::open_add_account;
 use crate::settings::controls::segmented;
 use crate::settings::{prefs, tr, update_settings};
 use crate::theme::{
-    ICON_SIZE, RADIUS_XL, SPACE_1, SPACE_2, SPACE_3, SPACE_6, TEXT_2XL, TEXT_MD, TEXT_SM, theme,
+    DIALOG_MD, ICON_SIZE, RADIUS_XL, SPACE_1, SPACE_2, SPACE_3, SPACE_6, TEXT_2XL, TEXT_MD,
+    TEXT_SM, theme,
 };
 use crate::titlebar::app_icon;
 
@@ -72,7 +73,7 @@ pub fn onboarding(state: Entity<AppState>, cx: &App) -> Div {
         .bg(t.background)
         .child(
             div()
-                .w(px(460.))
+                .w(DIALOG_MD)
                 .flex()
                 .flex_col()
                 .gap(SPACE_6)

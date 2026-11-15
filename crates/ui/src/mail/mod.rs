@@ -30,6 +30,7 @@ use mailbox_core::Id;
 
 use crate::app_state::AppState;
 use crate::components::{Icon, IconName};
+use crate::settings::tr;
 use crate::theme::{ICON_SIZE_SM, RADIUS_LG, SPACE_1_5, SPACE_2, SPACE_3, TEXT_SM, TEXT_XS, theme};
 
 gpui::actions!(
@@ -145,7 +146,7 @@ impl Render for DraggedMessages {
                     .flex_shrink_0()
                     .text_size(TEXT_XS)
                     .text_color(t.text_subtle)
-                    .child("Ctrl to copy"),
+                    .child(tr(cx, "Ctrl to copy")),
             )
     }
 }

@@ -11,14 +11,15 @@ use mailbox_core::{Account, Command};
 use crate::app_state::AppState;
 use crate::components::{Button, IconName};
 use crate::dialogs::field;
-use crate::theme::{SPACE_2, SPACE_3, TEXT_XS, theme};
+use crate::settings::tr;
+use crate::theme::{DIALOG_LG, SPACE_2, SPACE_3, TEXT_XS, theme};
 
 /// Opens the dialog on the current account (the selected folder's, else the first one).
 pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
     let accounts = state.read(cx).store().list_accounts().unwrap_or_default();
     if accounts.is_empty() {
         return state.update(cx, |state, cx| {
-            state.notify_info("Add an account first", cx)
+            state.notify_info(tr(cx, "Add an account first"), cx)
         });
     }
     let current = crate::actions::current_account(&state, cx);
@@ -27,8 +28,11 @@ pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
         .position(|account| Some(account.id) == current)
         .unwrap_or(0);
     let form = cx.new(|cx| SignatureForm::new(state, accounts, index, window, cx));
-    window.open_dialog(cx, move |dialog, _, _| {
-        dialog.w(px(520.)).title("Signatures").child(form.clone())
+    window.open_dialog(cx, move |dialog, _, cx| {
+        dialog
+            .w(DIALOG_LG)
+            .title(tr(cx, "Signatures"))
+            .child(form.clone())
     });
 }
 
@@ -52,7 +56,7 @@ impl SignatureForm {
             cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .auto_grow(3, 8)
-                    .placeholder(placeholder)
+                    .placeholder(tr(cx, placeholder))
             })
         };
         let mut form = Self {
@@ -122,8 +126,9 @@ impl SignatureForm {
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.store(cx) {
-            self.state
-                .update(cx, |state, cx| state.notify_info("Signature saved", cx));
+            self.state.update(cx, |state, cx| {
+                state.notify_info(tr(cx, "Signature saved"), cx)
+            });
             window.close_dialog(cx);
         }
     }
@@ -153,13 +158,18 @@ impl Render for SignatureForm {
             .flex_col()
             .gap(SPACE_3)
             .when_some(tabs, |el, tabs| el.child(tabs))
-            .child(div().text_size(TEXT_XS).text_color(t.text_subtle).child(
+            .child(div().text_size(TEXT_XS).text_color(t.text_subtle).child(tr(
+                cx,
                 "Added at the end of the message. Formatting: **bold**, *italic*, \
                      [text](https://link).",
-            ))
-            .child(field("New messages", Textarea::new(&self.new_message), cx))
+            )))
             .child(field(
-                "Replies and forwards",
+                tr(cx, "New messages"),
+                Textarea::new(&self.new_message),
+                cx,
+            ))
+            .child(field(
+                tr(cx, "Replies and forwards"),
                 Textarea::new(&self.reply),
                 cx,
             ))
@@ -171,14 +181,14 @@ impl Render for SignatureForm {
                     .gap(SPACE_2)
                     .child(
                         Button::new("signature-cancel")
-                            .label("Cancel")
+                            .label(tr(cx, "Cancel"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("signature-save")
                             .primary()
                             .icon(IconName::Check)
-                            .label("Save")
+                            .label(tr(cx, "Save"))
                             .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     ),
             )

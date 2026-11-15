@@ -14,7 +14,8 @@ use mailbox_core::{Address, Id, Message};
 use crate::app_state::AppState;
 use crate::auto_reply::{account_and_drafts, queue_plain_draft};
 use crate::components::{Button, IconName};
-use crate::theme::{SPACE_2, SPACE_3, TEXT_SM, theme};
+use crate::settings::tr;
+use crate::theme::{DIALOG_MD, DIALOG_SM, SPACE_2, SPACE_3, TEXT_SM, theme};
 
 fn load(state: &AppState) -> Receipts {
     Receipts::load(state.store()).unwrap_or_default()
@@ -108,7 +109,7 @@ fn ask(state: Entity<AppState>, id: Id, to: Address, window: &mut Window, cx: &m
         let choice = |label: &'static str, policy: Option<ReceiptPolicy>, send: bool| {
             let (state, to) = (state.clone(), to.clone());
             Button::new(label)
-                .label(label)
+                .label(tr(cx, label))
                 .on_click(move |_, window, cx| {
                     if let Some(policy) = policy {
                         set_policy(&state, policy, cx);
@@ -117,37 +118,37 @@ fn ask(state: Entity<AppState>, id: Id, to: Address, window: &mut Window, cx: &m
                     window.close_dialog(cx);
                 })
         };
-        dialog.w(px(440.)).title("Read receipt requested").child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(SPACE_3)
-                .child(
-                    div()
-                        .text_size(TEXT_SM)
-                        .text_color(t.text_muted)
-                        .child(format!(
-                            "{} asked to be told when you read this message.",
-                            to.email
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .justify_end()
-                        .gap(SPACE_2)
-                        .child(choice("Never send", Some(ReceiptPolicy::Never), false))
-                        .child(choice("Always send", Some(ReceiptPolicy::Always), true))
-                        .child(choice("Ignore", None, false))
-                        .child(
-                            choice("Send receipt", None, true)
-                                .primary()
-                                .icon(IconName::MailCheck),
+        dialog
+            .w(DIALOG_MD)
+            .title(tr(cx, "Read receipt requested"))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_3)
+                    .child(
+                        div().text_size(TEXT_SM).text_color(t.text_muted).child(
+                            tr(cx, "{} asked to be told when you read this message.")
+                                .replace("{}", &to.email),
                         ),
-                ),
-        )
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .justify_end()
+                            .gap(SPACE_2)
+                            .child(choice("Never send", Some(ReceiptPolicy::Never), false))
+                            .child(choice("Always send", Some(ReceiptPolicy::Always), true))
+                            .child(choice("Ignore", None, false))
+                            .child(
+                                choice("Send receipt", None, true)
+                                    .primary()
+                                    .icon(IconName::MailCheck),
+                            ),
+                    ),
+            )
     });
 }
 
@@ -158,7 +159,7 @@ pub fn open_policy(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
         let option = |label: &'static str, policy: ReceiptPolicy| {
             let state = state.clone();
             let button = Button::new(label)
-                .label(label)
+                .label(tr(cx, label))
                 .on_click(move |_, window, cx| {
                     set_policy(&state, policy, cx);
                     window.close_dialog(cx);
@@ -169,7 +170,7 @@ pub fn open_policy(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
                 button
             }
         };
-        dialog.w(px(400.)).title("Read receipts").child(
+        dialog.w(DIALOG_SM).title(tr(cx, "Read receipts")).child(
             div()
                 .flex()
                 .flex_col()
@@ -177,7 +178,7 @@ pub fn open_policy(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
                 .child(
                     div()
                         .text_size(TEXT_SM)
-                        .child("When a message you open asks for a read receipt:"),
+                        .child(tr(cx, "When a message you open asks for a read receipt:")),
                 )
                 .child(option("Ask me every time", ReceiptPolicy::Ask))
                 .child(option("Always send a receipt", ReceiptPolicy::Always))

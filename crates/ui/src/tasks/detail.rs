@@ -5,17 +5,19 @@ use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Timelike, Utc};
 use gpui::component::date_picker::{DatePicker, DatePickerEvent, DatePickerState};
 use gpui::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui::component::time_field::TimePrecision;
+use gpui::component::tooltip::Tooltip;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::todo::{self, Repeat, Step, TaskCard, TaskList};
 use mailbox_core::{Command, Id, Message, TaskCommand};
 
-use super::{Selection, TasksView, check_circle, day_label, option_chip, reminder_label};
+use super::{Selection, TasksView, check_circle, day_text, option_chip, reminder_label};
 use crate::app_state::Module;
-use crate::components::{Button, Icon, IconButton, IconName};
+use crate::components::{Banner, Button, Icon, IconButton, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE, ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2,
-    SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, Theme,
+    ICON_SIZE, ICON_SIZE_SM, ICON_SIZE_XS, PANE_HEADER_HEIGHT, RADIUS_FULL, RADIUS_LG, RADIUS_MD,
+    SPACE_1, SPACE_1_5, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, Theme,
 };
 
 /// Inputs of the detail panel for one task; edits are committed on Enter / blur.
@@ -41,15 +43,15 @@ impl TaskDetail {
             .map(|at| at.with_timezone(&Local).naive_local());
         let title = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Title")
+                .placeholder(tr(cx, "Title"))
                 .default_value(title_text)
         });
         let notes = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Add a note")
+                .placeholder(tr(cx, "Add a note"))
                 .default_value(notes_text)
         });
-        let new_step = cx.new(|cx| InputState::new(window, cx).placeholder("Add step"));
+        let new_step = cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, "Add step")));
         let due = cx.new(|cx| {
             let mut picker = DatePickerState::new(window, cx)
                 .date_format("%a %e %b %Y")
@@ -191,6 +193,9 @@ impl TasksView {
         let completed = card.task.completed;
         let important = card.is_important();
         let selection = Selection::Task(id);
+        let step_tooltip = tr(cx, "Mark as complete");
+        let remove_step = tr(cx, "Remove step");
+        let clear = tr(cx, "Clear");
 
         // ----- title + steps -----
         let steps = card.details.steps.iter().enumerate().map(|(index, step)| {
@@ -216,10 +221,15 @@ impl TasksView {
                         .rounded(RADIUS_FULL)
                         .border_1()
                         .cursor_pointer()
+                        .when(!done, |el| {
+                            el.tooltip(move |window, cx| {
+                                Tooltip::new(step_tooltip).build(window, cx)
+                            })
+                        })
                         .when(done, |el| {
                             el.bg(t.accent).border_color(t.accent).child(
                                 Icon::new(IconName::Check)
-                                    .size(px(10.))
+                                    .size(ICON_SIZE_XS)
                                     .text_color(t.on_accent),
                             )
                         })
@@ -246,26 +256,21 @@ impl TasksView {
                         .child(step.title.clone()),
                 )
                 .child(
-                    div()
-                        .opacity(0.)
-                        .group_hover("step-row", |s| s.opacity(1.))
-                        .child(
-                            IconButton::new(("remove-step", index as u64), IconName::X)
-                                .size(px(22.))
-                                .icon_size(ICON_SIZE_SM)
-                                .tooltip("Remove step")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.update_task(
-                                        id,
-                                        move |card| {
-                                            if index < card.details.steps.len() {
-                                                card.details.steps.remove(index);
-                                            }
-                                        },
-                                        cx,
-                                    )
-                                })),
-                        ),
+                    IconButton::new(("remove-step", index as u64), IconName::X)
+                        .size(px(22.))
+                        .icon_size(ICON_SIZE_SM)
+                        .tooltip(remove_step)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.update_task(
+                                id,
+                                move |card| {
+                                    if index < card.details.steps.len() {
+                                        card.details.steps.remove(index);
+                                    }
+                                },
+                                cx,
+                            )
+                        })),
                 )
         });
         let title_card = panel_card(t)
@@ -275,15 +280,27 @@ impl TasksView {
                     .items_center()
                     .gap(SPACE_2)
                     .child(
-                        check_circle("detail-check", completed, t).on_click(cx.listener(
-                            move |this, _, _, cx| {
+                        check_circle(
+                            "detail-check",
+                            completed,
+                            false,
+                            tr(
+                                cx,
                                 if completed {
-                                    this.reopen(id, cx);
+                                    "Mark as not complete"
                                 } else {
-                                    this.check(selection, cx);
-                                }
-                            },
-                        )),
+                                    "Mark as complete"
+                                },
+                            ),
+                            t,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if completed {
+                                this.reopen(id, cx);
+                            } else {
+                                this.check(selection, cx);
+                            }
+                        })),
                     )
                     .child(
                         div()
@@ -294,11 +311,14 @@ impl TasksView {
                     .child(
                         IconButton::new("detail-star", IconName::Star)
                             .active(important)
-                            .tooltip(if important {
-                                "Remove importance"
-                            } else {
-                                "Mark as important"
-                            })
+                            .tooltip(tr(
+                                cx,
+                                if important {
+                                    "Remove importance"
+                                } else {
+                                    "Mark as important"
+                                },
+                            ))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.toggle_important(id, cx)),
                             ),
@@ -319,11 +339,14 @@ impl TasksView {
             action_row(
                 "detail-my-day",
                 IconName::Sun,
-                if in_my_day {
-                    "Added to My Day"
-                } else {
-                    "Add to My Day"
-                }
+                tr(
+                    cx,
+                    if in_my_day {
+                        "Added to My Day"
+                    } else {
+                        "Add to My Day"
+                    },
+                )
                 .to_owned(),
                 in_my_day,
                 t,
@@ -340,17 +363,17 @@ impl TasksView {
         // ----- reminder -----
         let reminder = card.details.reminder;
         let reminder_choices: Vec<(&'static str, Option<DateTime<Utc>>)> = vec![
-            ("Later today", later_today()),
-            ("Tomorrow 9:00", at_local(next_day(today), 9)),
-            ("Next week", at_local(next_monday(today), 9)),
+            (tr(cx, "Later today"), later_today()),
+            (tr(cx, "Tomorrow 9:00"), at_local(next_day(today), 9)),
+            (tr(cx, "Next week"), at_local(next_monday(today), 9)),
         ];
         let reminder_card = panel_card(t)
             .child(action_row(
                 "detail-reminder",
                 IconName::Bell,
                 reminder.map_or_else(
-                    || "Remind me".to_owned(),
-                    |at| format!("Remind me {}", reminder_label(at, today)),
+                    || tr(cx, "Remind me").to_owned(),
+                    |at| tr(cx, "Remind me {}").replace("{}", &reminder_label(at, today, cx)),
                 ),
                 reminder.is_some(),
                 t,
@@ -382,6 +405,7 @@ impl TasksView {
                     .when(reminder.is_some(), |el| {
                         el.child(clear_button(
                             "clear-reminder",
+                            clear,
                             cx.listener(move |this, _, _, cx| {
                                 this.update_task(id, |card| card.details.reminder = None, cx)
                             }),
@@ -391,7 +415,7 @@ impl TasksView {
             .child(
                 div().px(SPACE_1).child(
                     DatePicker::new(&detail.remind)
-                        .placeholder("Pick a date and time")
+                        .placeholder(tr(cx, "Pick a date and time"))
                         .cleanable(true),
                 ),
             );
@@ -399,9 +423,9 @@ impl TasksView {
         // ----- due date -----
         let due = card.task.due;
         let due_choices = [
-            ("Today", today),
-            ("Tomorrow", next_day(today)),
-            ("Next week", next_monday(today)),
+            (tr(cx, "Today"), today),
+            (tr(cx, "Tomorrow"), next_day(today)),
+            (tr(cx, "Next week"), next_monday(today)),
         ];
         let overdue = card.is_overdue(today);
         let due_card =
@@ -411,8 +435,8 @@ impl TasksView {
                         "detail-due",
                         IconName::CalendarDays,
                         due.map_or_else(
-                            || "Add due date".to_owned(),
-                            |due| format!("Due {}", day_label(due, today)),
+                            || tr(cx, "Add due date").to_owned(),
+                            |due| tr(cx, "Due {}").replace("{}", &day_text(due, today, cx)),
                         ),
                         due.is_some(),
                         t,
@@ -443,6 +467,7 @@ impl TasksView {
                         .when(due.is_some(), |el| {
                             el.child(clear_button(
                                 "clear-due",
+                                clear,
                                 cx.listener(move |this, _, _, cx| {
                                     this.update_task(id, |card| card.task.due = None, cx)
                                 }),
@@ -452,7 +477,7 @@ impl TasksView {
                 .child(
                     div().px(SPACE_1).child(
                         DatePicker::new(&detail.due)
-                            .placeholder("Pick a due date")
+                            .placeholder(tr(cx, "Pick a due date"))
                             .cleanable(true),
                     ),
                 );
@@ -464,8 +489,8 @@ impl TasksView {
                 "detail-repeat",
                 IconName::Repeat,
                 repeat.map_or_else(
-                    || "Repeat".to_owned(),
-                    |repeat| format!("Repeats {}", repeat.label().to_lowercase()),
+                    || tr(cx, "Repeat").to_owned(),
+                    |repeat| tr(cx, "Repeat: {}").replace("{}", tr(cx, repeat.label())),
                 ),
                 repeat.is_some(),
                 t,
@@ -475,7 +500,7 @@ impl TasksView {
                     .children(Repeat::ALL.into_iter().enumerate().map(|(index, choice)| {
                         option_chip(
                             ("repeat-choice", index as u64),
-                            choice.label(),
+                            tr(cx, choice.label()),
                             repeat == Some(choice),
                             t,
                         )
@@ -496,6 +521,7 @@ impl TasksView {
                     .when(repeat.is_some(), |el| {
                         el.child(clear_button(
                             "clear-repeat",
+                            clear,
                             cx.listener(move |this, _, _, cx| {
                                 this.update_task(id, |card| card.details.repeat = None, cx)
                             }),
@@ -505,7 +531,7 @@ impl TasksView {
 
         // ----- list -----
         let list_id = card.details.list_id;
-        let list_chips = std::iter::once((None, "Tasks".to_owned()))
+        let list_chips = std::iter::once((None, tr(cx, "Tasks").to_owned()))
             .chain(lists.iter().map(|list| (Some(list.id), list.name.clone())))
             .enumerate()
             .map(|(index, (target, name))| {
@@ -516,7 +542,7 @@ impl TasksView {
                 )
             });
         let list_card = panel_card(t)
-            .child(section_title("List", t))
+            .child(section_title(tr(cx, "List"), t))
             .child(chip_row().children(list_chips));
 
         // ----- linked email -----
@@ -550,38 +576,47 @@ impl TasksView {
                                         .truncate()
                                         .text_size(TEXT_XS)
                                         .text_color(t.text_muted)
-                                        .child(format!("From {}", message.from.display())),
+                                        .child(
+                                            tr(cx, "From {}")
+                                                .replace("{}", &message.from.display()),
+                                        ),
                                 ),
                         )
                         .child(
                             Button::new("open-linked-email")
                                 .compact()
-                                .label("Open")
+                                .label(tr(cx, "Open"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.open_message(message_id, folder_id, cx)
                                 })),
                         )
                         .into_any_element()
                 }
-                None => div()
-                    .text_size(TEXT_SM)
-                    .text_color(t.text_subtle)
-                    .child("The linked email no longer exists.")
-                    .into_any_element(),
+                None => Banner::warning(
+                    "linked-email-missing",
+                    tr(cx, "The linked email no longer exists"),
+                )
+                .into_any_element(),
             };
             panel_card(t)
-                .child(section_title("Linked email", t))
+                .child(section_title(tr(cx, "Linked email"), t))
                 .child(body)
         });
 
         // ----- footer -----
         let footer_text = match card.details.completed_at {
-            Some(at) if completed => {
-                format!("Completed {}", at.with_timezone(&Local).format("%a %-d %b"))
-            }
-            _ => format!(
-                "Created {}",
-                card.task.created.with_timezone(&Local).format("%a %-d %b")
+            Some(at) if completed => tr(cx, "Completed {}").replace(
+                "{}",
+                &at.with_timezone(&Local).format("%a %-d %b").to_string(),
+            ),
+            _ => tr(cx, "Created {}").replace(
+                "{}",
+                &card
+                    .task
+                    .created
+                    .with_timezone(&Local)
+                    .format("%a %-d %b")
+                    .to_string(),
             ),
         };
 
@@ -611,7 +646,7 @@ impl TasksView {
                                 .when_some(linked_card, |el, linked| el.child(linked))
                                 .child(
                                     panel_card(t)
-                                        .child(section_title("Notes", t))
+                                        .child(section_title(tr(cx, "Notes"), t))
                                         .child(Textarea::new(&detail.notes).h(px(120.))),
                                 ),
                         ),
@@ -621,13 +656,13 @@ impl TasksView {
                         .flex()
                         .items_center()
                         .gap(SPACE_2)
-                        .h(px(44.))
+                        .h(PANE_HEADER_HEIGHT)
                         .px(SPACE_3)
                         .border_t_1()
                         .border_color(t.border_subtle)
                         .child(
                             IconButton::new("close-detail", IconName::PanelRightClose)
-                                .tooltip("Close")
+                                .tooltip(tr(cx, "Close"))
                                 .on_click(cx.listener(|this, _, _, cx| this.close_detail(cx))),
                         )
                         .child(
@@ -640,7 +675,7 @@ impl TasksView {
                         )
                         .child(
                             IconButton::new("delete-task", IconName::Trash)
-                                .tooltip("Delete task")
+                                .tooltip(tr(cx, "Delete task"))
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.delete_task(id, cx)),
                                 ),
@@ -659,7 +694,7 @@ impl TasksView {
     ) -> AnyElement {
         let (message_id, folder_id) = (message.id, message.folder_id);
         let subject = if message.subject.trim().is_empty() {
-            "(no subject)".to_owned()
+            tr(cx, "(no subject)").to_owned()
         } else {
             message.subject.clone()
         };
@@ -685,8 +720,8 @@ impl TasksView {
                                     .text_size(TEXT_XS)
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(t.danger)
-                                    .child(Icon::new(IconName::Flag).size(px(12.)))
-                                    .child("FLAGGED EMAIL"),
+                                    .child(Icon::new(IconName::Flag).size(ICON_SIZE_XS))
+                                    .child(tr(cx, "Flagged email")),
                             )
                             .child(
                                 div()
@@ -696,8 +731,8 @@ impl TasksView {
                             )
                             .child(div().text_size(TEXT_SM).text_color(t.text_muted).child(
                                 format!(
-                                    "From {} - {}",
-                                    message.from.display(),
+                                    "{} · {}",
+                                    tr(cx, "From {}").replace("{}", &message.from.display()),
                                     message.date.with_timezone(&Local).format("%a %-d %b %Y, %H:%M")
                                 ),
                             ))
@@ -718,7 +753,7 @@ impl TasksView {
                                         Button::new("flag-open")
                                             .primary()
                                             .icon(IconName::MailOpen)
-                                            .label("Open email")
+                                            .label(tr(cx, "Open email"))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.open_message(message_id, folder_id, cx)
                                             })),
@@ -726,7 +761,7 @@ impl TasksView {
                                     .child(
                                         Button::new("flag-to-task")
                                             .icon(IconName::ListPlus)
-                                            .label("Make it a task")
+                                            .label(tr(cx, "Make it a task"))
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.task_from_flag(message_id, window, cx)
                                             })),
@@ -735,7 +770,7 @@ impl TasksView {
                                         Button::new("flag-complete")
                                             .ghost()
                                             .icon(IconName::Check)
-                                            .label("Mark complete")
+                                            .label(tr(cx, "Mark as complete"))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.check(Selection::Message(message_id), cx);
                                                 this.close_detail(cx);
@@ -748,13 +783,13 @@ impl TasksView {
                 div()
                     .flex()
                     .items_center()
-                    .h(px(44.))
+                    .h(PANE_HEADER_HEIGHT)
                     .px(SPACE_3)
                     .border_t_1()
                     .border_color(t.border_subtle)
                     .child(
                         IconButton::new("close-flag-detail", IconName::PanelRightClose)
-                            .tooltip("Close")
+                            .tooltip(tr(cx, "Close"))
                             .on_click(cx.listener(|this, _, _, cx| this.close_detail(cx))),
                     ),
             )
@@ -855,12 +890,13 @@ fn chip_row() -> Div {
 
 fn clear_button(
     id: &'static str,
+    tooltip: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     IconButton::new(id, IconName::X)
         .size(px(24.))
         .icon_size(ICON_SIZE_SM)
-        .tooltip("Clear")
+        .tooltip(tooltip)
         .on_click(on_click)
 }
 

@@ -9,12 +9,23 @@ use gpui::*;
 use super::layout::{self, ViewKind};
 use super::{CalendarView, ViewData};
 use crate::components::{Button, Icon, IconButton, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    RADIUS_FULL, RADIUS_MD, RADIUS_SM, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, TEXT_MD, TEXT_SM,
-    TEXT_XS, Theme, hex,
+    ICON_SIZE_SM, ICON_SIZE_XS, RADIUS_FULL, RADIUS_MD, RADIUS_SM, SPACE_0_5, SPACE_1, SPACE_2,
+    SPACE_3, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex, text_on,
 };
 
 pub(super) const SIDEBAR_WIDTH: f32 = 240.;
+
+const WEEKDAYS: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
 
 impl CalendarView {
     pub(super) fn render_sidebar(
@@ -32,7 +43,7 @@ impl CalendarView {
             .cloned()
             .collect();
         if !local.is_empty() {
-            groups.push(("ON THIS COMPUTER".to_owned(), local));
+            groups.push((tr(cx, "On this computer").to_uppercase(), local));
         }
         for account in &data.accounts {
             let calendars: Vec<_> = data
@@ -69,6 +80,11 @@ impl CalendarView {
                         let visible = !self.hidden.contains(&id);
                         let color = hex(calendar.color);
                         let group = SharedString::from(format!("cal-row-{id}"));
+                        // Keep the edit button visible while this calendar's card is open.
+                        let editing = self
+                            .calendar_edit
+                            .as_ref()
+                            .is_some_and(|edit| edit.id == Some(id));
                         div()
                             .id(("cal-row", id as u64))
                             .group(group.clone())
@@ -94,14 +110,14 @@ impl CalendarView {
                                     .items_center()
                                     .justify_center()
                                     .size(px(14.))
-                                    .rounded(px(3.))
+                                    .rounded(RADIUS_SM)
                                     .border_1()
                                     .border_color(color)
                                     .when(visible, |el| {
                                         el.bg(color).child(
                                             Icon::new(IconName::Check)
-                                                .size(px(10.))
-                                                .text_color(t.on_accent),
+                                                .size(ICON_SIZE_XS)
+                                                .text_color(text_on(color)),
                                         )
                                     }),
                             )
@@ -116,13 +132,13 @@ impl CalendarView {
                             )
                             .child(
                                 div()
-                                    .opacity(0.)
+                                    .opacity(if editing { 1. } else { 0. })
                                     .group_hover(group, |style| style.opacity(1.))
                                     .child(
                                         IconButton::new(("cal-edit", id as u64), IconName::Pencil)
                                             .size(px(22.))
-                                            .icon_size(px(12.))
-                                            .tooltip("Edit calendar")
+                                            .icon_size(ICON_SIZE_XS)
+                                            .tooltip(tr(cx, "Edit calendar"))
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 cx.stop_propagation();
                                                 this.edit_calendar(Some(id), window, cx);
@@ -148,7 +164,7 @@ impl CalendarView {
                     Button::new("cal-new")
                         .primary()
                         .icon(IconName::Plus)
-                        .label("New event")
+                        .label(tr(cx, "New event"))
                         .on_click(cx.listener(|this, _, _, cx| this.new_event(cx))),
                 ),
             )
@@ -170,6 +186,16 @@ impl CalendarView {
                     .px(SPACE_2)
                     .py(SPACE_2)
                     .gap(SPACE_1)
+                    .when(calendar_groups.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .px(SPACE_2)
+                                .py(SPACE_1)
+                                .text_size(TEXT_SM)
+                                .text_color(t.text_muted)
+                                .child(tr(cx, "No calendars yet")),
+                        )
+                    })
                     .children(calendar_groups)
                     .child(
                         div()
@@ -181,14 +207,14 @@ impl CalendarView {
                                 Button::new("cal-add")
                                     .ghost()
                                     .icon(IconName::Plus)
-                                    .label("Add calendar")
+                                    .label(tr(cx, "Add calendar"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.edit_calendar(None, window, cx)
                                     })),
                             )
                             .child(
                                 IconButton::new("cal-add-dav", IconName::Globe)
-                                    .tooltip("Add a CalDAV account")
+                                    .tooltip(tr(cx, "Add a CalDAV account"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         crate::dav_bridge::open_add_dav_account(
                                             this.state.clone(),
@@ -222,7 +248,7 @@ impl CalendarView {
                         } else {
                             IconName::Layers
                         })
-                        .size(px(14.))
+                        .size(ICON_SIZE_SM)
                         .text_color(t.text_muted),
                     )
                     .child(
@@ -230,11 +256,14 @@ impl CalendarView {
                             .flex_1()
                             .text_size(TEXT_SM)
                             .text_color(t.text_muted)
-                            .child(if side_by_side {
-                                "Side by side"
-                            } else {
-                                "Overlay"
-                            }),
+                            .child(tr(
+                                cx,
+                                if side_by_side {
+                                    "Side by side"
+                                } else {
+                                    "Overlay"
+                                },
+                            )),
                     )
                     .child(switch(side_by_side, t)),
             )
@@ -311,31 +340,31 @@ impl CalendarView {
             .child(
                 IconButton::new(("mini-prev", base as u64), IconName::ChevronLeft)
                     .size(px(24.))
-                    .icon_size(px(14.))
+                    .icon_size(ICON_SIZE_SM)
+                    .tooltip(tr(cx, "Previous month"))
                     .on_click(cx.listener(move |this, _, _, cx| prev(this, cx))),
             )
             .child(
                 IconButton::new(("mini-next", base as u64), IconName::ChevronRight)
                     .size(px(24.))
-                    .icon_size(px(14.))
+                    .icon_size(ICON_SIZE_SM)
+                    .tooltip(tr(cx, "Next month"))
                     .on_click(cx.listener(move |this, _, _, cx| next(this, cx))),
             );
 
-        let weekday_row =
+        let weekday_row = div().flex().flex_row().children(WEEKDAYS.map(|day| {
+            // First letter of the translated weekday name.
+            let label: String = tr(cx, day).chars().take(1).collect();
             div()
+                .flex_1()
+                .h(px(22.))
                 .flex()
-                .flex_row()
-                .children(["M", "T", "W", "T", "F", "S", "S"].map(|label| {
-                    div()
-                        .flex_1()
-                        .h(px(22.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(TEXT_XS)
-                        .text_color(t.text_subtle)
-                        .child(label)
-                }));
+                .items_center()
+                .justify_center()
+                .text_size(TEXT_XS)
+                .text_color(t.text_subtle)
+                .child(label)
+        }));
 
         let weeks = grid.chunks(7).enumerate().map(|(week_index, week)| {
             div()
@@ -406,7 +435,7 @@ impl CalendarView {
                         Button::new("picker-today")
                             .ghost()
                             .compact()
-                            .label("Today")
+                            .label(tr(cx, "Today"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.picker = None;
                                 this.today(cx);

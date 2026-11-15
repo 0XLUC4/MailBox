@@ -11,6 +11,7 @@ use mailbox_core::{Command, FolderRole, Id, Message};
 
 use crate::app_state::AppState;
 use crate::compose::{ComposeRequest, open_compose};
+use crate::settings::tr;
 
 /// Runs a built command, or reports the error that prevented building it.
 pub fn run(state: &Entity<AppState>, command: mailbox_core::Result<Command>, cx: &mut App) -> bool {
@@ -168,19 +169,20 @@ pub fn delete(state: &Entity<AppState>, ids: Vec<Id>, window: &mut Window, cx: &
         Ok(Deletion::Permanent(command)) => {
             let count = ids.len();
             let state = state.clone();
-            window.open_alert_dialog(cx, move |alert, _, _| {
+            window.open_alert_dialog(cx, move |alert, _, cx| {
                 let state = state.clone();
                 let command = command.clone();
                 let ids = ids.clone();
                 alert
-                    .title("Delete permanently?")
+                    .title(tr(cx, "Delete permanently?"))
                     .description(if count == 1 {
-                        "This message will be removed from Deleted Items.".to_owned()
+                        tr(cx, "This message will be removed from Deleted Items.").to_owned()
                     } else {
-                        format!("These {count} messages will be removed from Deleted Items.")
+                        tr(cx, "These {} messages will be removed from Deleted Items.")
+                            .replace("{}", &count.to_string())
                     })
                     .confirm()
-                    .ok_text("Delete")
+                    .ok_text(tr(cx, "Delete"))
                     .ok_variant(ButtonVariant::Danger)
                     .on_ok(move |_, _, cx| {
                         if run(&state, Ok(command.clone()), cx) {

@@ -22,8 +22,9 @@ use mailbox_core::{
 
 use crate::app_state::AppState;
 use crate::components::{Button, ButtonVariant, Icon, IconName};
+use crate::settings::tr;
 use crate::sync_bridge;
-use crate::theme::{RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, TEXT_MD, TEXT_SM, theme};
+use crate::theme::{ICON_SIZE, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, TEXT_MD, TEXT_SM, theme};
 
 /// A calendar file found in a message.
 pub struct IncomingInvitation {
@@ -90,10 +91,10 @@ pub fn queue_calendar_mail(
 ) -> Result<(), String> {
     let (name, mime, content) = attachment;
     if to.is_empty() {
-        return Err("Nobody to send the invitation to".into());
+        return Err(tr(cx, "Nobody to send the invitation to").into());
     }
-    let outbox =
-        sync_bridge::outbox_folder(account.id, cx).ok_or("The mail Outbox is not available")?;
+    let outbox = sync_bridge::outbox_folder(account.id, cx)
+        .ok_or(tr(cx, "The mail Outbox is not available"))?;
     let message = Message {
         id: 0,
         account_id: account.id,
@@ -130,9 +131,12 @@ pub fn queue_calendar_mail(
     let inverse = command::apply(store, Command::SaveMessage(Box::new(message)))
         .map_err(|err| err.to_string())?;
     let Command::DeleteMessages { ids } = inverse else {
-        return Err("Cannot queue the message".into());
+        return Err(tr(cx, "Cannot queue the message").into());
     };
-    let id = ids.first().copied().ok_or("Cannot queue the message")?;
+    let id = ids
+        .first()
+        .copied()
+        .ok_or(tr(cx, "Cannot queue the message"))?;
     // Written before the mail bridge picks the message up (same thread).
     let path = sync_bridge::attachment_path(id, &name);
     let written = path
@@ -141,17 +145,17 @@ pub fn queue_calendar_mail(
         .and_then(|()| std::fs::write(&path, content));
     if let Err(err) = written {
         let _ = command::apply(store, Command::DeleteMessages { ids });
-        return Err(format!("Cannot attach the calendar file: {err}"));
+        return Err(tr(cx, "Cannot attach the calendar file: {}").replace("{}", &err.to_string()));
     }
     state.update(cx, |_, cx| cx.notify());
     Ok(())
 }
 
 /// One line describing when an event happens, in local time.
-pub(crate) fn when_text(snapshot: &EventSnapshot) -> String {
+pub(crate) fn when_text(snapshot: &EventSnapshot, cx: &App) -> String {
     let start = snapshot.event.start.with_timezone(&Local);
     if snapshot.event.all_day {
-        start.format("%A %e %B %Y (all day)").to_string()
+        format!("{} ({})", start.format("%A %e %B %Y"), tr(cx, "All day"))
     } else {
         let end = snapshot.event.end.with_timezone(&Local);
         format!(
@@ -162,13 +166,16 @@ pub(crate) fn when_text(snapshot: &EventSnapshot) -> String {
     }
 }
 
-fn status_label(status: ResponseStatus) -> &'static str {
-    match status {
-        ResponseStatus::Accepted => "accepted",
-        ResponseStatus::Tentative => "tentative",
-        ResponseStatus::Declined => "declined",
-        ResponseStatus::NeedsAction => "no answer yet",
-    }
+fn status_label(status: ResponseStatus, cx: &App) -> &'static str {
+    tr(
+        cx,
+        match status {
+            ResponseStatus::Accepted => "accepted",
+            ResponseStatus::Tentative => "tentative",
+            ResponseStatus::Declined => "declined",
+            ResponseStatus::NeedsAction => "no answer yet",
+        },
+    )
 }
 
 /// Calendar that receives an invitation sent to `account_id`.
@@ -216,10 +223,12 @@ pub fn respond_to_invitation(
             .get::<Message>(message_id)
             .ok()
             .flatten()
-            .ok_or("The message is gone")?;
-        let invitation = incoming_invitation(&message).ok_or("No invitation in this message")?;
-        let account = sending_account(store, message.account_id).ok_or("No mail account")?;
-        let calendar = target_calendar(store, message.account_id).ok_or("No calendar")?;
+            .ok_or(tr(cx, "The message is gone"))?;
+        let invitation =
+            incoming_invitation(&message).ok_or(tr(cx, "No invitation in this message"))?;
+        let account =
+            sending_account(store, message.account_id).ok_or(tr(cx, "No mail account"))?;
+        let calendar = target_calendar(store, message.account_id).ok_or(tr(cx, "No calendar"))?;
         let mut events = invitation.events.clone();
         for snapshot in &mut events {
             let attendee = snapshot
@@ -243,7 +252,7 @@ pub fn respond_to_invitation(
                 };
             }
         }
-        let main = invitation.main().ok_or("Empty invitation")?.clone();
+        let main = invitation.main().ok_or(tr(cx, "Empty invitation"))?.clone();
         let answered = events
             .iter()
             .find(|s| s.details.as_ref().map(|d| &d.uid) == main.details.as_ref().map(|d| &d.uid))
@@ -273,9 +282,19 @@ pub fn respond_to_invitation(
     let verb = reply_verb(status).0;
     let queued = queue_reply(state, &account, &answered.event, &details, status, cx);
     state.update(cx, |state, cx| match queued {
-        Ok(()) => state.notify_info(format!("{verb} - reply queued in the Outbox"), cx),
+        Ok(()) => state.notify_info(
+            format!(
+                "{} - {}",
+                tr(cx, verb),
+                tr(cx, "reply queued in the Outbox")
+            ),
+            cx,
+        ),
         // The answer is saved; only the reply could not be queued.
-        Err(err) => state.report_error(format!("Answer saved, reply not sent: {err}"), cx),
+        Err(err) => state.report_error(
+            tr(cx, "Answer saved, reply not sent: {}").replace("{}", &err),
+            cx,
+        ),
     });
     true
 }
@@ -300,7 +319,7 @@ pub(crate) fn queue_reply(
 ) -> Result<(), String> {
     let organizer: Vec<Address> = details.organizer.clone().into_iter().collect();
     if organizer.is_empty() {
-        return Err("The invitation has no organizer".into());
+        return Err(tr(cx, "The invitation has no organizer").into());
     }
     let (verb, phrase) = reply_verb(status);
     queue_calendar_mail(
@@ -366,7 +385,7 @@ fn apply_update(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
     };
     state.update(cx, |state, cx| {
         if state.run(command.into_command(), cx) {
-            state.notify_info("Calendar updated", cx);
+            state.notify_info(tr(cx, "Calendar updated"), cx);
         }
     });
 }
@@ -394,9 +413,10 @@ pub fn invitation_bar(
     let (icon, heading) = match invitation.method {
         Method::Request => (IconName::CalendarPlus, "Meeting invitation"),
         Method::Reply => (IconName::CalendarCheck, "Meeting response"),
-        Method::Cancel => (IconName::CalendarX, "Meeting cancelled"),
+        Method::Cancel => (IconName::CalendarX, "Meeting canceled"),
         _ => (IconName::Calendar, "Calendar"),
     };
+    let heading = tr(cx, heading);
     let organizer = main
         .details
         .as_ref()
@@ -406,7 +426,7 @@ pub fn invitation_bar(
     let answer_button = |id: &'static str, label: &'static str, status: ResponseStatus| {
         let state = state.clone();
         Button::new(id)
-            .label(label)
+            .label(tr(cx, label))
             .when(answer == Some(status), |button| button.primary())
             .on_click(move |_, _, cx| {
                 respond_to_invitation(&state, message_id, status, cx);
@@ -438,11 +458,14 @@ pub fn invitation_bar(
         Method::Reply | Method::Cancel => {
             let state = state.clone();
             let button = Button::new("invite-apply")
-                .label(if invitation.method == Method::Cancel {
-                    "Remove from calendar"
-                } else {
-                    "Update calendar"
-                })
+                .label(tr(
+                    cx,
+                    if invitation.method == Method::Cancel {
+                        "Remove from calendar"
+                    } else {
+                        "Update calendar"
+                    },
+                ))
                 .on_click(move |_, _, cx| apply_update(&state, message_id, cx));
             div().flex().flex_row().child(button).into_any_element()
         }
@@ -452,7 +475,7 @@ pub fn invitation_bar(
         main.event
             .attendees
             .iter()
-            .map(|a| format!("{} — {}", a.address.display(), status_label(a.status)))
+            .map(|a| format!("{} — {}", a.address.display(), status_label(a.status, cx)))
             .collect::<Vec<_>>()
             .join(", ")
     });
@@ -474,7 +497,7 @@ pub fn invitation_bar(
                     .flex_row()
                     .items_center()
                     .gap(SPACE_2)
-                    .child(Icon::new(icon).size(px(16.)).text_color(t.accent))
+                    .child(Icon::new(icon).size(ICON_SIZE).text_color(t.accent))
                     .child(
                         div()
                             .text_size(TEXT_SM)
@@ -484,6 +507,8 @@ pub fn invitation_bar(
             )
             .child(
                 div()
+                    .min_w(px(0.))
+                    .truncate()
                     .text_size(TEXT_MD)
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(main.event.title.clone()),
@@ -495,14 +520,19 @@ pub fn invitation_bar(
                     .gap(SPACE_1)
                     .text_size(TEXT_SM)
                     .text_color(t.text_muted)
-                    .child(when_text(&main))
+                    .child(when_text(&main, cx))
                     .when(!main.event.location.is_empty(), |el| {
                         el.child(main.event.location.clone())
                     })
-                    .child(format!("Organizer: {organizer}"))
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .truncate()
+                            .child(tr(cx, "Organizer: {}").replace("{}", &organizer)),
+                    )
                     .when_some(reply_line, |el, line| el.child(line))
                     .when_some(answer, |el, answer| {
-                        el.child(format!("Your answer: {}", status_label(answer)))
+                        el.child(tr(cx, "Your answer: {}").replace("{}", status_label(answer, cx)))
                     }),
             )
             .child(actions)

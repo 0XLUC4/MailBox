@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use gpui::component::input::{Input, InputEvent, InputState};
+use gpui::component::tooltip::Tooltip;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::todo::{self, DueBucket, SmartList, TaskCard, TaskList, TaskSort};
@@ -21,15 +22,19 @@ use mailbox_core::{Command, Id, Message, TaskCommand};
 use crate::actions;
 use crate::app_state::{AppState, Module};
 use crate::components::{EmptyState, Icon, IconButton, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    ACCENTS, ICON_SIZE, ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1,
-    SPACE_1_5, SPACE_2, SPACE_3, SPACE_6, TEXT_2XL, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex, theme,
+    ACCENTS, ICON_SIZE, ICON_SIZE_LG, ICON_SIZE_SM, ICON_SIZE_XS, NAV_ROW_HEIGHT,
+    PANE_HEADER_HEIGHT, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_1_5, SPACE_2,
+    SPACE_3, SPACE_6, TEXT_MD, TEXT_SM, TEXT_XL, TEXT_XS, Theme, hex, text_on, theme,
 };
 
 use detail::TaskDetail;
 
 /// How long a checked task stays in place (struck through, fading) before moving.
 const COMPLETE_DELAY: Duration = Duration::from_millis(380);
+/// Minimum height of a task row (the People list rows use the same height).
+const ROW_MIN_HEIGHT: Pixels = px(48.);
 
 /// What the detail panel shows: a task, or a flagged message that has no task yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,8 +69,8 @@ pub struct TasksView {
 
 impl TasksView {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let new_task = cx.new(|cx| InputState::new(window, cx).placeholder("Add a task"));
-        let new_list = cx.new(|cx| InputState::new(window, cx).placeholder("New list"));
+        let new_task = cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, "Add a task")));
+        let new_list = cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, "New list")));
         let subscriptions = vec![
             cx.observe_in(&state, window, |this, state, window, cx| {
                 if state.read(cx).module() != Module::Tasks {
@@ -368,13 +373,13 @@ impl TasksView {
 
     // ---------- rendering ----------
 
-    fn list_title(&self, lists: &[TaskList]) -> String {
+    fn list_title(&self, lists: &[TaskList], cx: &App) -> String {
         match self.list {
             SmartList::List(id) => lists
                 .iter()
                 .find(|list| list.id == id)
-                .map_or_else(|| "List".to_owned(), |list| list.name.clone()),
-            other => other.label().to_owned(),
+                .map_or_else(|| tr(cx, "List").to_owned(), |list| list.name.clone()),
+            other => tr(cx, other.label()).to_owned(),
         }
     }
 
@@ -407,7 +412,7 @@ impl TasksView {
                 .flex()
                 .items_center()
                 .gap(SPACE_2)
-                .h(px(32.))
+                .h(NAV_ROW_HEIGHT)
                 .px(SPACE_2)
                 .rounded(RADIUS_MD)
                 .cursor_pointer()
@@ -433,7 +438,7 @@ impl TasksView {
             .into_iter()
             .map(|list| {
                 let (icon, color) = smart_style(list, t);
-                row(list, icon, color, list.label().to_owned(), cx)
+                row(list, icon, color, tr(cx, list.label()).to_owned(), cx)
             })
             .collect();
         let custom: Vec<Stateful<Div>> = lists
@@ -490,7 +495,8 @@ impl TasksView {
                 .child(Input::new(input))
                 .into_any_element(),
             None => div()
-                .text_size(TEXT_2XL)
+                .min_w(px(0.))
+                .text_size(TEXT_XL)
                 .font_weight(FontWeight::SEMIBOLD)
                 .truncate()
                 .child(title)
@@ -501,7 +507,7 @@ impl TasksView {
             let sort_chips = TaskSort::ALL.into_iter().enumerate().map(|(index, sort)| {
                 option_chip(
                     ("task-sort", index as u64),
-                    sort.label(),
+                    tr(cx, sort.label()),
                     self.sort == sort,
                     t,
                 )
@@ -519,16 +525,21 @@ impl TasksView {
                     div()
                         .text_size(TEXT_XS)
                         .text_color(t.text_subtle)
-                        .child("SORT"),
+                        .child(tr(cx, "Sort")),
                 )
                 .children(sort_chips)
                 .child(div().w(SPACE_3))
                 .child(
-                    option_chip("task-group-due", "Group by due date", self.group_by_due, t)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.group_by_due = !this.group_by_due;
-                            cx.notify();
-                        })),
+                    option_chip(
+                        "task-group-due",
+                        tr(cx, "Group by due date"),
+                        self.group_by_due,
+                        t,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.group_by_due = !this.group_by_due;
+                        cx.notify();
+                    })),
                 )
         });
 
@@ -536,21 +547,38 @@ impl TasksView {
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .gap(SPACE_2)
-            .px(SPACE_6)
-            .pt(SPACE_6)
-            .pb(SPACE_3)
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(SPACE_3)
-                    .child(Icon::new(icon).size(px(22.)).text_color(color))
-                    .child(div().flex_1().min_w(px(0.)).child(title_element))
+                    .h(PANE_HEADER_HEIGHT)
+                    .px(SPACE_6)
+                    .border_b_1()
+                    .border_color(t.border_subtle)
+                    .child(Icon::new(icon).size(ICON_SIZE_LG).text_color(color))
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(SPACE_2)
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(title_element)
+                            .when_some(subtitle, |el, subtitle| {
+                                el.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_size(TEXT_SM)
+                                        .text_color(t.text_muted)
+                                        .child(subtitle),
+                                )
+                            }),
+                    )
                     .child(
                         IconButton::new("task-options", IconName::ArrowUpDown)
                             .active(self.show_options)
-                            .tooltip("Sort and group")
+                            .tooltip(tr(cx, "Sort and group"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.show_options = !this.show_options;
                                 cx.notify();
@@ -559,14 +587,14 @@ impl TasksView {
                     .when_some(custom_list, |el, list_id| {
                         el.child(
                             IconButton::new("rename-list", IconName::Pencil)
-                                .tooltip("Rename list")
+                                .tooltip(tr(cx, "Rename list"))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.start_rename(rename_name.clone(), window, cx)
                                 })),
                         )
                         .child(
                             IconButton::new("delete-list", IconName::Trash)
-                                .tooltip("Delete list and its tasks")
+                                .tooltip(tr(cx, "Delete list and its tasks"))
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| {
                                         this.delete_list(list_id, cx)
@@ -575,16 +603,9 @@ impl TasksView {
                         )
                     }),
             )
-            .when_some(subtitle, |el, subtitle| {
-                el.child(
-                    div()
-                        .pl(px(34.))
-                        .text_size(TEXT_SM)
-                        .text_color(t.text_muted)
-                        .child(subtitle),
-                )
+            .when_some(options, |el, options| {
+                el.child(div().px(SPACE_6).pt(SPACE_3).child(options))
             })
-            .when_some(options, |el, options| el.child(options))
     }
 
     fn render_task_row(
@@ -602,7 +623,23 @@ impl TasksView {
         let selected = self.selected == Some(selection);
         let important = card.is_important();
         let completed = card.task.completed;
-        let meta = self.task_meta(card, lists, today, t);
+        let meta = self.task_meta(card, lists, today, t, cx);
+        let check_tooltip = tr(
+            cx,
+            if completed {
+                "Mark as not complete"
+            } else {
+                "Mark as complete"
+            },
+        );
+        let star_tooltip = tr(
+            cx,
+            if important {
+                "Remove importance"
+            } else {
+                "Mark as important"
+            },
+        );
 
         let row = div()
             .id(("task-row", id as u64))
@@ -610,7 +647,7 @@ impl TasksView {
             .flex()
             .items_center()
             .gap(SPACE_3)
-            .min_h(px(48.))
+            .min_h(ROW_MIN_HEIGHT)
             .px(SPACE_3)
             .py(SPACE_2)
             .rounded(RADIUS_LG)
@@ -620,16 +657,16 @@ impl TasksView {
             .cursor_pointer()
             .hover(|s| s.bg(t.hover))
             .child(
-                check_circle(("task-check", id as u64), done, t).on_click(cx.listener(
-                    move |this, _, _, cx| {
+                check_circle(("task-check", id as u64), done, selected, check_tooltip, t).on_click(
+                    cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         if completed {
                             this.reopen(id, cx);
                         } else {
                             this.check(selection, cx);
                         }
-                    },
-                )),
+                    }),
+                ),
             )
             .child(
                 div()
@@ -665,6 +702,7 @@ impl TasksView {
                     .p(SPACE_1)
                     .rounded(RADIUS_MD)
                     .hover(|s| s.bg(t.hover))
+                    .tooltip(move |window, cx| Tooltip::new(star_tooltip).build(window, cx))
                     .child(
                         Icon::new(IconName::Star)
                             .size(ICON_SIZE)
@@ -715,6 +753,7 @@ impl TasksView {
         lists: &[TaskList],
         today: NaiveDate,
         t: &Theme,
+        cx: &App,
     ) -> Vec<AnyElement> {
         let mut meta = Vec::new();
         let item = |icon: Option<IconName>, text: String, color: Hsla| {
@@ -723,7 +762,9 @@ impl TasksView {
                 .items_center()
                 .gap(SPACE_1)
                 .text_color(color)
-                .when_some(icon, |el, icon| el.child(Icon::new(icon).size(px(12.))))
+                .when_some(icon, |el, icon| {
+                    el.child(Icon::new(icon).size(ICON_SIZE_XS))
+                })
                 .child(text)
                 .into_any_element()
         };
@@ -732,14 +773,21 @@ impl TasksView {
                 .details
                 .list_id
                 .and_then(|list_id| lists.iter().find(|list| list.id == list_id))
-                .map_or_else(|| "Tasks".to_owned(), |list| list.name.clone());
+                .map_or_else(|| tr(cx, "Tasks").to_owned(), |list| list.name.clone());
             meta.push(item(None, list_name, t.text_muted));
         }
         if self.list != SmartList::MyDay && card.in_my_day(today) {
-            meta.push(item(Some(IconName::Sun), "My Day".into(), t.text_muted));
+            meta.push(item(
+                Some(IconName::Sun),
+                tr(cx, "My Day").into(),
+                t.text_muted,
+            ));
         }
         if let Some((done, total)) = card.step_progress() {
-            meta.push(item(None, format!("{done} of {total}"), t.text_muted));
+            let progress = tr(cx, "{} of {}")
+                .replacen("{}", &done.to_string(), 1)
+                .replacen("{}", &total.to_string(), 1);
+            meta.push(item(None, progress, t.text_muted));
         }
         if let Some(due) = card.task.due {
             let color = if card.is_overdue(today) {
@@ -749,16 +797,16 @@ impl TasksView {
             } else {
                 t.text_muted
             };
-            let mut text = day_label(due, today);
+            let mut text = day_text(due, today, cx);
             if card.is_overdue(today) {
-                text = format!("Overdue, {text}");
+                text = tr(cx, "Overdue, {}").replace("{}", &text);
             }
             meta.push(item(Some(IconName::CalendarDays), text, color));
         }
         if let Some(reminder) = card.details.reminder {
             meta.push(item(
                 Some(IconName::Bell),
-                reminder_label(reminder, today),
+                reminder_label(reminder, today, cx),
                 t.text_muted,
             ));
         }
@@ -789,17 +837,18 @@ impl TasksView {
         let completing = self.completing.contains(&selection);
         let selected = self.selected == Some(selection);
         let subject = if message.subject.trim().is_empty() {
-            "(no subject)".to_owned()
+            tr(cx, "(no subject)").to_owned()
         } else {
             message.subject.clone()
         };
+        let check_tooltip = tr(cx, "Mark as complete");
         let row = div()
             .id(("flag-row", id as u64))
             .group("task-row")
             .flex()
             .items_center()
             .gap(SPACE_3)
-            .min_h(px(48.))
+            .min_h(ROW_MIN_HEIGHT)
             .px(SPACE_3)
             .py(SPACE_2)
             .rounded(RADIUS_LG)
@@ -809,12 +858,17 @@ impl TasksView {
             .cursor_pointer()
             .hover(|s| s.bg(t.hover))
             .child(
-                check_circle(("flag-check", id as u64), completing, t).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.check(selection, cx);
-                    },
-                )),
+                check_circle(
+                    ("flag-check", id as u64),
+                    completing,
+                    selected,
+                    check_tooltip,
+                    t,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.check(selection, cx);
+                })),
             )
             .child(
                 div()
@@ -837,12 +891,12 @@ impl TasksView {
                             .gap(SPACE_1)
                             .text_size(TEXT_XS)
                             .text_color(t.text_muted)
-                            .child(Icon::new(IconName::Mail).size(px(12.)))
-                            .child(format!(
-                                "{} - {}",
+                            .child(Icon::new(IconName::Mail).size(ICON_SIZE_XS))
+                            .child(div().min_w(px(0.)).truncate().child(format!(
+                                "{} · {}",
                                 message.from.display(),
                                 message.date.with_timezone(&Local).format("%-d %b")
-                            )),
+                            ))),
                     ),
             )
             .child(
@@ -878,7 +932,9 @@ impl Render for TasksView {
         }
         let today = Self::today();
         let store = self.state.read(cx).store();
-        let cards = todo::list_task_cards(store).unwrap_or_default();
+        let cards = todo::list_task_cards(store);
+        let load_failed = cards.is_err();
+        let cards = cards.unwrap_or_default();
         let lists = todo::list_task_lists(store).unwrap_or_default();
         let flagged = todo::flagged_messages(store).unwrap_or_default();
         let list_missing = match self.list {
@@ -923,7 +979,7 @@ impl Render for TasksView {
         todo::sort_tasks(&mut open, self.sort);
         done.sort_by_key(|card| std::cmp::Reverse(card.details.completed_at));
         let show_flags = self.list == SmartList::Flagged;
-        let title = self.list_title(&lists);
+        let title = self.list_title(&lists, cx);
 
         // ----- open tasks (optionally grouped by due date) -----
         let mut body: Vec<AnyElement> = Vec::new();
@@ -938,7 +994,7 @@ impl Render for TasksView {
             }
             buckets.sort_by_key(|(bucket, _)| *bucket);
             for (bucket, group) in buckets {
-                body.push(group_label(bucket.label(), group.len(), &t).into_any_element());
+                body.push(group_label(tr(cx, bucket.label()), group.len(), &t).into_any_element());
                 for card in group {
                     body.push(self.render_task_row(card, &lists, today, &t, cx));
                 }
@@ -981,7 +1037,7 @@ impl Render for TasksView {
                         })
                         .size(ICON_SIZE_SM),
                     )
-                    .child("Completed")
+                    .child(tr(cx, "Completed"))
                     .child(
                         div()
                             .text_color(t.text_subtle)
@@ -1002,7 +1058,11 @@ impl Render for TasksView {
 
         let nothing =
             open.is_empty() && done.is_empty() && !(show_flags && !loose_flags.is_empty());
-        let list_body: AnyElement = if nothing {
+        let list_body: AnyElement = if load_failed {
+            EmptyState::new(IconName::TriangleAlert, tr(cx, "Couldn't load tasks"))
+                .description(tr(cx, "Try again in a moment."))
+                .into_any_element()
+        } else if nothing {
             let (icon, message) = match self.list {
                 SmartList::MyDay => (
                     IconName::Sun,
@@ -1018,8 +1078,8 @@ impl Render for TasksView {
                     (IconName::ListTodo, "Add your first task above.")
                 }
             };
-            EmptyState::new(icon, "All clear")
-                .description(message)
+            EmptyState::new(icon, tr(cx, "All clear"))
+                .description(tr(cx, message))
                 .into_any_element()
         } else {
             div()
@@ -1027,6 +1087,7 @@ impl Render for TasksView {
                 .size_full()
                 .overflow_y_scroll()
                 .px(SPACE_6)
+                .pt(SPACE_3)
                 .pb(SPACE_6)
                 .child(div().flex().flex_col().gap(SPACE_1_5).children(body))
                 .into_any_element()
@@ -1074,7 +1135,7 @@ impl Render for TasksView {
                     .child(header)
                     .when(!show_flags, |el| {
                         el.child(
-                            div().px(SPACE_6).pb(SPACE_3).child(
+                            div().px(SPACE_6).pt(SPACE_3).child(
                                 Input::new(&self.new_task).prefix(
                                     Icon::new(IconName::Plus)
                                         .size(ICON_SIZE)
@@ -1100,8 +1161,14 @@ impl Render for TasksView {
     }
 }
 
-/// Round checkbox: empty ring, check on hover, filled when done.
-fn check_circle(id: impl Into<ElementId>, done: bool, t: &Theme) -> Stateful<Div> {
+/// Round checkbox: empty ring, check on hover (always on the selected row), filled when done.
+fn check_circle(
+    id: impl Into<ElementId>,
+    done: bool,
+    selected: bool,
+    tooltip: &'static str,
+    t: &Theme,
+) -> Stateful<Div> {
     div()
         .id(id)
         .flex()
@@ -1112,21 +1179,23 @@ fn check_circle(id: impl Into<ElementId>, done: bool, t: &Theme) -> Stateful<Div
         .rounded(RADIUS_FULL)
         .border_1()
         .cursor_pointer()
+        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
         .when(done, |el| {
             el.bg(t.success).border_color(t.success).child(
                 Icon::new(IconName::Check)
-                    .size(px(12.))
-                    .text_color(t.on_accent),
+                    .size(ICON_SIZE_XS)
+                    .text_color(text_on(t.success)),
             )
         })
         .when(!done, |el| {
             el.border_color(t.text_subtle).child(
                 div()
-                    .opacity(0.)
-                    .group_hover("task-row", |s| s.opacity(1.))
+                    .when(!selected, |el| {
+                        el.opacity(0.).group_hover("task-row", |s| s.opacity(1.))
+                    })
                     .child(
                         Icon::new(IconName::Check)
-                            .size(px(12.))
+                            .size(ICON_SIZE_XS)
                             .text_color(t.text_subtle),
                     ),
             )
@@ -1209,11 +1278,21 @@ fn day_label(date: NaiveDate, today: NaiveDate) -> String {
     }
 }
 
-fn reminder_label(at: DateTime<Utc>, today: NaiveDate) -> String {
+/// [`day_label`] with "Today", "Tomorrow" and "Yesterday" translated.
+fn day_text(date: NaiveDate, today: NaiveDate, cx: &App) -> String {
+    match (date - today).num_days() {
+        0 => tr(cx, "Today").to_owned(),
+        1 => tr(cx, "Tomorrow").to_owned(),
+        -1 => tr(cx, "Yesterday").to_owned(),
+        _ => day_label(date, today),
+    }
+}
+
+fn reminder_label(at: DateTime<Utc>, today: NaiveDate, cx: &App) -> String {
     let local = at.with_timezone(&Local);
     format!(
         "{} {}",
-        day_label(local.date_naive(), today),
+        day_text(local.date_naive(), today, cx),
         local.format("%H:%M")
     )
 }

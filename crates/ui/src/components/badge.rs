@@ -1,6 +1,6 @@
 use gpui::*;
 
-use crate::theme::{RADIUS_FULL, SPACE_1_5, TEXT_XS, theme};
+use crate::theme::{RADIUS_FULL, SPACE_1_5, TEXT_XS, text_on, theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum BadgeVariant {
@@ -58,7 +58,7 @@ impl RenderOnce for Badge {
         let (bg, fg) = match self.variant {
             BadgeVariant::Neutral => (t.active, t.text_muted),
             BadgeVariant::Accent => (t.accent, t.on_accent),
-            BadgeVariant::Danger => (t.danger, t.on_accent),
+            BadgeVariant::Danger => (t.danger, text_on(t.danger)),
             BadgeVariant::Color(color) => (color.alpha(if t.is_dark { 0.25 } else { 0.15 }), color),
         };
         div()

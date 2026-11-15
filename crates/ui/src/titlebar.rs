@@ -16,7 +16,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::components::{Icon, IconName};
-use crate::theme::{ICON_SIZE_SM, theme};
+use crate::theme::{ICON_SIZE_SM, ICON_SIZE_XS, text_on, theme};
 
 /// Height of the slim bar drawn above secondary windows.
 pub const TITLE_BAR_HEIGHT: Pixels = px(36.);
@@ -231,13 +231,13 @@ impl RenderOnce for CaptionButton {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = theme(cx).clone();
         let (hover_bg, hover_fg, active_bg) = if self == Self::Close {
-            (t.danger, t.on_accent, t.danger.opacity(0.85))
+            (t.danger, text_on(t.danger), t.danger.opacity(0.85))
         } else {
             (t.hover, t.text, t.active)
         };
         // Restore's two overlapping squares read better slightly smaller.
         let icon_size = if self == Self::Restore {
-            px(12.)
+            ICON_SIZE_XS
         } else {
             ICON_SIZE_SM
         };

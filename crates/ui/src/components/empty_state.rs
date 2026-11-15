@@ -2,7 +2,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::{Icon, IconName};
-use crate::theme::{RADIUS_FULL, SPACE_1, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, theme};
+use crate::theme::{ICON_SIZE_LG, RADIUS_FULL, SPACE_1, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, theme};
 
 /// Centered icon + title + optional description and action, for empty views.
 #[derive(IntoElement)]
@@ -51,12 +51,12 @@ impl RenderOnce for EmptyState {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(52.))
+                    .size(px(48.))
                     .mb(SPACE_3)
                     .rounded(RADIUS_FULL)
                     .bg(t.hover)
                     .text_color(t.text_subtle)
-                    .child(Icon::new(self.icon).size(px(24.))),
+                    .child(Icon::new(self.icon).size(ICON_SIZE_LG)),
             )
             .child(
                 div()

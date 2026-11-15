@@ -18,6 +18,7 @@ use mailbox_sync::formats::OutgoingHeaders;
 
 use super::{ComposeRequest, dock, open_compose};
 use crate::app_state::AppState;
+use crate::settings::tr;
 use crate::sync_bridge;
 
 pub const UNDO_SEND_DELAY: Duration = Duration::from_secs(5);
@@ -34,17 +35,18 @@ pub fn schedule(state: Entity<AppState>, message_id: Id, subject: String, cx: &m
     if let Some(main) = main {
         let (cancel, toast_key, toast_state) = (cancelled.clone(), key.clone(), state.clone());
         let subject = if subject.trim().is_empty() {
-            "(no subject)".to_owned()
+            tr(cx, "(no subject)").to_owned()
         } else {
             subject
         };
+        let undo = tr(cx, "Undo");
         let notification = Notification::info(format!("“{subject}”"))
             .id1::<UndoSendToast>(key.clone())
-            .title("Sending…")
+            .title(tr(cx, "Sending…"))
             .action(move |_, _, _| {
                 let (cancel, key, state) = (cancel.clone(), toast_key.clone(), toast_state.clone());
                 Button::new("undo-send")
-                    .label("Undo")
+                    .label(undo)
                     .on_click(move |_, window, cx| {
                         if cancel.replace(true) {
                             return;
@@ -100,7 +102,7 @@ pub(super) fn queue(state: &Entity<AppState>, message_id: Id, cx: &mut App) {
     });
     if queued {
         state.update(cx, |state, cx| {
-            state.notify_info("Message moved to the Outbox", cx)
+            state.notify_info(tr(cx, "Message moved to the Outbox"), cx)
         });
         sync_bridge::send_receive(cx);
     }
@@ -136,6 +138,9 @@ fn prepare(state: &AppState, message_id: Id) -> Result<Id, String> {
 
 fn fail(state: &Entity<AppState>, err: String, cx: &mut App) {
     state.update(cx, |state, cx| {
-        state.report_error(format!("Not sent: {err}. It is still in Drafts."), cx)
+        state.report_error(
+            tr(cx, "Not sent: {}. It is still in Drafts.").replace("{}", &err),
+            cx,
+        )
     });
 }

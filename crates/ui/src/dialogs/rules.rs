@@ -2,7 +2,7 @@
 //! Every change is an undoable command; the engine lives in `mailbox_core::rules`.
 
 use gpui::component::WindowExt as _;
-use gpui::component::input::{Input, InputState};
+use gpui::component::input::{Input, InputEvent, InputState};
 use gpui::component::switch::Switch;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -62,7 +62,7 @@ pub struct RulesDialog {
     body: Entity<InputState>,
     draft: Draft,
     error: Option<SharedString>,
-    _subscription: Subscription,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl RulesDialog {
@@ -71,8 +71,8 @@ impl RulesDialog {
             cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, placeholder)))
         };
         let account_id = current_account(&state, cx);
-        let subscription = cx.observe(&state, |_, _, cx| cx.notify());
-        Self {
+        let mut subscriptions = vec![cx.observe(&state, |_, _, cx| cx.notify())];
+        let mut this = Self {
             account_id,
             editing: None,
             name: input("Rule name", window, cx),
@@ -83,8 +83,14 @@ impl RulesDialog {
             draft: Draft::default(),
             error: None,
             state,
-            _subscription: subscription,
+            _subscriptions: Vec::new(),
+        };
+        // Re-render on typing so Save follows the rule's validity.
+        for input in this.text_inputs().map(Entity::clone) {
+            subscriptions.push(cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify()));
         }
+        this._subscriptions = subscriptions;
+        this
     }
 
     fn text_inputs(&self) -> [&Entity<InputState>; 5] {
@@ -193,7 +199,7 @@ impl RulesDialog {
             actions.push(RuleAction::StopProcessing);
         }
         let name = match text(&self.name) {
-            name if name.is_empty() => "Untitled rule".to_owned(),
+            name if name.is_empty() => tr(cx, "Untitled rule").to_owned(),
             name => name,
         };
         Ok(Rule {
@@ -368,7 +374,6 @@ impl RulesDialog {
                 )
                 .child(
                     IconButton::new(("rule-up", id), IconName::ArrowUp)
-                        .size(px(22.))
                         .icon_size(ICON_SIZE_SM)
                         .disabled(index == 0)
                         .tooltip(tr(cx, "Run earlier"))
@@ -378,7 +383,6 @@ impl RulesDialog {
                 )
                 .child(
                     IconButton::new(("rule-down", id), IconName::ArrowDown)
-                        .size(px(22.))
                         .icon_size(ICON_SIZE_SM)
                         .disabled(index + 1 == rules.len())
                         .tooltip(tr(cx, "Run later"))
@@ -388,7 +392,6 @@ impl RulesDialog {
                 )
                 .child(
                     IconButton::new(("rule-delete", id), IconName::Trash)
-                        .size(px(22.))
                         .icon_size(ICON_SIZE_SM)
                         .tooltip(tr(cx, "Delete"))
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -822,7 +825,7 @@ impl Render for RulesDialog {
                     .child(div().flex_1())
                     .child(
                         Button::new("rules-close")
-                            .label(tr(cx, "Close"))
+                            .label(tr(cx, "Cancel"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .when(editing, |el| {
@@ -831,6 +834,7 @@ impl Render for RulesDialog {
                                 .primary()
                                 .icon(IconName::Check)
                                 .label(tr(cx, "Save"))
+                                .disabled(self.build_rule(cx).is_err())
                                 .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                         )
                     }),
