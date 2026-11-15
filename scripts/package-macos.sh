@@ -58,6 +58,14 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <key>NSHighResolutionCapable</key><true/>
+    <!-- mailto: links (delivered as Apple Events, see system_integration.rs). -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>Email Address URL</string>
+            <key>CFBundleURLSchemes</key><array><string>mailto</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

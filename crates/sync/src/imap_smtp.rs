@@ -13,6 +13,7 @@ use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 
 use crate::backend::{
     FolderStatus, MailBackend, RawMessage, RemoteFlags, RemoteFolder, Uid, classify_folder,
+    has_special_use, one_folder_per_role,
 };
 use crate::config::{AccountConfig, AuthConfig, Security, ServerConfig, credentials};
 use crate::oauth::{OAuthSettings, TokenProvider, xoauth2};
@@ -229,10 +230,11 @@ impl MailBackend for ImapSmtpBackend {
                     let role = classify_folder(&utf7::decode(name.name()), &attributes)?;
                     let mut folder = RemoteFolder::new(name.name(), name.delimiter(), role);
                     folder.name = utf7::decode(&folder.name);
-                    Some(folder)
+                    Some((folder, has_special_use(&attributes)))
                 })
                 .collect())
         })
+        .map(one_folder_per_role)
     }
 
     fn status(&mut self, path: &str) -> SyncResult<FolderStatus> {

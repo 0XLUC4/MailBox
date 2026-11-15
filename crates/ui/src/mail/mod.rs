@@ -78,9 +78,14 @@ fn bind_keys(cx: &mut App) {
             ArchiveSelected,
             context,
         ),
-        KeyBinding::new("ctrl-q", MarkRead, context),
-        KeyBinding::new("ctrl-u", MarkUnread, context),
-        KeyBinding::new("insert", ToggleFlag, context),
+        // Same keys as the shell's (`actions::bind_keys`): Cmd+Q quits on macOS.
+        KeyBinding::new(if mac { "cmd-t" } else { "ctrl-q" }, MarkRead, context),
+        KeyBinding::new(if mac { "cmd-u" } else { "ctrl-u" }, MarkUnread, context),
+        KeyBinding::new(
+            if mac { "cmd-shift-l" } else { "insert" },
+            ToggleFlag,
+            context,
+        ),
         KeyBinding::new("enter", OpenSelected, context),
         KeyBinding::new("right", ExpandThread, context),
         KeyBinding::new("left", CollapseThread, context),

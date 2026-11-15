@@ -24,6 +24,7 @@ pub mod updater;
 
 // App-wide actions (ribbon, command palette, shortcuts).
 pub mod actions;
+pub mod app_menu;
 
 // Everyday features: notifications, OS integration, attachments, print/export, snooze, out of
 // office, read receipts, shortcuts help.
@@ -69,12 +70,13 @@ pub fn run(store: Store) {
 
 /// [`run`], then opens compose for `mailto` (a `mailto:` URL from the command line).
 pub fn run_with(store: Store, mailto: Option<String>) {
-    gpui::application()
+    system_integration::receive_open_urls(gpui::application())
         .with_assets(gpui::assets::AllAssets)
         .run(move |cx: &mut App| {
             gpui::init(cx);
             bind_keys(cx);
             actions::bind_keys(cx);
+            app_menu::init(cx);
 
             let state = cx.new(|_| AppState::new(store));
             sync_bridge::init(state.clone(), cx);
@@ -82,7 +84,7 @@ pub fn run_with(store: Store, mailto: Option<String>) {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1360.), px(860.)), cx)),
                 window_min_size: Some(size(px(900.), px(560.))),
-                ..titlebar::window_options("Mailbox")
+                ..titlebar::window_options_with_bar("Mailbox", theme::TOP_BAR_HEIGHT)
             };
             let shell_state = state.clone();
             let opened = gpui::open_window(options, cx, |window, cx| {

@@ -3,7 +3,7 @@
 //! Messages are addressed like IMAP: a folder path plus a UID that is stable while the
 //! folder's UIDVALIDITY does not change.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -179,6 +179,44 @@ pub fn classify_folder(path: &str, attributes: &[String]) -> Option<FolderRole> 
         _ => FolderRole::Custom,
     };
     Some(role)
+}
+
+/// Whether LIST attributes carry an RFC 6154 special-use role (`\Sent`, `\Junk`...).
+pub fn has_special_use(attributes: &[String]) -> bool {
+    attributes.iter().any(|attr| {
+        ["Sent", "Drafts", "Trash", "Junk", "Archive"]
+            .iter()
+            .any(|name| attr.trim_start_matches('\\').eq_ignore_ascii_case(name))
+    })
+}
+
+/// Keeps each special role on one folder: a server can list both "Junk" (`\Junk`) and
+/// "Junk Email", or "Deleted Messages" and "Trash", which would show up twice. The folder
+/// whose role comes from a special-use attribute wins, then the first listed; the others
+/// become ordinary folders. Input: each folder with [`has_special_use`] of its attributes.
+pub fn one_folder_per_role(folders: Vec<(RemoteFolder, bool)>) -> Vec<RemoteFolder> {
+    let mut owners: HashMap<FolderRole, (usize, bool)> = HashMap::new();
+    for (index, (folder, special_use)) in folders.iter().enumerate() {
+        if folder.role == FolderRole::Custom {
+            continue;
+        }
+        let better = owners
+            .get(&folder.role)
+            .is_none_or(|(_, owner_special)| *special_use && !owner_special);
+        if better {
+            owners.insert(folder.role, (index, *special_use));
+        }
+    }
+    folders
+        .into_iter()
+        .enumerate()
+        .map(|(index, (mut folder, _))| {
+            if owners.get(&folder.role).is_some_and(|(owner, _)| *owner != index) {
+                folder.role = FolderRole::Custom;
+            }
+            folder
+        })
+        .collect()
 }
 
 /// In-memory server for tests and demos.
@@ -410,6 +448,42 @@ mod tests {
         assert_eq!(
             classify_folder("Projects/2026", &[]),
             Some(FolderRole::Custom)
+        );
+    }
+
+    /// Regression: "Junk" + "Junk Email" (or "Deleted Messages" + "Trash") both got the
+    /// role and showed up twice in the folder pane.
+    #[test]
+    fn one_folder_keeps_each_role() {
+        let listed = |path: &str, attributes: &[&str]| {
+            let attributes = attrs(attributes);
+            let role = classify_folder(path, &attributes).unwrap();
+            (RemoteFolder::new(path, Some("/"), role), has_special_use(&attributes))
+        };
+        let folders = one_folder_per_role(vec![
+            listed("INBOX", &[]),
+            listed("Junk Email", &[]),
+            listed("Junk", &["HasNoChildren", "Junk"]),
+            listed("Sent Items", &[]),
+            listed("Sent Messages", &[]),
+            listed("Deleted Messages", &["Trash"]),
+            listed("Trash", &[]),
+        ]);
+        let roles: Vec<(&str, FolderRole)> = folders
+            .iter()
+            .map(|folder| (folder.path.as_str(), folder.role))
+            .collect();
+        assert_eq!(
+            roles,
+            vec![
+                ("INBOX", FolderRole::Inbox),
+                ("Junk Email", FolderRole::Custom),
+                ("Junk", FolderRole::Junk),
+                ("Sent Items", FolderRole::Sent),
+                ("Sent Messages", FolderRole::Custom),
+                ("Deleted Messages", FolderRole::Trash),
+                ("Trash", FolderRole::Custom),
+            ]
         );
     }
 

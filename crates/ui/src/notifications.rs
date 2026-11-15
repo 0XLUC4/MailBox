@@ -5,10 +5,11 @@
 //!   notification shows the sender and subject (`Settings::notify_new_mail`, `notify_sound`).
 //! - Reminders: [`reminder`] (`Settings::notify_reminders`).
 //! - Windows: a toast; clicking it brings the main window forward (and opens the message).
-//! - macOS: Notification Center through `osascript`; Linux: the desktop's notification server
-//!   through `notify-send` (libnotify). Neither reports clicks.
 //! - The window title (shown on the taskbar button) carries the inbox unread count. A real
 //!   overlay badge needs `ITaskbarList3` (unsafe COM), which this workspace forbids.
+//!
+//! macOS and Linux: a system notification through `osascript` / `notify-send` (clicking it
+//! does not open the message), the in-app toasts and the title.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
@@ -272,47 +273,49 @@ mod platform {
 mod platform {
     use std::process::Command;
 
-    /// Runs the notifier in the background: the app never waits for it.
-    fn spawn(mut command: Command) {
-        std::thread::spawn(move || match command.output() {
-            Ok(output) if output.status.success() => {}
-            Ok(output) => crate::log::error(format_args!(
-                "notification failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )),
-            Err(err) => crate::log::error(format_args!("notification failed: {err}")),
+    /// Shows a system notification. Clicks are not reported (`on_click` unused).
+    pub fn show(title: &str, body: &str, sound: bool, _on_click: impl Fn() + Send + 'static) {
+        let mut command = command(title, body, sound);
+        // Waited on a thread: no zombie process, no blocking the UI.
+        std::thread::spawn(move || {
+            if let Err(err) = command.status() {
+                crate::log::error(format_args!("notification failed: {err}"));
+            }
         });
     }
 
-    /// Title and body are passed as `argv`, never pasted into the script.
+    /// The text as one argument: never read as an option (a sender named `-e ...` would
+    /// otherwise add AppleScript to run).
+    fn argument(text: &str) -> String {
+        if text.starts_with('-') {
+            format!(" {text}")
+        } else {
+            text.to_owned()
+        }
+    }
+
     #[cfg(target_os = "macos")]
-    pub fn show(title: &str, body: &str, sound: bool, _on_click: impl Fn() + Send + 'static) {
-        let sound = if sound { " sound name \"Glass\"" } else { "" };
-        let script = format!(
-            "on run argv
-display notification (item 2 of argv) with title (item 1 of argv){sound}
-end run"
-        );
-        let mut command = Command::new("/usr/bin/osascript");
-        command.args(["-e", script.as_str(), title, body]);
-        spawn(command);
+    fn command(title: &str, body: &str, sound: bool) -> Command {
+        let display = if sound {
+            r#"display notification (item 2 of argv) with title (item 1 of argv) sound name "Glass""#
+        } else {
+            "display notification (item 2 of argv) with title (item 1 of argv)"
+        };
+        let mut command = Command::new("osascript");
+        command
+            .args(["-e", "on run argv", "-e", display, "-e", "end run"])
+            .args([argument(title), argument(body)]);
+        command
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub fn show(title: &str, body: &str, sound: bool, _on_click: impl Fn() + Send + 'static) {
+    fn command(title: &str, body: &str, sound: bool) -> Command {
         let mut command = Command::new("notify-send");
-        command.args([
-            "--app-name=Mailbox",
-            "--icon=mail-unread",
-            "--category=email",
-        ]);
+        command.args(["--app-name=Mailbox", "--icon=mail-unread"]);
         if sound {
             command.arg("--hint=string:sound-name:message-new-email");
-        } else {
-            command.arg("--hint=boolean:suppress-sound:true");
         }
-        // `--` so a title starting with "-" is not read as an option.
-        command.args(["--", title, body]);
-        spawn(command);
+        command.arg("--").args([argument(title), argument(body)]);
+        command
     }
 }

@@ -17,8 +17,8 @@ use crate::app_state::{AppState, Module};
 use crate::components::{Icon, IconName};
 use crate::settings::{prefs, tr};
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_MD, RAIL_WIDTH, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, TEXT_SM, TEXT_XS,
-    theme,
+    DISABLED_OPACITY, ICON_SIZE_LG, ICON_SIZE_SM, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3,
+    TEXT_SM, TEXT_XS, theme,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,7 +277,7 @@ impl RibbonView {
                         .min_w(px(56.))
                         .h(px(62.))
                         .px(SPACE_1)
-                        .child(Icon::new(spec.icon).size(px(22.)))
+                        .child(Icon::new(spec.icon).size(ICON_SIZE_LG))
                         .child(
                             div()
                                 .text_size(TEXT_XS)
@@ -299,7 +299,7 @@ impl RibbonView {
                         .child(label)
                 }
             })
-            .when(!enabled, |el| el.opacity(0.4))
+            .when(!enabled, |el| el.opacity(DISABLED_OPACITY))
             .when(enabled, |el| {
                 el.cursor_pointer()
                     .hover(move |style| style.bg(if checked { t.accent_subtle } else { t.hover }))
@@ -404,7 +404,7 @@ impl RibbonView {
         MenuButton::new("ribbon-more")
             .ghost()
             .icon(IconName::Ellipsis)
-            .tooltip("More commands")
+            .tooltip(tr(cx, "More commands"))
             .dropdown_menu(move |menu, _, _| {
                 let mut menu = menu.action_context(context.clone());
                 for (index, group) in labels.iter().enumerate() {
@@ -428,7 +428,8 @@ impl Render for RibbonView {
         let classic = prefs(cx).ribbon == RibbonMode::Classic;
         let groups = groups(module, self.tab);
         // Window minus rail, paddings and the "more" button.
-        let available = f32::from(window.viewport_size().width) - f32::from(RAIL_WIDTH) - 72.;
+        let available =
+            f32::from(window.viewport_size().width) - f32::from(crate::shell::RAIL_WIDTH) - 72.;
         let fits = fit_groups(groups, available, classic, cx);
         let hidden: Vec<&'static Group> = groups
             .iter()
@@ -497,12 +498,12 @@ impl Render for RibbonView {
                 .size(ICON_SIZE_SM),
             )
             .tooltip(move |window, cx| {
-                Tooltip::new(if classic {
+                let label = if classic {
                     "Simplified ribbon"
                 } else {
                     "Classic ribbon"
-                })
-                .build(window, cx)
+                };
+                Tooltip::new(tr(cx, label)).build(window, cx)
             })
             .on_click(move |_, window, cx| {
                 dispatch(Box::new(ToggleRibbonMode), &focus, window, cx)
