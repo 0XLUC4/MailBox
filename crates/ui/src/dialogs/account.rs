@@ -531,10 +531,7 @@ impl AccountDialog {
             Ok(values) => values,
             Err(message) => return self.fail(message, cx),
         };
-        let renamed = self
-            .saved_email
-            .clone()
-            .filter(|old| *old != config.email);
+        let renamed = self.saved_email.clone().filter(|old| *old != config.email);
         if let Some(old) = &renamed
             && let Err(err) = move_secrets(old, &config.email)
         {

@@ -301,7 +301,11 @@ end run"
     #[cfg(not(target_os = "macos"))]
     pub fn show(title: &str, body: &str, sound: bool, _on_click: impl Fn() + Send + 'static) {
         let mut command = Command::new("notify-send");
-        command.args(["--app-name=Mailbox", "--icon=mail-unread", "--category=email"]);
+        command.args([
+            "--app-name=Mailbox",
+            "--icon=mail-unread",
+            "--category=email",
+        ]);
         if sound {
             command.arg("--hint=string:sound-name:message-new-email");
         } else {
