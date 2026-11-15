@@ -214,34 +214,46 @@ pub fn reminder(title: &str, start: DateTime<Utc>, cx: &App) {
 
 #[cfg(windows)]
 mod platform {
-    use std::sync::Once;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
 
-    use tauri_winrt_notification::{Sound, Toast};
+    use tauri_winrt_notification::{IconCrop, Sound, Toast};
 
     /// AppUserModelID shown as the toast source (registered under HKCU on first use).
     const APP_ID: &str = "Mailbox.Desktop";
 
     /// Unpackaged apps need their AUMID registered (with a display name and icon) for toasts
-    /// to show.
-    fn register_app_id() {
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| {
+    /// to show. Returns the icon file (a copy in the data dir: toasts take a file path), if
+    /// written.
+    fn register_app_id() -> Option<&'static PathBuf> {
+        static ICON: OnceLock<Option<PathBuf>> = OnceLock::new();
+        ICON.get_or_init(|| {
+            let icon = crate::sync_bridge::data_dir().join("app-icon.png");
+            let icon = std::fs::write(&icon, crate::titlebar::APP_ICON_PNG)
+                .is_ok()
+                .then_some(icon);
             let key = windows_registry::CURRENT_USER
                 .create(format!(r"Software\Classes\AppUserModelId\{APP_ID}"));
             if let Ok(key) = key {
                 let _ = key.set_string("DisplayName", "Mailbox");
-                // Toasts show the app icon from a file path: keep a copy in the data dir.
-                let icon = crate::sync_bridge::data_dir().join("app-icon.png");
-                if std::fs::write(&icon, crate::titlebar::APP_ICON_PNG).is_ok() {
+                if let Some(icon) = &icon {
                     let _ = key.set_string("IconUri", icon.to_string_lossy().as_ref());
                 }
             }
-        });
+            icon
+        })
+        .as_ref()
     }
 
     pub fn show(title: &str, body: &str, sound: bool, on_click: impl Fn() + Send + 'static) {
-        register_app_id();
-        let result = Toast::new(APP_ID)
+        let icon = register_app_id();
+        let mut toast = Toast::new(APP_ID);
+        // Windows caches the registered icon (an entry made before it was set shows none):
+        // the toast carries the logo itself.
+        if let Some(icon) = icon {
+            toast = toast.icon(icon, IconCrop::Square, "Mailbox");
+        }
+        let result = toast
             .title(title)
             .text1(body)
             .sound(sound.then_some(Sound::Default))
