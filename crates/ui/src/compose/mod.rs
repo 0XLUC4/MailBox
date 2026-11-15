@@ -7,7 +7,9 @@
 //! live in `mailbox_core::compose` (tested there).
 
 mod dock;
-mod preview;
+// Page and commands only (no web view): unused where the formatted editor is unavailable.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+mod editor;
 mod recipients;
 mod send;
 mod view;

@@ -99,6 +99,19 @@ pub fn hex(color: u32) -> Hsla {
     rgb(color).into()
 }
 
+/// A theme color as `(r, g, b)` (alpha ignored).
+pub fn rgb_bytes(color: Hsla) -> (u8, u8, u8) {
+    let color = color.to_rgb();
+    let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    (byte(color.r), byte(color.g), byte(color.b))
+}
+
+/// A theme color as CSS `#rrggbb` (web pages in the app's colors).
+pub fn css_color(color: Hsla) -> String {
+    let (r, g, b) = rgb_bytes(color);
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
 impl Theme {
     pub fn light(accent: u32) -> Self {
         let accent = hex(accent);

@@ -967,7 +967,7 @@ impl ReadingPaneView {
                     colors.text.trim_start_matches('#'),
                 );
                 let page = || plain_web_page(message, &colors);
-                web.load(key, rgb_bytes(t.background), page);
+                web.load(key, crate::theme::rgb_bytes(t.background), page);
                 web.set_zoom(zoom);
                 el.child(webview::paper(web))
             });
@@ -1045,6 +1045,7 @@ impl ReadingPaneView {
                     WebEvent::OpenLink(url) => cx
                         .update(|window, cx| ops::open_link(&state, &url, window, cx))
                         .ok(),
+                    WebEvent::Editor(_) => None,
                     // Shows the "Pictures were blocked" bar for what the page really asked for.
                     WebEvent::Blocked(id) => this
                         .update(cx, |this, cx| {
@@ -1066,22 +1067,9 @@ fn pictures_key(email: &str) -> String {
     format!("mail.pictures.sender.{}", email.trim().to_lowercase())
 }
 
-/// A theme color as `(r, g, b)`.
-#[cfg(any(windows, target_os = "macos"))]
-fn rgb_bytes(color: Hsla) -> (u8, u8, u8) {
-    let color = color.to_rgb();
-    let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
-    (byte(color.r), byte(color.g), byte(color.b))
-}
-
-#[cfg(any(windows, target_os = "macos"))]
-fn css_color(color: Hsla) -> String {
-    let (r, g, b) = rgb_bytes(color);
-    format!("#{r:02x}{g:02x}{b:02x}")
-}
-
 #[cfg(any(windows, target_os = "macos"))]
 fn page_colors(t: &Theme) -> html::PageColors {
+    use crate::theme::css_color;
     html::PageColors {
         background: css_color(t.background),
         text: css_color(t.text),

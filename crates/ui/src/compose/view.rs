@@ -13,12 +13,13 @@ use mailbox_core::compose::markup::{self, Edit, LineFormat};
 use mailbox_core::compose::{self, Draft, DraftAttachment, Signature};
 use mailbox_core::{Account, Address, Attachment, Command, FolderRole, Id, Importance};
 
+use super::editor as editor_js;
 use super::recipients::{RecipientEvent, RecipientField};
-use super::{
-    InsertLink, SendMessage, ToggleBold, ToggleItalic, ToggleUnderline, dock, preview, send,
-};
+use super::{InsertLink, SendMessage, ToggleBold, ToggleItalic, ToggleUnderline, dock, send};
 use crate::app_state::AppState;
 use crate::components::{Avatar, Button, Icon, IconButton, IconName, Toolbar, toolbar_separator};
+#[cfg(any(windows, target_os = "macos"))]
+use crate::mail::webview::{MailWebView, WebEvent};
 use crate::settings::tr;
 use crate::theme::{
     ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2, SPACE_3, SPACE_4,
@@ -88,7 +89,12 @@ pub struct ComposeView {
     signature_reply: Entity<TextareaState>,
     panel: Option<Panel>,
     from_open: bool,
-    preview: bool,
+    /// The formatted body editor (Windows, macOS) once created; the text area until then and
+    /// where it is unavailable.
+    #[cfg(any(windows, target_os = "macos"))]
+    editor: Option<std::rc::Rc<MailWebView>>,
+    #[cfg(any(windows, target_os = "macos"))]
+    editor_failed: bool,
     status: SaveStatus,
     autosave: Option<Task<()>>,
     /// Detached from its host (closed, sent or discarded): never save again.
@@ -186,6 +192,24 @@ impl ComposeView {
                 .push(cx.subscribe(field, |this, _, _: &RecipientEvent, cx| this.mark_dirty(cx)));
         }
 
+        // Hidden while the compose view is not drawn (another module, a closed dock).
+        #[cfg(any(windows, target_os = "macos"))]
+        subscriptions.push(
+            cx.observe_in(&state, window, |this: &mut Self, _, window, _| {
+                if let Some(editor) = &this.editor {
+                    crate::mail::webview::hide_unless_painted(editor, window);
+                }
+            }),
+        );
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let focus = !message.to.is_empty();
+            let source = draft.meta.markup.clone();
+            cx.defer_in(window, move |this: &mut Self, window, cx| {
+                this.start_editor(source, focus, window, cx)
+            });
+        }
+
         if host == Host::Window {
             let view = cx.entity().downgrade();
             window.on_window_should_close(cx, move |_, cx| {
@@ -216,8 +240,10 @@ impl ComposeView {
             signature_reply,
             panel: None,
             from_open: false,
-            // The formatted message shows next to the editor while typing.
-            preview: true,
+            #[cfg(any(windows, target_os = "macos"))]
+            editor: None,
+            #[cfg(any(windows, target_os = "macos"))]
+            editor_failed: false,
             status: SaveStatus::Clean,
             autosave: None,
             closed: false,
@@ -343,6 +369,11 @@ impl ComposeView {
     fn detach(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.closed = true;
         self.autosave = None;
+        // Its child window goes away with it.
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            self.editor = None;
+        }
         match self.host {
             Host::Docked => {
                 dock::remove(&cx.entity(), cx);
@@ -537,6 +568,11 @@ impl ComposeView {
     // ---------- fields ----------
 
     fn focus_body(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(any(windows, target_os = "macos"))]
+        if let Some(editor) = &self.editor {
+            editor.focus_page();
+            return;
+        }
         self.body.update(cx, |body, cx| body.focus(window, cx));
         cx.notify();
     }
@@ -693,18 +729,37 @@ impl ComposeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.run_in_editor(|| editor_js::format_command(&open)) {
+            return;
+        }
         self.edit_body(window, cx, move |text, selection| {
             markup::toggle_wrap(text, selection, &open, close)
         });
     }
 
     fn lines(&mut self, format: LineFormat, window: &mut Window, cx: &mut Context<Self>) {
+        let command = match format {
+            LineFormat::Bullet => "mbx.cmd('insertUnorderedList')",
+            LineFormat::Numbered => "mbx.cmd('insertOrderedList')",
+            LineFormat::Quote => "mbx.quote()",
+        };
+        if self.run_in_editor(|| Some(command.to_owned())) {
+            return;
+        }
         self.edit_body(window, cx, move |text, selection| {
             markup::toggle_lines(text, selection, format)
         });
     }
 
     fn indent(&mut self, outdent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let command = if outdent {
+            "mbx.cmd('outdent')"
+        } else {
+            "mbx.cmd('indent')"
+        };
+        if self.run_in_editor(|| Some(command.to_owned())) {
+            return;
+        }
         self.edit_body(window, cx, move |text, selection| {
             markup::indent_lines(text, selection, outdent)
         });
@@ -712,6 +767,9 @@ impl ComposeView {
 
     /// Removes inline formatting from the selection (keeps lists and quotes).
     fn clear_formatting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.run_in_editor(|| Some("mbx.cmd('removeFormat');mbx.cmd('unlink')".to_owned())) {
+            return;
+        }
         self.edit_body(window, cx, |text, selection| {
             let plain = markup::plain_text(&text[selection.clone()]);
             let end = selection.start + plain.len();
@@ -738,6 +796,9 @@ impl ComposeView {
     }
 
     fn insert_text(&mut self, text: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.run_in_editor(|| Some(editor_js::insert_text(text))) {
+            return;
+        }
         self.body.update(cx, |body, cx| {
             body.replace(text, window, cx);
             body.focus(window, cx);
@@ -752,6 +813,10 @@ impl ComposeView {
         self.link_input
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.panel = None;
+        if self.run_in_editor(|| editor_js::link(&url)) {
+            cx.notify();
+            return;
+        }
         self.edit_body(window, cx, move |text, selection| {
             markup::insert_link(text, selection, &url)
         });
@@ -818,6 +883,10 @@ impl ComposeView {
             return;
         }
         self.panel = None;
+        if self.run_in_editor(|| Some(editor_js::insert_markup(&format!("\n{signature}")))) {
+            cx.notify();
+            return;
+        }
         self.edit_body(window, cx, move |_text, selection| {
             let insert = format!("\n\n{signature}\n");
             let caret = selection.start + insert.len();
@@ -827,6 +896,140 @@ impl ComposeView {
                 select: caret..caret,
             }
         });
+    }
+
+    // ---------- formatted editor ----------
+
+    /// Whether the body is the formatted editor rather than the markup text area.
+    fn uses_editor(&self) -> bool {
+        #[cfg(any(windows, target_os = "macos"))]
+        return !self.editor_failed;
+        #[cfg(not(any(windows, target_os = "macos")))]
+        false
+    }
+
+    /// Runs the command `make` builds in the formatted editor; false without it (the caller
+    /// then edits the markup).
+    fn run_in_editor(&self, make: impl FnOnce() -> Option<String>) -> bool {
+        #[cfg(any(windows, target_os = "macos"))]
+        if let Some(editor) = &self.editor {
+            if let Some(js) = make() {
+                editor.run(&js);
+            }
+            // The toolbar click took the keyboard: typing goes on in the editor.
+            editor.refocus();
+            return true;
+        }
+        let _ = make;
+        false
+    }
+
+    /// Creates the formatted editor (in the background) showing `source`; `focus` gives it the
+    /// keyboard once its page is ready. The text area stays the body if it cannot start.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn start_editor(
+        &mut self,
+        source: String,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::theme::{css_color, rgb_bytes};
+        let Ok(parent) = mailbox_window_handle::ParentWindow::of(window) else {
+            self.editor_failed = true;
+            cx.notify();
+            return;
+        };
+        let t = theme(cx);
+        let colors = editor_js::EditorColors {
+            background: css_color(t.background),
+            text: css_color(t.text),
+            placeholder: css_color(t.text_subtle),
+            link: css_color(t.accent),
+            quote: css_color(t.border),
+        };
+        let background = rgb_bytes(t.background);
+        let html = editor_js::page(&source, tr(cx, "Write your message…"), &colors);
+        cx.spawn_in(window, async move |this, cx| {
+            let (events, received) = async_channel::unbounded();
+            // Outside any `update`: creating the web view runs a nested message loop.
+            let created = MailWebView::new_editor(&parent, events, html, background);
+            let started = this
+                .update(cx, |this, cx| {
+                    match created {
+                        Ok(editor) => this.editor = Some(editor),
+                        Err(err) => {
+                            crate::log::error(format_args!(
+                                "formatted editor unavailable, using the text area: {err}"
+                            ));
+                            this.editor_failed = true;
+                        }
+                    }
+                    cx.notify();
+                    this.editor.is_some()
+                })
+                .unwrap_or(false);
+            while started && let Ok(WebEvent::Editor(message)) = received.recv().await {
+                let handled = this.update_in(cx, |this, window, cx| {
+                    this.on_editor_message(&message, focus, window, cx)
+                });
+                if handled.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// `change\n<markup>` (stored in the body field, saved later), `send` (Ctrl+Enter) or
+    /// `ready` (page loaded).
+    #[cfg(any(windows, target_os = "macos"))]
+    fn on_editor_message(
+        &mut self,
+        message: &str,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(markup) = message.strip_prefix("change\n") {
+            if self.body.read(cx).value().as_ref() != markup {
+                let markup = markup.to_owned();
+                self.body
+                    .update(cx, |body, cx| body.set_value(markup, window, cx));
+                self.mark_dirty(cx);
+            }
+        } else if message == "send" {
+            self.send(window, cx);
+        } else if message == "ready"
+            && focus
+            && let Some(editor) = &self.editor
+        {
+            editor.focus_page();
+        }
+    }
+
+    /// The body: the formatted editor (its theme background while it starts), else the markup
+    /// text area.
+    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        #[cfg(any(windows, target_os = "macos"))]
+        if self.uses_editor() {
+            return div()
+                .flex_1()
+                .min_h(px(0.))
+                .when_some(self.editor.clone(), |el, editor| {
+                    el.child(crate::mail::webview::paper(editor))
+                })
+                .into_any_element();
+        }
+        let _ = cx;
+        div()
+            .flex_1()
+            .min_w(px(0.))
+            .min_h(px(0.))
+            .px(SPACE_2)
+            .py(SPACE_1)
+            .child(Textarea::new(&self.body).appearance(false).h_full())
+            .into_any_element()
     }
 
     // ---------- rendering ----------
@@ -1158,22 +1361,16 @@ impl ComposeView {
                     .on_click(cx.listener(|this, _, window, cx| this.clear_formatting(window, cx))),
             )
             .child(div().flex_1())
-            .child(
-                tool(
-                    "fmt-find",
-                    IconName::TextSearch,
-                    "Find and replace (Ctrl+F / Ctrl+H)",
+            .when(!self.uses_editor(), |el| {
+                el.child(
+                    tool(
+                        "fmt-find",
+                        IconName::TextSearch,
+                        "Find and replace (Ctrl+F / Ctrl+H)",
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.find_replace(window, cx))),
                 )
-                .on_click(cx.listener(|this, _, window, cx| this.find_replace(window, cx))),
-            )
-            .child(
-                tool("fmt-preview", IconName::Eye, "Preview")
-                    .active(self.preview)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.preview = !this.preview;
-                        cx.notify();
-                    })),
-            )
+            })
     }
 
     fn render_panel(&self, panel: Panel, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1426,40 +1623,7 @@ impl Render for ComposeView {
         let panel = self.panel.map(|panel| self.render_panel(panel, &t, cx));
         let attachments = (!self.draft.meta.attachments.is_empty())
             .then(|| self.render_attachments(&t, cx).into_any_element());
-        let textarea = div()
-            .flex_1()
-            .min_w(px(0.))
-            .min_h(px(0.))
-            .px(SPACE_2)
-            .py(SPACE_1)
-            .child(Textarea::new(&self.body).appearance(false).h_full());
-        // The editor on the left, the message as sent on the right, updated on every keystroke.
-        let editor = if self.preview {
-            let source = self.body.read(cx).value();
-            div()
-                .flex()
-                .flex_row()
-                .flex_1()
-                .min_h(px(0.))
-                .child(textarea)
-                .child(
-                    div()
-                        .id("compose-preview")
-                        .flex_1()
-                        .min_w(px(0.))
-                        .min_h(px(0.))
-                        .overflow_y_scroll()
-                        .border_l_1()
-                        .border_color(t.border_subtle)
-                        .bg(t.surface)
-                        .px(SPACE_4)
-                        .py(SPACE_3)
-                        .child(preview::render(&source, &t)),
-                )
-                .into_any_element()
-        } else {
-            textarea.into_any_element()
-        };
+        let editor = self.render_body(cx);
 
         div()
             .id("compose")

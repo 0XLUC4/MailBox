@@ -44,6 +44,8 @@ pub enum WebEvent {
     OpenLink(String),
     /// The page of this message asked for remote content while it is blocked.
     Blocked(u64),
+    /// A message from the compose editor page (`compose/editor.rs`).
+    Editor(String),
 }
 
 /// Largest remote resource fetched.
@@ -166,7 +168,48 @@ impl MailWebView {
             // `true` = handled: a dropped file must not replace the message.
             .with_drag_drop_handler(|_| true)
             .build_as_child(parent)?;
-        Ok(Rc::new(Self {
+        Ok(Self::wrap(webview, page, context))
+    }
+
+    /// The compose body editor: `html` (a complete page with its script) as a child of `parent`,
+    /// hidden until placed. Its messages arrive as [`WebEvent::Editor`]; it never navigates.
+    pub fn new_editor(
+        parent: &ParentWindow,
+        events: async_channel::Sender<WebEvent>,
+        html: String,
+        background: (u8, u8, u8),
+    ) -> Result<Rc<Self>, wry::Error> {
+        let mut context = wry::WebContext::new(Some(crate::data_dir().join("webview")));
+        let (r, g, b) = background;
+        let builder = wry::WebViewBuilder::new_with_web_context(&mut context);
+        #[cfg(windows)]
+        let builder = builder
+            .with_browser_accelerator_keys(false)
+            .with_theme(wry::Theme::Light);
+        let webview = builder
+            .with_visible(false)
+            .with_focused(false)
+            .with_incognito(true)
+            .with_devtools(false)
+            .with_autoplay(false)
+            .with_background_color((r, g, b, 255))
+            .with_html(html)
+            .with_ipc_handler(move |request| {
+                events.try_send(WebEvent::Editor(request.into_body())).ok();
+            })
+            // Only the page given above: links in the draft never open in the editor.
+            .with_navigation_handler(|url| url == "about:blank" || url.starts_with("data:"))
+            .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+            .with_download_started_handler(|_, _| false)
+            .with_drag_drop_handler(|_| true)
+            .build_as_child(parent)?;
+        let editor = Self::wrap(webview, Default::default(), context);
+        editor.background.set(background);
+        Ok(editor)
+    }
+
+    fn wrap(webview: wry::WebView, page: Arc<Mutex<Page>>, context: wry::WebContext) -> Rc<Self> {
+        Rc::new(Self {
             webview,
             page,
             loaded: Default::default(),
@@ -178,7 +221,26 @@ impl MailWebView {
             bounds: Cell::new(None),
             paints: Cell::new(0),
             _context: context,
-        }))
+        })
+    }
+
+    /// Runs `js` in the page (the compose editor's commands).
+    pub fn run(&self, js: &str) {
+        if let Err(err) = self.webview.evaluate_script(js) {
+            crate::log::error(format_args!("editor script failed: {err}"));
+        }
+    }
+
+    /// Gives the keyboard to the page (the editor), caret at the start.
+    pub fn focus_page(&self) {
+        let _ = self.webview.focus();
+        self.run("mbx.focus()");
+    }
+
+    /// Gives the keyboard back to the web view, its caret where it was (after a toolbar click,
+    /// which focuses the app).
+    pub fn refocus(&self) {
+        let _ = self.webview.focus();
     }
 
     /// Shows the page built by `page` unless the page with the same `key` (URL-safe) is loaded,
