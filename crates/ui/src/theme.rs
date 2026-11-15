@@ -26,6 +26,8 @@ pub const RADIUS_XL: Pixels = px(12.);
 pub const RADIUS_FULL: Pixels = px(9999.);
 
 // ---------- font sizes ----------
+/// Dense captions only (calendar hour labels, badges).
+pub const TEXT_2XS: Pixels = px(10.);
 pub const TEXT_XS: Pixels = px(11.);
 pub const TEXT_SM: Pixels = px(12.);
 pub const TEXT_MD: Pixels = px(13.);
@@ -59,8 +61,23 @@ pub const CSS_UI_FONT: &str = "'Segoe UI Variable Text','Segoe UI',-apple-system
 // ---------- layout ----------
 pub const RAIL_WIDTH: Pixels = px(56.);
 pub const TOP_BAR_HEIGHT: Pixels = px(48.);
+/// Header strip of the folder, list and reading panes (their bottom borders line up).
+pub const PANE_HEADER_HEIGHT: Pixels = px(40.);
+/// Rows of the folder tree and the Calendar / Tasks / People sidebars.
+pub const NAV_ROW_HEIGHT: Pixels = px(32.);
+/// Dialog widths: confirmations, forms, wide editors.
+pub const DIALOG_SM: Pixels = px(400.);
+pub const DIALOG_MD: Pixels = px(480.);
+pub const DIALOG_LG: Pixels = px(560.);
 pub const ICON_SIZE: Pixels = px(16.);
 pub const ICON_SIZE_SM: Pixels = px(14.);
+/// Inline glyphs next to small text (attachment, flag, pin).
+pub const ICON_SIZE_XS: Pixels = px(12.);
+/// Classic ribbon buttons, empty-state headers.
+pub const ICON_SIZE_LG: Pixels = px(22.);
+
+/// Opacity of disabled controls.
+pub const DISABLED_OPACITY: f32 = 0.4;
 
 /// Default accent (blue).
 pub const DEFAULT_ACCENT: u32 = 0x3b82f6;
@@ -110,8 +127,10 @@ pub struct Theme {
     pub accent_hover: Hsla,
     /// Selected row background.
     pub accent_subtle: Hsla,
-    /// Text on an accent background.
+    /// Text on an accent background. For other fills use [`text_on`].
     pub on_accent: Hsla,
+    /// Backdrop behind modal sheets and popovers.
+    pub scrim: Hsla,
     pub danger: Hsla,
     pub success: Hsla,
     pub warning: Hsla,
@@ -135,6 +154,29 @@ pub fn css_color(color: Hsla) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
+/// WCAG relative luminance (0 = black, 1 = white).
+fn luminance(color: Hsla) -> f32 {
+    let color = color.to_rgb();
+    let linear = |c: f32| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+}
+
+/// Readable text on a filled `background` (accent, danger, calendar colour): white, or dark
+/// on light fills such as orange, green or teal.
+pub fn text_on(background: Hsla) -> Hsla {
+    if luminance(background) > 0.3 {
+        hex(0x18181b)
+    } else {
+        hex(0xffffff)
+    }
+}
+
 impl Theme {
     pub fn light(accent: u32) -> Self {
         let accent = hex(accent);
@@ -148,7 +190,7 @@ impl Theme {
             border_subtle: hex(0xececef),
             text: hex(0x18181b),
             text_muted: hex(0x63636b),
-            text_subtle: hex(0x9c9ca4),
+            text_subtle: hex(0x82828a),
             hover: hsla(0., 0., 0., 0.045),
             active: hsla(0., 0., 0., 0.08),
             accent,
@@ -157,7 +199,8 @@ impl Theme {
                 ..accent
             },
             accent_subtle: accent.alpha(0.12),
-            on_accent: hex(0xffffff),
+            on_accent: text_on(accent),
+            scrim: hsla(0., 0., 0., 0.25),
             danger: hex(0xdc2626),
             success: hex(0x16a34a),
             warning: hex(0xd97706),
@@ -176,7 +219,7 @@ impl Theme {
             border_subtle: hex(0x2a2b2f),
             text: hex(0xe8e8ea),
             text_muted: hex(0xa3a3ab),
-            text_subtle: hex(0x6e6e76),
+            text_subtle: hex(0x7c7c84),
             hover: hsla(0., 0., 1., 0.05),
             active: hsla(0., 0., 1., 0.09),
             accent,
@@ -185,7 +228,8 @@ impl Theme {
                 ..accent
             },
             accent_subtle: accent.alpha(0.2),
-            on_accent: hex(0xffffff),
+            on_accent: text_on(accent),
+            scrim: hsla(0., 0., 0., 0.45),
             danger: hex(0xf87171),
             success: hex(0x4ade80),
             warning: hex(0xfbbf24),
@@ -297,4 +341,19 @@ fn fonts(cx: &App) -> &'static (Option<SharedString>, Option<SharedString>) {
         };
         (first_installed(UI_FONTS), first_installed(MONO_FONTS))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hex, text_on};
+
+    #[test]
+    fn text_on_picks_the_readable_color() {
+        let white = hex(0xffffff);
+        let dark = hex(0x18181b);
+        assert_eq!(text_on(hex(0x3b82f6)), white); // blue
+        assert_eq!(text_on(hex(0xdc2626)), white); // light-mode danger
+        assert_eq!(text_on(hex(0x22c55e)), dark); // green
+        assert_eq!(text_on(hex(0xf97316)), dark); // orange
+    }
 }
