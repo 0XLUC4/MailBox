@@ -462,11 +462,20 @@ pub fn due_reminders(
         .into_iter()
         .filter(|occurrence| occurrence.event.end > now)
         .flat_map(|occurrence| {
+            // All-day events are stored at UTC midnight but start at local midnight.
+            let start = if occurrence.event.all_day {
+                Local
+                    .from_local_datetime(&occurrence.event.start.naive_utc())
+                    .earliest()
+                    .map_or(occurrence.event.start, |start| start.with_timezone(&Utc))
+            } else {
+                occurrence.event.start
+            };
             occurrence
                 .event
                 .reminders
                 .iter()
-                .map(|minutes| occurrence.event.start - Duration::minutes(*minutes))
+                .map(move |minutes| start - Duration::minutes(*minutes))
                 .filter(|at| *at > after && *at <= now)
                 .max()
                 .map(|at| DueReminder { at, occurrence })

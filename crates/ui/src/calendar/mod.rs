@@ -113,7 +113,17 @@ impl Drag {
         Some(match self.kind {
             DragKind::Move | DragKind::Create => {
                 let delta = Duration::days(days) + Duration::minutes(minutes);
-                (start + delta, end + delta)
+                if occurrence.event.all_day {
+                    (start + delta, end + delta)
+                } else {
+                    // Shift the local clock time so a move across a DST change keeps the hour.
+                    let local = start.with_timezone(&Local).naive_local() + delta;
+                    let new_start = local
+                        .and_local_timezone(Local)
+                        .earliest()
+                        .map_or(start + delta, |at| at.with_timezone(&Utc));
+                    (new_start, new_start + (end - start))
+                }
             }
             DragKind::ResizeEnd => {
                 let new_end = layout::local_to_utc(self.current.0, layout::snap(self.current.1));
