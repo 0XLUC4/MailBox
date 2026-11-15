@@ -913,13 +913,54 @@ fn linkify(line: &str, spans: &mut Vec<Span>) {
     }
 }
 
-/// CSS colors of a plain-text page (the app theme).
+/// CSS colors of a page shown in the app theme.
 pub struct PageColors {
     pub background: String,
     pub text: String,
     pub muted: String,
     pub link: String,
     pub border: String,
+    /// Dark theme: form controls and scrollbars follow it.
+    pub dark: bool,
+}
+
+impl PageColors {
+    fn scheme(&self) -> &'static str {
+        if self.dark { "dark" } else { "light" }
+    }
+}
+
+/// Whether the sender's HTML sets colors or backgrounds of its own (`color:`, `bgcolor=`,
+/// `background…`): such a page is shown as designed, on white. Text inside the mail that only
+/// mentions these words may also match: the page then just keeps its white paper.
+pub fn has_own_colors(html: &str) -> bool {
+    let lower = html.to_ascii_lowercase();
+    let sets = |word: &str, next: &[char]| {
+        lower
+            .match_indices(word)
+            .any(|(at, _)| lower[at + word.len()..].trim_start().starts_with(next))
+    };
+    sets("color", &[':', '=']) || sets("background", &[':', '=', '-'])
+}
+
+/// The sender's HTML (with no colors of its own, see `has_own_colors`) in the app's colors:
+/// it reads like the rest of the pane, in light and dark themes.
+pub fn with_app_colors(html: &str, colors: &PageColors) -> String {
+    let style = format!(
+        "<style>:root{{color-scheme:{};}}html,body{{background:{};color:{};}}a{{color:{};}}</style>",
+        colors.scheme(),
+        colors.background,
+        colors.text,
+        colors.link,
+    );
+    // After the doctype: anything before it would switch the page to quirks mode.
+    let trimmed = html.trim_start();
+    let at = trimmed
+        .get(..9)
+        .filter(|start| start.eq_ignore_ascii_case("<!doctype"))
+        .and_then(|_| trimmed.find('>'))
+        .map_or(0, |end| html.len() - trimmed.len() + end + 1);
+    format!("{}{style}{}", &html[..at], &html[at..])
 }
 
 /// A plain-text body as an HTML page in the app's colors, for the web view (selectable text):
@@ -1339,8 +1380,8 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
 mod tests {
     // Not `super::*`: it would pull in gpui's `test` macro through `use gpui::*`.
     use super::{
-        Block, PageColors, cid_references, has_remote_images, parse, parse_plain, plain_page,
-        sent_html, to_text, url_runs,
+        Block, PageColors, cid_references, has_own_colors, has_remote_images, parse, parse_plain,
+        plain_page, sent_html, to_text, url_runs, with_app_colors,
     };
 
     #[test]
@@ -1476,6 +1517,7 @@ mod tests {
             muted: "#999".into(),
             link: "#39f".into(),
             border: "#333".into(),
+            dark: true,
         };
         let page = plain_page(
             "Hi <b>&</b> see https://ex.example/a?b=1&c=2.\n> quoted\n>> deeper\nBye",
@@ -1487,7 +1529,40 @@ mod tests {
         ));
         assert!(page.contains("<blockquote>quoted\n&gt; deeper\n</blockquote>Bye"));
         assert!(page.contains("background:#111"));
+        assert!(page.contains("color-scheme:dark"));
         assert!(!page.contains("<b>"));
+    }
+
+    #[test]
+    fn own_colors_are_detected() {
+        assert!(!has_own_colors(
+            r#"<div dir="ltr">Hi, the color of money</div>"#
+        ));
+        assert!(!has_own_colors(
+            r#"<meta name="color-scheme" content="light dark"><p>Background info</p>"#
+        ));
+        assert!(has_own_colors(r#"<span style="COLOR : #000">x</span>"#));
+        assert!(has_own_colors(r#"<font color="red">x</font>"#));
+        assert!(has_own_colors(r#"<table bgcolor="#fff">"#));
+        assert!(has_own_colors(r#"<td style="background-image:url(x)">"#));
+        assert!(has_own_colors(r#"<body background="x.gif">"#));
+    }
+
+    #[test]
+    fn app_colors_go_after_the_doctype() {
+        let colors = PageColors {
+            background: "#202124".into(),
+            text: "#eee".into(),
+            muted: "#999".into(),
+            link: "#39f".into(),
+            border: "#333".into(),
+            dark: true,
+        };
+        let page = with_app_colors("  <!DOCTYPE html><meta x><p>Hi</p>", &colors);
+        assert!(page.starts_with("  <!DOCTYPE html><style>:root{color-scheme:dark;}"));
+        assert!(page.contains("html,body{background:#202124;color:#eee;}"));
+        assert!(page.ends_with("</style><meta x><p>Hi</p>"));
+        assert!(with_app_colors("<p>Hi</p>", &colors).starts_with("<style>"));
     }
 
     #[test]
