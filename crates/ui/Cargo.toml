@@ -18,6 +18,9 @@ mailbox-updater.workspace = true
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification.workspace = true
 windows-registry.workspace = true
+
+# HTML mail bodies in the system web engine (WebView2 / WKWebView), see mail/webview.rs.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 wry.workspace = true
 async-channel.workspace = true
 mailbox-window-handle.workspace = true

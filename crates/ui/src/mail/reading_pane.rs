@@ -17,7 +17,7 @@ use mailbox_core::{
 };
 
 use super::html::{self, Block, RenderContext};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use super::webview::{self, MailWebView, WebEvent};
 use super::{ComposeKind, message_menu, message_window, ops};
 use crate::app_state::AppState;
@@ -28,7 +28,7 @@ use crate::theme::{
     ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_MD,
     TEXT_SM, TEXT_XL, TEXT_XS, Theme, hex, theme,
 };
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use mailbox_window_handle::ParentWindow;
 
 /// Which message the pane shows.
@@ -46,7 +46,7 @@ pub struct ReadingPaneView {
     /// Messages whose remote pictures the user allowed.
     show_pictures: HashSet<Id>,
     /// Messages whose page asked for remote content while it was blocked (from the webview).
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     blocked: HashSet<Id>,
     /// Conversation message the user clicked to show instead of the selected one…
     viewing: Option<Id>,
@@ -58,14 +58,14 @@ pub struct ReadingPaneView {
     /// not listed again above the body.
     inline_parts: HashMap<Id, (usize, Rc<HashSet<String>>)>,
     /// Whether an HTML body loads remote content, by message id (with the body length).
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     remote: HashMap<Id, (usize, bool)>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     web: Option<Rc<MailWebView>>,
     /// WebView2 could not start: HTML goes through our renderer.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     web_failed: bool,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     web_creating: bool,
     _subscription: Subscription,
 }
@@ -104,7 +104,7 @@ impl ReadingPaneView {
     ) -> Self {
         let subscription = cx.observe_in(&state, window, |_this, _, _window, cx| {
             // The pane may not be drawn any more (other module, reading pane off…).
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             if let Some(web) = &_this.web {
                 webview::hide_unless_painted(web, _window);
             }
@@ -114,19 +114,19 @@ impl ReadingPaneView {
             state,
             source,
             show_pictures: HashSet::new(),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             blocked: HashSet::new(),
             viewing: None,
             viewing_for: None,
             bodies: HashMap::new(),
             inline_parts: HashMap::new(),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             remote: HashMap::new(),
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             web: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             web_failed: false,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             web_creating: false,
             _subscription: subscription,
         }
@@ -755,7 +755,7 @@ impl ReadingPaneView {
         t: &Theme,
         cx: &mut Context<Self>,
     ) -> (AnyElement, bool) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         if let Some(html) = html::sent_html(message.body_html.as_deref())
             && !self.web_failed
         {
@@ -786,7 +786,7 @@ impl ReadingPaneView {
             let remote = remote || self.blocked.contains(&message.id);
             return (paper.into_any_element(), remote);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         if let Some(web) = &self.web {
             web.set_visible(false);
         }
@@ -819,8 +819,8 @@ impl ReadingPaneView {
     }
 
     /// The webview once created; the first call starts creating it in the background
-    /// (`web_failed` without WebView2: our renderer is used then).
-    #[cfg(windows)]
+    /// (`web_failed` without a system web engine: our renderer is used then).
+    #[cfg(any(windows, target_os = "macos"))]
     fn web(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Rc<MailWebView>> {
         if self.web.is_some() || self.web_creating || self.web_failed {
             return self.web.clone();
@@ -879,7 +879,7 @@ fn pictures_key(email: &str) -> String {
 }
 
 /// The page served to the webview: `cid:` pictures map to the stored inline parts.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn web_page(message: &Message, html: &str, remote: bool) -> webview::Page {
     let prepared = webview::prepare(html);
     let inline = prepared
@@ -913,7 +913,7 @@ impl Render for ReadingPaneView {
         let store = self.state.read(cx).store();
         let message = id.and_then(|id| store.get::<Message>(id).ok().flatten());
         let Some(message) = message else {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             if let Some(web) = &self.web {
                 web.set_visible(false);
             }

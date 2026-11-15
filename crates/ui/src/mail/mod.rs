@@ -14,7 +14,7 @@ mod message_window;
 mod ops;
 mod reading_pane;
 mod remote_images;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod webview;
 
 pub use folder_pane::FolderPaneView;

@@ -1,4 +1,5 @@
-//! HTML mail bodies shown exactly as sent, by the system web engine (WebView2 through `wry`).
+//! HTML mail bodies shown exactly as sent, by the system web engine through `wry`: WebView2 on
+//! Windows, WKWebView on macOS.
 //!
 //! The webview is a child window of the GPUI window, so GPUI cannot draw over it: the reading
 //! pane paints a [`paper`] element where the body goes, which places the webview over it every
@@ -25,12 +26,17 @@ use std::time::Duration;
 
 use gpui::*;
 use mailbox_window_handle::ParentWindow;
+#[cfg(windows)]
 use wry::WebViewBuilderExtWindows as _;
 use wry::http::{Request, Response, StatusCode, header};
 
-/// Custom protocol name; on Windows its pages live at `http://mbx.localhost/…`.
+/// Custom protocol name; its pages live at `http://mbx.localhost/…` on Windows,
+/// `mbx://localhost/…` on macOS.
 const SCHEME: &str = "mbx";
+#[cfg(windows)]
 const ORIGIN: &str = "http://mbx.localhost/";
+#[cfg(not(windows))]
+const ORIGIN: &str = "mbx://localhost/";
 
 /// What the webview asks the app to do.
 pub enum WebEvent {
@@ -99,15 +105,18 @@ impl MailWebView {
             .build();
         // WebView2 needs a writable folder even for an InPrivate profile.
         let mut context = wry::WebContext::new(Some(crate::data_dir().join("webview")));
-        let webview = wry::WebViewBuilder::new_with_web_context(&mut context)
+        let builder = wry::WebViewBuilder::new_with_web_context(&mut context);
+        #[cfg(windows)]
+        let builder = builder
+            .with_browser_accelerator_keys(false)
+            .with_theme(wry::Theme::Light);
+        let webview = builder
             .with_visible(false)
             .with_focused(false)
             .with_javascript_disabled()
             .with_incognito(true)
             .with_devtools(false)
             .with_autoplay(false)
-            .with_browser_accelerator_keys(false)
-            .with_theme(wry::Theme::Light)
             .with_background_color((255, 255, 255, 255))
             .with_asynchronous_custom_protocol(SCHEME.into(), move |_, request, responder| {
                 let mut page = served.lock().unwrap_or_else(PoisonError::into_inner);
