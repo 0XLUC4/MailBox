@@ -953,7 +953,22 @@ pub fn with_app_colors(html: &str, colors: &PageColors) -> String {
         colors.text,
         colors.link,
     );
-    // After the doctype: anything before it would switch the page to quirks mode.
+    insert_style(html, &style)
+}
+
+/// Designed HTML (with colors of its own) on white paper, in the dark theme. The white is the
+/// page's own body background, not the web view's: that one stays the pane color, so nothing
+/// ever flashes white while a page loads or the view is moved. Zero specificity and no
+/// `bgcolor`/`background` attribute: any background the sender gives the body wins.
+pub fn on_white(html: &str) -> String {
+    insert_style(
+        html,
+        "<style>:where(body:not([bgcolor],[background])){background-color:#fff;}</style>",
+    )
+}
+
+/// `style` inserted after the doctype: anything before it would switch the page to quirks mode.
+fn insert_style(html: &str, style: &str) -> String {
     let trimmed = html.trim_start();
     let at = trimmed
         .get(..9)
@@ -1383,8 +1398,8 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
 mod tests {
     // Not `super::*`: it would pull in gpui's `test` macro through `use gpui::*`.
     use super::{
-        Block, PageColors, cid_references, has_own_colors, has_remote_images, parse, parse_plain,
-        plain_page, sent_html, to_text, url_runs, with_app_colors,
+        Block, PageColors, cid_references, has_own_colors, has_remote_images, on_white, parse,
+        parse_plain, plain_page, sent_html, to_text, url_runs, with_app_colors,
     };
 
     #[test]
@@ -1566,6 +1581,13 @@ mod tests {
         assert!(page.contains("html,body{background:#202124;color:#eee;}"));
         assert!(page.ends_with("</style><meta x><p>Hi</p>"));
         assert!(with_app_colors("<p>Hi</p>", &colors).starts_with("<style>"));
+    }
+
+    #[test]
+    fn white_paper_goes_after_the_doctype_and_yields_to_the_sender() {
+        let page = on_white("<!doctype html><body bgcolor=\"#eee\">x</body>");
+        assert!(page.starts_with("<!doctype html><style>:where(body:not([bgcolor],[background]))"));
+        assert!(page.contains("{background-color:#fff;}</style><body bgcolor"));
     }
 
     #[test]

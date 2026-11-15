@@ -79,7 +79,8 @@ pub struct MailWebView {
     page: Arc<Mutex<Page>>,
     /// Key of the page loaded in the webview.
     loaded: std::cell::RefCell<String>,
-    /// Background painted before and under the page (white for HTML mail, the theme for text).
+    /// Background painted before and under the page: the pane color, never white (WebView2
+    /// shows it while a page loads and each time the view is shown or moved back).
     background: Cell<(u8, u8, u8)>,
     /// Page zoom (1.0 = 100%).
     zoom: Cell<f64>,
@@ -96,12 +97,15 @@ pub struct MailWebView {
 }
 
 impl MailWebView {
-    /// Creates the (hidden) webview as a child of `parent`; events are sent to `events`.
+    /// Creates the (hidden) webview as a child of `parent`, on `background` (the pane color);
+    /// events are sent to `events`.
     /// Runs a nested message loop: call it while GPUI's `App` is not borrowed (from a task).
     pub fn new(
         parent: &ParentWindow,
         events: async_channel::Sender<WebEvent>,
+        background: (u8, u8, u8),
     ) -> Result<Rc<Self>, wry::Error> {
+        let (r, g, b) = background;
         let page = Arc::new(Mutex::new(Page::default()));
         let served = page.clone();
         let (navigate, new_window, blocked) = (events.clone(), events.clone(), events);
@@ -123,7 +127,7 @@ impl MailWebView {
             .with_incognito(true)
             .with_devtools(false)
             .with_autoplay(false)
-            .with_background_color((255, 255, 255, 255))
+            .with_background_color((r, g, b, 255))
             .with_asynchronous_custom_protocol(SCHEME.into(), move |_, request, responder| {
                 let mut page = served.lock().unwrap_or_else(PoisonError::into_inner);
                 let Some(remote) = request
@@ -168,7 +172,7 @@ impl MailWebView {
             // `true` = handled: a dropped file must not replace the message.
             .with_drag_drop_handler(|_| true)
             .build_as_child(parent)?;
-        Ok(Self::wrap(webview, page, context))
+        Ok(Self::wrap(webview, page, context, background))
     }
 
     /// The compose body editor: `html` (a complete page with its script) as a child of `parent`,
@@ -203,17 +207,20 @@ impl MailWebView {
             .with_download_started_handler(|_, _| false)
             .with_drag_drop_handler(|_| true)
             .build_as_child(parent)?;
-        let editor = Self::wrap(webview, Default::default(), context);
-        editor.background.set(background);
-        Ok(editor)
+        Ok(Self::wrap(webview, Default::default(), context, background))
     }
 
-    fn wrap(webview: wry::WebView, page: Arc<Mutex<Page>>, context: wry::WebContext) -> Rc<Self> {
+    fn wrap(
+        webview: wry::WebView,
+        page: Arc<Mutex<Page>>,
+        context: wry::WebContext,
+        background: (u8, u8, u8),
+    ) -> Rc<Self> {
         Rc::new(Self {
             webview,
             page,
             loaded: Default::default(),
-            background: Cell::new((255, 255, 255)),
+            background: Cell::new(background),
             zoom: Cell::new(1.),
             visible: Cell::new(false),
             shown: Cell::new(false),
@@ -244,7 +251,9 @@ impl MailWebView {
     }
 
     /// Shows the page built by `page` unless the page with the same `key` (URL-safe) is loaded,
-    /// over `background` (no white flash before a dark page paints).
+    /// over `background`: the pane color, which only changes with the theme. A page that needs
+    /// another backdrop (white paper) paints it itself, so switching messages never repaints
+    /// the view's background under the page still shown.
     pub fn load(&self, key: String, background: (u8, u8, u8), page: impl FnOnce() -> Page) {
         if *self.loaded.borrow() == key {
             return;
@@ -262,9 +271,6 @@ impl MailWebView {
         }
     }
 
-    /// Hiding moves the webview off-screen instead of hiding it natively: WebView2 repaints its
-    /// white background each time it is shown again, a white flash whenever a toast, menu or
-    /// dialog had covered the message.
     /// Zooms the page (1.0 = 100%); kept across messages.
     pub fn set_zoom(&self, zoom: f64) {
         if self.zoom.get() != zoom && self.webview.zoom(zoom).is_ok() {
@@ -272,6 +278,9 @@ impl MailWebView {
         }
     }
 
+    /// Hiding moves the webview off-screen instead of hiding it natively: WebView2 repaints its
+    /// background each time it is shown again, a flash whenever a toast, menu or
+    /// dialog had covered the message.
     pub fn set_visible(&self, visible: bool) {
         if self.visible.get() == visible {
             return;

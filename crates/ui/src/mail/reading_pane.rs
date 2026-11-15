@@ -997,6 +997,8 @@ impl ReadingPaneView {
             };
             // No frame: the message sits on the pane. HTML without colors of its own takes the
             // app's; designed HTML (newsletters…) keeps its look, on white in the dark theme.
+            // That white is painted by the page: the web view's own background is always the
+            // pane color, so no message switch, overlay or resize can show a white flash.
             let own_colors = match self.own_colors.get(&message.id) {
                 Some((len, own)) if *len == html.len() => *own,
                 _ => {
@@ -1006,11 +1008,8 @@ impl ReadingPaneView {
                 }
             };
             let colors = (!own_colors).then(|| page_colors(t));
-            let background = if own_colors && t.is_dark {
-                (255, 255, 255)
-            } else {
-                crate::theme::rgb_bytes(t.surface)
-            };
+            let white = own_colors && t.is_dark;
+            let background = crate::theme::rgb_bytes(t.surface);
             // Nothing painted under the webview: until it exists (created in the background), or
             // if the system fails to show it, the app background shows, not a white void.
             let paper = div().size_full().when_some(web, |el, web| {
@@ -1023,7 +1022,7 @@ impl ReadingPaneView {
                     html.len(),
                     colors.as_ref().map_or("", |colors| colors.text.as_str()),
                 );
-                let page = || web_page(message, html, allowed, colors.as_ref());
+                let page = || web_page(message, html, allowed, colors.as_ref(), white);
                 web.load(key, background, page);
                 web.set_zoom(zoom);
                 el.child(webview::paper(web))
@@ -1100,10 +1099,12 @@ impl ReadingPaneView {
         };
         self.web_creating = true;
         let state = self.state.clone();
+        // Created on the pane color: never white, even before its first page.
+        let background = crate::theme::rgb_bytes(theme(cx).surface);
         cx.spawn_in(window, async move |this, cx| {
             // Outside any `update`: creating the webview runs GPUI tasks in a nested loop.
             let (events, received) = async_channel::unbounded();
-            let web = MailWebView::new(&parent, events);
+            let web = MailWebView::new(&parent, events, background);
             let created = this
                 .update(cx, |this, cx| {
                     this.web_creating = false;
@@ -1173,13 +1174,15 @@ fn plain_web_page(message: &Message, colors: &html::PageColors) -> webview::Page
 }
 
 /// The page served to the webview: `cid:` pictures map to the stored inline parts; with
-/// `colors`, the page takes the app's colors (HTML without colors of its own).
+/// `colors`, the page takes the app's colors (HTML without colors of its own); `white` puts
+/// it on white paper (designed HTML in the dark theme).
 #[cfg(any(windows, target_os = "macos"))]
 fn web_page(
     message: &Message,
     html: &str,
     remote: bool,
     colors: Option<&html::PageColors>,
+    white: bool,
 ) -> webview::Page {
     let prepared = webview::prepare(html);
     let inline = prepared
@@ -1196,6 +1199,7 @@ fn web_page(
         id: message.id as u64,
         html: match colors {
             Some(colors) => html::with_app_colors(&prepared.html, colors),
+            None if white => html::on_white(&prepared.html),
             None => prepared.html,
         },
         remote,
