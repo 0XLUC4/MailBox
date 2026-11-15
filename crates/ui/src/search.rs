@@ -12,9 +12,11 @@ use mailbox_core::search::{OPERATORS, SearchQuery};
 
 use crate::app_state::{AppState, Module};
 use crate::components::{Icon, IconName};
+use crate::dialogs::kbd;
 use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TEXT_SM, TEXT_XS, theme,
+    ICON_SIZE_SM, ICON_SIZE_XS, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TEXT_SM, TEXT_XS,
+    theme,
 };
 
 /// Recent searches kept for the session.
@@ -57,7 +59,7 @@ pub struct SearchView {
 impl SearchView {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Search mail, people, events (Ctrl+E)")
+            InputState::new(window, cx).placeholder(tr(cx, "Search mail, people, events (Ctrl+E)"))
         });
         let subscriptions =
             vec![
@@ -227,7 +229,7 @@ impl SearchView {
                 .map(|(op, detail)| Suggestion {
                     icon: IconName::ListFilter,
                     label: (*op).to_owned(),
-                    detail: (*detail).to_owned(),
+                    detail: tr(cx, *detail).to_owned(),
                     replacement: (*op).to_owned(),
                 });
             return recent.chain(tips).take(MAX_SUGGESTIONS).collect();
@@ -309,7 +311,7 @@ impl SearchView {
                     out.push(Suggestion {
                         icon: IconName::ListFilter,
                         label: (*operator).to_owned(),
-                        detail: (*detail).to_owned(),
+                        detail: tr(cx, *detail).to_owned(),
                         replacement: with(&format!("{operator}{space}")),
                     });
                 }
@@ -367,7 +369,7 @@ impl SearchView {
             .text_color(t.text_muted)
             .cursor_pointer()
             .hover(|style| style.bg(t.active))
-            .child(Icon::new(icon).size(px(12.)))
+            .child(Icon::new(icon).size(ICON_SIZE_XS))
             .child(label)
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .on_click(cx.listener(|this, _, _, cx| {
@@ -459,6 +461,7 @@ impl SearchView {
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
                     .gap(SPACE_3)
                     .px(SPACE_2)
                     .pt(SPACE_1)
@@ -467,9 +470,16 @@ impl SearchView {
                     .border_color(t.border_subtle)
                     .text_size(TEXT_XS)
                     .text_color(t.text_subtle)
-                    .child("↑↓ select")
-                    .child("↵ search")
-                    .child("esc close"),
+                    .children([("↑ ↓", "Select"), ("↵", "Search"), ("Esc", "Close")].map(
+                        |(keys, label)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(SPACE_1)
+                                .child(kbd(keys, cx))
+                                .child(tr(cx, label))
+                        },
+                    )),
             )
     }
 }

@@ -5,6 +5,7 @@ use mailbox_core::{Id, Message};
 
 use super::reading_pane::{PaneSource, ReadingPaneView};
 use crate::app_state::AppState;
+use crate::settings::tr;
 use crate::theme::{TEXT_MD, theme};
 
 struct MessageWindow {
@@ -33,7 +34,7 @@ pub fn open(state: Entity<AppState>, id: Id, cx: &mut App) {
         .flatten()
         .map(|message| message.subject)
         .filter(|subject| !subject.is_empty())
-        .unwrap_or_else(|| "Message".into());
+        .unwrap_or_else(|| tr(cx, "Message").into());
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(860.), px(760.)), cx)),
         window_min_size: Some(size(px(480.), px(360.))),
@@ -46,7 +47,8 @@ pub fn open(state: Entity<AppState>, id: Id, cx: &mut App) {
     });
     if let Err(err) = opened {
         state.update(cx, |state, cx| {
-            state.report_error(format!("Couldn't open the message window: {err}"), cx)
+            let message = tr(cx, "Couldn't open the message window: {}");
+            state.report_error(message.replace("{}", &err.to_string()), cx)
         });
     }
 }

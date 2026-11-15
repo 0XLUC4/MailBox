@@ -9,6 +9,7 @@ use mailbox_core::{Folder, Id, Message, export};
 
 use crate::app_state::AppState;
 use crate::mail::html;
+use crate::settings::tr;
 use crate::sync_bridge;
 
 fn report(state: &Entity<AppState>, message: impl Into<String>, cx: &mut App) {
@@ -58,7 +59,10 @@ pub fn print_message(state: &Entity<AppState>, id: Id, cx: &mut App) {
         .and_then(|_| std::fs::write(&path, page));
     match written {
         Ok(()) => cx.open_with_system(&path),
-        Err(err) => report(state, format!("Cannot prepare printing: {err}"), cx),
+        Err(err) => {
+            let message = tr(cx, "Cannot prepare printing: {}").replace("{}", &err.to_string());
+            report(state, message, cx)
+        }
     }
 }
 
@@ -80,7 +84,7 @@ pub fn save_as_eml(state: &Entity<AppState>, id: Id, cx: &mut App) {
 /// Asks for a folder, then writes one `.mbox` per folder of the current account.
 pub fn export_mailbox(state: &Entity<AppState>, cx: &mut App) {
     let Some(account_id) = crate::actions::current_account(state, cx) else {
-        return info(state, "Add an account first", cx);
+        return info(state, tr(cx, "Add an account first"), cx);
     };
     let folders = state
         .read(cx)
@@ -91,7 +95,7 @@ pub fn export_mailbox(state: &Entity<AppState>, cx: &mut App) {
         files: false,
         directories: true,
         multiple: false,
-        prompt: Some("Export the mailbox here".into()),
+        prompt: Some(tr(cx, "Export the mailbox here").into()),
     });
     let state = state.clone();
     cx.spawn(async move |cx| {
@@ -106,11 +110,10 @@ pub fn export_mailbox(state: &Entity<AppState>, cx: &mut App) {
                 let path = dir.join(export::file_name(&folder_path(folder, &folders), "mbox"));
                 sync_bridge::export_folder(folder.id, path, cx);
             }
-            info(
-                &state,
-                format!("Exporting {} folders to {}", folders.len(), dir.display()),
-                cx,
-            );
+            let message = tr(cx, "Exporting {} folders to {}")
+                .replacen("{}", &folders.len().to_string(), 1)
+                .replacen("{}", &dir.display().to_string(), 1);
+            info(&state, message, cx);
         });
     })
     .detach();
@@ -137,13 +140,13 @@ fn folder_path(folder: &Folder, all: &[Folder]) -> String {
 /// Asks for `.mbox` / `.eml` files, then imports them into the selected folder.
 pub fn import_mailbox(state: &Entity<AppState>, cx: &mut App) {
     let Some(folder_id) = state.read(cx).selected_folder().filter(|&id| id > 0) else {
-        return info(state, "Select the folder to import into", cx);
+        return info(state, tr(cx, "Select the folder to import into"), cx);
     };
     let picked = cx.prompt_for_paths(PathPromptOptions {
         files: true,
         directories: false,
         multiple: true,
-        prompt: Some("Import .mbox or .eml files".into()),
+        prompt: Some(tr(cx, "Import .mbox or .eml files").into()),
     });
     cx.spawn(async move |cx| {
         let Ok(Ok(Some(paths))) = picked.await else {

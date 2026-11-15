@@ -13,6 +13,8 @@ use super::folder_pane::{folder_icon, folder_name, folder_tree};
 use super::{ComposeKind, message_window, ops};
 use crate::app_state::AppState;
 use crate::components::IconName;
+use crate::settings::tr;
+use crate::theme::{DIALOG_SM, NAV_ROW_HEIGHT, RADIUS_SM, SPACE_0_5, SPACE_2, SPACE_4};
 
 /// Menu item running `action` on the captured state and ids.
 fn action(
@@ -55,6 +57,7 @@ fn folder_submenu(
     ids: &[Id],
     targets: &[(String, Vec<(usize, Folder)>)],
     copy: bool,
+    cx: &App,
 ) -> PopupMenu {
     let multi_account = targets.len() > 1;
     let mut menu = menu.max_h(px(420.)).scrollable(true);
@@ -64,7 +67,7 @@ fn folder_submenu(
         }
         for (depth, folder) in folders {
             let folder_id = folder.id;
-            let label = format!("{}{}", "    ".repeat(*depth), folder_name(folder));
+            let label = format!("{}{}", "    ".repeat(*depth), folder_name(folder, cx));
             menu = menu.item(action(
                 label,
                 folder_icon(folder),
@@ -131,13 +134,13 @@ pub fn build(
         let s = state.clone();
         let respond = |label: &'static str, icon: IconName, kind: ComposeKind| {
             let s = state.clone();
-            PopupMenuItem::new(label)
+            PopupMenuItem::new(tr(cx, label))
                 .icon(icon)
                 .on_click(move |_, window, cx| ops::compose_from(&s, id, kind, window, cx))
         };
         menu = menu
             .item(
-                PopupMenuItem::new("Open in new window")
+                PopupMenuItem::new(tr(cx, "Open in new window"))
                     .icon(IconName::SquareArrowOutUpRight)
                     .on_click(move |_, _, cx| message_window::open(s.clone(), id, cx)),
             )
@@ -155,7 +158,7 @@ pub fn build(
     menu = menu
         .item(if any_unread {
             action(
-                "Mark as read",
+                tr(cx, "Mark as read"),
                 IconName::MailOpen,
                 state,
                 &ids,
@@ -163,7 +166,7 @@ pub fn build(
             )
         } else {
             action(
-                "Mark as unread",
+                tr(cx, "Mark as unread"),
                 IconName::Mail,
                 state,
                 &ids,
@@ -171,17 +174,25 @@ pub fn build(
             )
         })
         .item(if any_unpinned {
-            action("Pin", IconName::Pin, state, &ids, |s, ids, _, cx| {
-                ops::set_pinned(s, ids, true, cx)
-            })
+            action(
+                tr(cx, "Pin"),
+                IconName::Pin,
+                state,
+                &ids,
+                |s, ids, _, cx| ops::set_pinned(s, ids, true, cx),
+            )
         } else {
-            action("Unpin", IconName::PinOff, state, &ids, |s, ids, _, cx| {
-                ops::set_pinned(s, ids, false, cx)
-            })
+            action(
+                tr(cx, "Unpin"),
+                IconName::PinOff,
+                state,
+                &ids,
+                |s, ids, _, cx| ops::set_pinned(s, ids, false, cx),
+            )
         });
 
     menu = menu.item(action(
-        "Snooze…",
+        tr(cx, "Snooze…"),
         IconName::AlarmClock,
         state,
         &ids,
@@ -190,11 +201,14 @@ pub fn build(
     if let Some(id) = single {
         let s = state.clone();
         menu = menu.item(
-            PopupMenuItem::new(if muted {
-                "Unmute conversation"
-            } else {
-                "Mute conversation"
-            })
+            PopupMenuItem::new(tr(
+                cx,
+                if muted {
+                    "Unmute conversation"
+                } else {
+                    "Mute conversation"
+                },
+            ))
             .icon(if muted {
                 IconName::Bell
             } else {
@@ -207,14 +221,14 @@ pub fn build(
     let (s, i) = (state.clone(), ids.clone());
     menu = menu.submenu_with_icon(
         Some(Icon::new(IconName::Flag)),
-        "Follow up",
+        tr(cx, "Follow up"),
         window,
         cx,
-        move |sub, _, _| {
+        move |sub, _, cx| {
             let mut sub = sub;
             for preset in FlagPreset::ALL {
                 sub = sub.item(action(
-                    preset.label(),
+                    tr(cx, preset.label()),
                     if preset == FlagPreset::NoDate {
                         IconName::Flag
                     } else {
@@ -226,9 +240,13 @@ pub fn build(
                 ));
             }
             sub.separator().item(
-                action("Clear flag", IconName::FlagOff, &s, &i, |s, ids, _, cx| {
-                    ops::set_flag(s, ids, false, cx)
-                })
+                action(
+                    tr(cx, "Clear flag"),
+                    IconName::FlagOff,
+                    &s,
+                    &i,
+                    |s, ids, _, cx| ops::set_flag(s, ids, false, cx),
+                )
                 .disabled(!any_flagged),
             )
         },
@@ -238,10 +256,10 @@ pub fn build(
     let category_list = Rc::new(categories);
     menu = menu.submenu_with_icon(
         Some(Icon::new(IconName::Tag)),
-        "Categorize",
+        tr(cx, "Categorize"),
         window,
         cx,
-        move |sub, _, _| {
+        move |sub, _, cx| {
             let mut sub = sub;
             for (name, color, checked) in category_list.iter() {
                 let label = name.clone();
@@ -254,11 +272,11 @@ pub fn build(
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap(px(8.))
+                                .gap(SPACE_2)
                                 .child(
                                     div()
                                         .size(px(10.))
-                                        .rounded(px(3.))
+                                        .rounded(RADIUS_SM)
                                         .bg(crate::theme::hex(color)),
                                 )
                                 .child(label.clone())
@@ -273,14 +291,14 @@ pub fn build(
             }
             sub.separator()
                 .item(action(
-                    "New category…",
+                    tr(cx, "New category…"),
                     IconName::Plus,
                     &s,
                     &i,
                     |s, ids, window, cx| open_category_dialog(s.clone(), ids, window, cx),
                 ))
                 .item(action(
-                    "Clear all categories",
+                    tr(cx, "Clear all categories"),
                     IconName::X,
                     &s,
                     &i,
@@ -293,22 +311,22 @@ pub fn build(
     let (s, i, t) = (state.clone(), ids.clone(), targets.clone());
     menu = menu.submenu_with_icon(
         Some(Icon::new(IconName::FolderInput)),
-        "Move to",
+        tr(cx, "Move to"),
         window,
         cx,
-        move |sub, _, _| folder_submenu(sub, &s, &i, &t, false),
+        move |sub, _, cx| folder_submenu(sub, &s, &i, &t, false, cx),
     );
     let (s, i, t) = (state.clone(), ids.clone(), targets);
     menu = menu.submenu_with_icon(
         Some(Icon::new(IconName::Copy)),
-        "Copy to",
+        tr(cx, "Copy to"),
         window,
         cx,
-        move |sub, _, _| folder_submenu(sub, &s, &i, &t, true),
+        move |sub, _, cx| folder_submenu(sub, &s, &i, &t, true, cx),
     );
     if in_trash {
         menu = menu.item(action(
-            "Restore to Inbox",
+            tr(cx, "Restore to Inbox"),
             IconName::Undo2,
             state,
             &ids,
@@ -317,7 +335,7 @@ pub fn build(
     }
     if !in_archive {
         menu = menu.item(action(
-            "Archive",
+            tr(cx, "Archive"),
             IconName::Archive,
             state,
             &ids,
@@ -326,7 +344,7 @@ pub fn build(
     }
     menu = menu.item(if in_junk {
         action(
-            "Not junk",
+            tr(cx, "Not junk"),
             IconName::ShieldCheck,
             state,
             &ids,
@@ -334,7 +352,7 @@ pub fn build(
         )
     } else {
         action(
-            "Move to Junk",
+            tr(cx, "Move to Junk"),
             IconName::OctagonAlert,
             state,
             &ids,
@@ -347,23 +365,26 @@ pub fn build(
         menu = menu
             .separator()
             .item(
-                PopupMenuItem::new("Print")
+                PopupMenuItem::new(tr(cx, "Print"))
                     .icon(IconName::Printer)
                     .on_click(move |_, _, cx| crate::print::print_message(&s1, id, cx)),
             )
             .item(
-                PopupMenuItem::new("Save as .eml")
+                PopupMenuItem::new(tr(cx, "Save as .eml"))
                     .icon(IconName::FileDown)
                     .on_click(move |_, _, cx| crate::print::save_as_eml(&s2, id, cx)),
             );
     }
 
     menu.separator().item(action(
-        if in_trash {
-            "Delete permanently"
-        } else {
-            "Delete"
-        },
+        tr(
+            cx,
+            if in_trash {
+                "Delete permanently"
+            } else {
+                "Delete"
+            },
+        ),
         IconName::Trash,
         state,
         &ids,
@@ -389,9 +410,9 @@ fn picker_row(
         .flex_row()
         .flex_shrink_0()
         .items_center()
-        .gap(px(8.))
-        .h(px(30.))
-        .px(px(8.))
+        .gap(SPACE_2)
+        .h(NAV_ROW_HEIGHT)
+        .px(SPACE_2)
         .rounded(crate::theme::RADIUS_MD)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
@@ -428,21 +449,23 @@ pub fn open_move_dialog(state: Entity<AppState>, ids: Vec<Id>, window: &mut Wind
     };
     let targets = destinations(&state, cx);
     let title: SharedString = if ids.len() == 1 {
-        "Move to folder".into()
+        tr(cx, "Move to folder").into()
     } else {
-        format!("Move {} messages to", ids.len()).into()
+        tr(cx, "Move {} messages to")
+            .replace("{}", &ids.len().to_string())
+            .into()
     };
     window.open_dialog(cx, move |dialog, _, cx| {
         let t = crate::theme::theme(cx).clone();
         let multi_account = targets.len() > 1;
-        let mut list = div().flex().flex_col().gap(px(2.));
+        let mut list = div().flex().flex_col().gap(SPACE_0_5);
         for (account, folders) in targets.iter() {
             if multi_account {
                 list = list.child(
                     div()
-                        .pt(px(8.))
-                        .pb(px(2.))
-                        .px(px(8.))
+                        .pt(SPACE_2)
+                        .pb(SPACE_0_5)
+                        .px(SPACE_2)
                         .text_size(crate::theme::TEXT_XS)
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(t.text_subtle)
@@ -453,7 +476,7 @@ pub fn open_move_dialog(state: Entity<AppState>, ids: Vec<Id>, window: &mut Wind
                 let folder_id = folder.id;
                 let (state, ids) = (state.clone(), ids.clone());
                 let icon = div()
-                    .pl(px(*depth as f32 * 16.))
+                    .pl(SPACE_4 * *depth as f32)
                     .child(
                         gpui::component::Icon::new(folder_icon(folder))
                             .size(crate::theme::ICON_SIZE_SM)
@@ -465,7 +488,7 @@ pub fn open_move_dialog(state: Entity<AppState>, ids: Vec<Id>, window: &mut Wind
                     picker_row(
                         ("move-folder", folder_id as u64),
                         icon,
-                        folder_name(folder).into(),
+                        folder_name(folder, cx).into(),
                         here,
                         cx,
                     )
@@ -476,7 +499,7 @@ pub fn open_move_dialog(state: Entity<AppState>, ids: Vec<Id>, window: &mut Wind
                 );
             }
         }
-        dialog.w(px(360.)).title(title.clone()).child(
+        dialog.w(DIALOG_SM).title(title.clone()).child(
             div()
                 .id("move-picker")
                 .max_h(px(420.))
@@ -498,7 +521,8 @@ pub fn open_category_dialog(
         return;
     }
     use gpui::component::input::{Input, InputEvent, InputState};
-    let input = cx.new(|cx| InputState::new(window, cx).placeholder("New category, then Enter"));
+    let input =
+        cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, "New category, then Enter")));
     let (s, i) = (state.clone(), ids.clone());
     window
         .subscribe(&input, cx, move |input, event: &InputEvent, window, cx| {
@@ -527,7 +551,7 @@ pub fn open_category_dialog(
                         .all(|m| m.categories.contains(&category.name));
                 let dot = div()
                     .size(px(10.))
-                    .rounded(px(3.))
+                    .rounded(RADIUS_SM)
                     .bg(crate::theme::hex(category.color))
                     .into_any_element();
                 let (state, ids, name) = (state.clone(), ids.clone(), category.name.clone());
@@ -542,8 +566,8 @@ pub fn open_category_dialog(
             })
             .collect();
         dialog
-            .w(px(320.))
-            .title("Categorize")
+            .w(DIALOG_SM)
+            .title(tr(cx, "Categorize"))
             .child(
                 div()
                     .id("category-picker")
@@ -551,10 +575,10 @@ pub fn open_category_dialog(
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
+                    .gap(SPACE_0_5)
                     .children(rows),
             )
-            .child(div().pt(px(8.)).child(Input::new(&input)))
+            .child(div().pt(SPACE_2).child(Input::new(&input)))
     });
 }
 

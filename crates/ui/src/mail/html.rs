@@ -12,7 +12,7 @@ use gpui::*;
 
 use crate::components::{Icon, IconName};
 use crate::theme::{
-    RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XL, Theme,
+    ICON_SIZE_SM, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XL, Theme,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1345,7 +1345,7 @@ pub fn render_blocks(prefix: &str, blocks: &[Block], ctx: &RenderContext) -> Vec
                             .bg(surface)
                             .text_size(TEXT_SM)
                             .text_color(subtle)
-                            .child(Icon::new(IconName::ImageOff).size(px(14.)))
+                            .child(Icon::new(IconName::ImageOff).size(ICON_SIZE_SM))
                             .child(label.clone())
                             .into_any_element()
                     };

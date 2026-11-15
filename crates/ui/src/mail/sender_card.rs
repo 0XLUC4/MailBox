@@ -12,7 +12,7 @@ use crate::app_state::AppState;
 use crate::components::{Avatar, Button, Icon, IconButton, IconName};
 use crate::compose::{ComposeRequest, open_compose};
 use crate::settings::tr;
-use crate::theme::{SPACE_0_5, SPACE_2, SPACE_3, TEXT_LG, TEXT_SM, theme};
+use crate::theme::{ICON_SIZE_SM, SPACE_0_5, SPACE_2, SPACE_3, TEXT_LG, TEXT_SM, theme};
 
 /// `address` as a clickable name opening its card (on `background`); `bold` for the sender.
 pub fn name(
@@ -77,7 +77,7 @@ fn card(
             .gap(SPACE_0_5)
             .text_size(TEXT_SM)
             .text_color(t.text_muted)
-            .child(Icon::new(IconName::Check).size(px(14.)))
+            .child(Icon::new(IconName::Check).size(ICON_SIZE_SM))
             .child(tr(cx, "In your contacts"))
             .into_any_element()
     } else {
@@ -94,7 +94,8 @@ fn card(
                 let label = save_address.display().to_owned();
                 save_state.update(cx, |state, cx| {
                     if state.run(command, cx) {
-                        state.notify_info(format!("Saved {label} to contacts"), cx);
+                        let message = tr(cx, "Saved {} to contacts").replace("{}", &label);
+                        state.notify_info(message, cx);
                     }
                 });
             })
@@ -108,7 +109,9 @@ fn card(
         .on_click(move |_, window, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(copy_email.clone()));
             popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-            copy_state.update(cx, |state, cx| state.notify_info("Address copied", cx));
+            copy_state.update(cx, |state, cx| {
+                state.notify_info(tr(cx, "Address copied"), cx)
+            });
         });
 
     div()

@@ -19,9 +19,12 @@ use mailbox_core::{Account, Command, Folder, FolderRole, Id, Store, mail_ops};
 
 use super::{DraggedMessages, MailPrefs, ops};
 use crate::app_state::AppState;
-use crate::components::{Badge, Button, Icon, IconButton, IconName};
+use crate::components::{Badge, Button, EmptyState, Icon, IconButton, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE, ICON_SIZE_SM, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, TEXT_MD, TEXT_XS, Theme, theme,
+    DIALOG_SM, ICON_SIZE, ICON_SIZE_SM, ICON_SIZE_XS, NAV_ROW_HEIGHT, PANE_HEADER_HEIGHT,
+    RADIUS_FULL, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_MD, TEXT_XS, Theme,
+    theme,
 };
 
 /// Icon for a folder: special folders by role, a few well-known custom names.
@@ -43,16 +46,17 @@ pub fn folder_icon(folder: &Folder) -> IconName {
 
 /// Display name: special folders use the app's names whatever the server calls them (Gmail
 /// names them in the account's language, e.g. "[Gmail]/Messages envoyés"), others their own.
-pub fn folder_name(folder: &Folder) -> String {
-    match folder.role {
-        FolderRole::Inbox => "Inbox".into(),
-        FolderRole::Sent => "Sent Items".into(),
-        FolderRole::Drafts => "Drafts".into(),
-        FolderRole::Trash => "Deleted Items".into(),
-        FolderRole::Junk => "Junk".into(),
-        FolderRole::Archive => "Archive".into(),
-        FolderRole::Custom => folder.name.clone(),
-    }
+pub fn folder_name(folder: &Folder, cx: &App) -> String {
+    let name = match folder.role {
+        FolderRole::Inbox => "Inbox",
+        FolderRole::Sent => "Sent Items",
+        FolderRole::Drafts => "Drafts",
+        FolderRole::Trash => "Deleted Items",
+        FolderRole::Junk => "Junk",
+        FolderRole::Archive => "Archive",
+        FolderRole::Custom => return folder.name.clone(),
+    };
+    tr(cx, name).to_owned()
 }
 
 /// Depth-first order with nesting depth, siblings kept in store order.
@@ -111,8 +115,8 @@ pub fn prompt_text(
         let ok_input = input.clone();
         let ok_submit = on_submit.clone();
         dialog
-            .title(title)
-            .w(px(380.))
+            .title(tr(cx, title))
+            .w(DIALOG_SM)
             .child(div().py(SPACE_2).child(Input::new(&input)))
             .footer(
                 div()
@@ -123,17 +127,20 @@ pub fn prompt_text(
                     .w_full()
                     .child(
                         Button::new("prompt-cancel")
-                            .label("Cancel")
+                            .label(tr(cx, "Cancel"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
-                    .child(Button::new("prompt-ok").primary().label(ok_label).on_click(
-                        move |_, window, cx| {
-                            let value = ok_input.read(cx).value().to_string();
-                            if ok_submit(value, window, cx) {
-                                window.close_dialog(cx);
-                            }
-                        },
-                    )),
+                    .child(
+                        Button::new("prompt-ok")
+                            .primary()
+                            .label(tr(cx, ok_label))
+                            .on_click(move |_, window, cx| {
+                                let value = ok_input.read(cx).value().to_string();
+                                if ok_submit(value, window, cx) {
+                                    window.close_dialog(cx);
+                                }
+                            }),
+                    ),
             )
     });
 }
@@ -150,14 +157,14 @@ fn smart_icon(smart: SmartFolder) -> IconName {
 }
 
 /// Display name of a folder id: a smart folder's name, else the folder's.
-pub fn folder_label(store: &mailbox_core::Store, folder_id: Id) -> Option<String> {
+pub fn folder_label(store: &mailbox_core::Store, folder_id: Id, cx: &App) -> Option<String> {
     match SmartFolder::from_id(folder_id) {
-        Some(smart) => Some(smart.name().to_owned()),
+        Some(smart) => Some(tr(cx, smart.name()).to_owned()),
         None => store
             .get::<Folder>(folder_id)
             .ok()
             .flatten()
-            .map(|folder| folder_name(&folder)),
+            .map(|folder| folder_name(&folder, cx)),
     }
 }
 
@@ -183,10 +190,10 @@ impl Entry {
         }
     }
 
-    fn name(&self) -> String {
+    fn name(&self, cx: &App) -> String {
         match self {
-            Self::Folder(folder) => folder_name(folder),
-            Self::Smart(smart) => smart.name().to_owned(),
+            Self::Folder(folder) => folder_name(folder, cx),
+            Self::Smart(smart) => tr(cx, smart.name()).to_owned(),
         }
     }
 
@@ -327,13 +334,13 @@ impl FolderPaneView {
     fn delete_dialog(state: Entity<AppState>, folder: &Folder, window: &mut Window, cx: &mut App) {
         let folder_id = folder.id;
         let name = folder.name.clone();
-        window.open_alert_dialog(cx, move |alert, _, _| {
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let state = state.clone();
             alert
-                .title(format!("Delete \"{name}\"?"))
-                .description("Its subfolders are deleted too and its messages move to Deleted Items. You can undo this.")
+                .title(tr(cx, "Delete \"{}\"?").replace("{}", &name))
+                .description(tr(cx, "Its subfolders are deleted too and its messages move to Deleted Items. You can undo this."))
                 .confirm()
-                .ok_text("Delete")
+                .ok_text(tr(cx, "Delete"))
                 .ok_variant(ButtonVariant::Danger)
                 .on_ok(move |_, _, cx| {
                     let command = mail_ops::delete_folder(state.read(cx).store(), folder_id);
@@ -352,14 +359,17 @@ impl FolderPaneView {
     /// "Empty folder" (Deleted Items, Junk): deletes every message permanently after confirmation.
     fn empty_dialog(state: Entity<AppState>, folder: &Folder, window: &mut Window, cx: &mut App) {
         let folder_id = folder.id;
-        let name = folder_name(folder);
-        window.open_alert_dialog(cx, move |alert, _, _| {
+        let name = folder_name(folder, cx);
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let state = state.clone();
             alert
-                .title(format!("Empty \"{name}\"?"))
-                .description("Every message in this folder will be deleted permanently.")
+                .title(tr(cx, "Empty \"{}\"?").replace("{}", &name))
+                .description(tr(
+                    cx,
+                    "Every message in this folder will be deleted permanently.",
+                ))
                 .confirm()
-                .ok_text("Empty folder")
+                .ok_text(tr(cx, "Empty folder"))
                 .ok_variant(ButtonVariant::Danger)
                 .on_ok(move |_, _, cx| {
                     let ids: Vec<Id> = state
@@ -410,7 +420,7 @@ impl FolderPaneView {
                 .map(|(depth, candidate)| (depth, candidate.clone()))
                 .collect(),
         );
-        let title: SharedString = format!("Move “{}” to", folder.name).into();
+        let title: SharedString = tr(cx, "Move “{}” to").replace("{}", &folder.name).into();
         window.open_dialog(cx, move |dialog, _, cx| {
             let t = theme(cx).clone();
             let row = |id: ElementId, depth: usize, icon: IconName, label: String, here: bool| {
@@ -421,8 +431,8 @@ impl FolderPaneView {
                     .flex_shrink_0()
                     .items_center()
                     .gap(SPACE_2)
-                    .h(px(30.))
-                    .pl(px(8. + depth as f32 * 16.))
+                    .h(NAV_ROW_HEIGHT)
+                    .pl(SPACE_2 + SPACE_4 * depth as f32)
                     .pr(SPACE_2)
                     .rounded(RADIUS_MD)
                     .cursor_pointer()
@@ -447,12 +457,12 @@ impl FolderPaneView {
                     }
                 }
             };
-            let mut list = div().flex().flex_col().gap(px(2.)).child(
+            let mut list = div().flex().flex_col().gap(SPACE_0_5).child(
                 row(
                     "move-top".into(),
                     0,
                     IconName::FolderTree,
-                    "Top level".into(),
+                    tr(cx, "Top level").into(),
                     current_parent.is_none(),
                 )
                 .on_click(pick(None)),
@@ -463,13 +473,13 @@ impl FolderPaneView {
                         ("move-to", target.id as u64).into(),
                         depth + 1,
                         folder_icon(target),
-                        folder_name(target),
+                        folder_name(target, cx),
                         current_parent == Some(target.id),
                     )
                     .on_click(pick(Some(target.id))),
                 );
             }
-            dialog.w(px(360.)).title(title.clone()).child(
+            dialog.w(DIALOG_SM).title(title.clone()).child(
                 div()
                     .id("move-folder-picker")
                     .max_h(px(420.))
@@ -489,20 +499,25 @@ impl FolderPaneView {
         state: &Entity<AppState>,
         folder_id: Id,
         is_favorite: bool,
+        cx: &App,
     ) -> PopupMenu {
         let s = state.clone();
-        let mark_read =
-            Self::menu_item("Mark all as read", IconName::MailOpen).on_click(move |_, _, cx| {
+        let mark_read = Self::menu_item(tr(cx, "Mark all as read"), IconName::MailOpen).on_click(
+            move |_, _, cx| {
                 let command = mail_ops::mark_folder_read(s.read(cx).store(), folder_id);
                 ops::run(&s, command, cx);
-            });
+            },
+        );
         let s = state.clone();
         let favorite = Self::menu_item(
-            if is_favorite {
-                "Remove from Favorites"
-            } else {
-                "Add to Favorites"
-            },
+            tr(
+                cx,
+                if is_favorite {
+                    "Remove from Favorites"
+                } else {
+                    "Add to Favorites"
+                },
+            ),
             IconName::Star,
         )
         .on_click(move |_, _, cx| Self::toggle_favorite(&s, folder_id, cx));
@@ -514,9 +529,10 @@ impl FolderPaneView {
         state: &Entity<AppState>,
         folder: &Folder,
         is_favorite: bool,
+        cx: &App,
     ) -> PopupMenu {
         let custom = folder.role == FolderRole::Custom;
-        let item = Self::menu_item;
+        let item = |label: &'static str, icon| Self::menu_item(tr(cx, label), icon);
 
         let (s, f) = (state.clone(), folder.clone());
         let new_sub = item("New subfolder", IconName::FolderPlus).on_click(move |_, window, cx| {
@@ -541,7 +557,7 @@ impl FolderPaneView {
             .item(move_to)
             .item(delete)
             .separator();
-        let menu = Self::common_items(menu, state, folder.id, is_favorite);
+        let menu = Self::common_items(menu, state, folder.id, is_favorite, cx);
         if matches!(folder.role, FolderRole::Trash | FolderRole::Junk) {
             let (s, f) = (state.clone(), folder.clone());
             menu.separator().item(
@@ -575,8 +591,8 @@ impl FolderPaneView {
             .flex_shrink_0()
             .items_center()
             .gap(SPACE_1)
-            .h(px(30.))
-            .pl(px(4. + depth as f32 * 14.))
+            .h(NAV_ROW_HEIGHT)
+            .pl(SPACE_2 + SPACE_4 * depth as f32)
             .pr(SPACE_2)
             .rounded(RADIUS_MD)
             .cursor_pointer()
@@ -640,7 +656,7 @@ impl FolderPaneView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(16.))
+                .size(ICON_SIZE)
                 .rounded(RADIUS_MD)
                 .text_color(t.text_subtle)
                 .hover(|s| s.bg(t.hover))
@@ -650,7 +666,7 @@ impl FolderPaneView {
                     } else {
                         IconName::ChevronDown
                     })
-                    .size(px(12.)),
+                    .size(ICON_SIZE_XS),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
@@ -661,13 +677,13 @@ impl FolderPaneView {
                 }))
                 .into_any_element()
         } else {
-            div().size(px(16.)).into_any_element()
+            div().size(ICON_SIZE).into_any_element()
         };
         let row = decorate(self.row_base(prefix, entry, label, depth, chevron, info, t));
         match entry {
             Entry::Smart(_) => row
-                .context_menu(move |menu, _, _| {
-                    Self::common_items(menu, &menu_state, folder_id, is_favorite)
+                .context_menu(move |menu, _, cx| {
+                    Self::common_items(menu, &menu_state, folder_id, is_favorite, cx)
                 })
                 .into_any_element(),
             Entry::Folder(folder) => {
@@ -682,8 +698,8 @@ impl FolderPaneView {
                     let copy = modifiers.control || modifiers.platform;
                     ops::move_to(&drop_state, dragged.ids.clone(), folder_id, copy, cx);
                 })
-                .context_menu(move |menu, _, _| {
-                    Self::folder_menu(menu, &menu_state, &menu_folder, is_favorite)
+                .context_menu(move |menu, _, cx| {
+                    Self::folder_menu(menu, &menu_state, &menu_folder, is_favorite, cx)
                 })
                 .into_any_element()
             }
@@ -730,7 +746,7 @@ impl FolderPaneView {
             .flex_shrink_0()
             .items_center()
             .gap(SPACE_1)
-            .h(px(28.))
+            .h(NAV_ROW_HEIGHT)
             .mt(SPACE_2)
             .px(SPACE_1)
             .rounded(RADIUS_MD)
@@ -745,7 +761,7 @@ impl FolderPaneView {
                 } else {
                     IconName::ChevronDown
                 })
-                .size(px(12.)),
+                .size(ICON_SIZE_XS),
             )
             .child(label)
     }
@@ -755,6 +771,7 @@ impl FolderPaneView {
         favorites: &[(Entry, i64)],
         selected: Option<Id>,
         t: &Theme,
+        cx: &App,
     ) -> AnyElement {
         let prefs = self.prefs.clone();
         div()
@@ -766,7 +783,7 @@ impl FolderPaneView {
             .py(SPACE_2)
             .child(
                 IconButton::new("folders-expand", IconName::PanelLeftOpen)
-                    .tooltip("Show folders")
+                    .tooltip(tr(cx, "Show folders"))
                     .on_click(move |_, _, cx| Self::set_collapsed(&prefs, false, cx)),
             )
             .child(div().w(px(20.)).h(px(1.)).my(SPACE_1).bg(t.border_subtle))
@@ -781,7 +798,7 @@ impl FolderPaneView {
                             entry.icon(),
                         )
                         .active(selected == Some(folder_id))
-                        .tooltip(entry.name())
+                        .tooltip(entry.name(cx))
                         .on_click(move |_, _, cx| {
                             state.update(cx, |state, cx| state.select_folder(Some(folder_id), cx));
                         }),
@@ -793,7 +810,7 @@ impl FolderPaneView {
                                 .top(px(3.))
                                 .right(px(3.))
                                 .size(px(7.))
-                                .rounded(px(4.))
+                                .rounded(RADIUS_FULL)
                                 .bg(t.accent),
                         )
                     })
@@ -852,11 +869,12 @@ impl Render for FolderPaneView {
             .iter()
             .filter_map(|&id| {
                 if let Some(smart) = SmartFolder::from_id(id) {
-                    return has_accounts.then(|| (Entry::Smart(smart), smart.name().to_owned()));
+                    return has_accounts
+                        .then(|| (Entry::Smart(smart), tr(cx, smart.name()).to_owned()));
                 }
                 folders_by_account.iter().find_map(|(account, folders)| {
                     folders.iter().find(|f| f.id == id).map(|folder| {
-                        let name = folder_name(folder);
+                        let name = folder_name(folder, cx);
                         let label = if multi_account && folder.role != FolderRole::Custom {
                             format!("{name} - {}", account.name)
                         } else {
@@ -874,7 +892,7 @@ impl Render for FolderPaneView {
                 .iter()
                 .map(|(entry, _)| (entry.clone(), count_of(entry.id())))
                 .collect();
-            return self.render_collapsed(&mini, selected, &t);
+            return self.render_collapsed(&mini, selected, &t, cx);
         }
 
         let info = |id: Id| RowInfo {
@@ -889,7 +907,7 @@ impl Render for FolderPaneView {
             content.push(
                 Self::section_header(
                     "favorites-header".into(),
-                    "FAVORITES".into(),
+                    tr(cx, "Favorites").to_uppercase(),
                     self.favorites_collapsed,
                     &t,
                 )
@@ -912,7 +930,7 @@ impl Render for FolderPaneView {
             content.push(
                 Self::section_header(
                     "smart-header".into(),
-                    "SMART FOLDERS".into(),
+                    tr(cx, "Smart folders").to_uppercase(),
                     self.smart_collapsed,
                     &t,
                 )
@@ -927,7 +945,7 @@ impl Render for FolderPaneView {
                     let row = self.entry_row(
                         "smart-",
                         &Entry::Smart(smart),
-                        smart.name().to_owned(),
+                        tr(cx, smart.name()).to_owned(),
                         0,
                         false,
                         &info(smart.id()),
@@ -959,10 +977,10 @@ impl Render for FolderPaneView {
                     }
                     cx.notify();
                 }))
-                .context_menu(move |menu, _, _| {
+                .context_menu(move |menu, _, cx| {
                     let state = menu_state.clone();
                     menu.item(
-                        PopupMenuItem::new("New folder")
+                        PopupMenuItem::new(tr(cx, "New folder"))
                             .icon(IconName::FolderPlus)
                             .on_click(move |_, window, cx| {
                                 Self::new_folder_dialog(state.clone(), account_id, None, window, cx)
@@ -990,7 +1008,7 @@ impl Render for FolderPaneView {
                 let row = self.entry_row(
                     "folder-",
                     &Entry::Folder(folder.clone()),
-                    folder_name(folder),
+                    folder_name(folder, cx),
                     depth,
                     has_children.contains(&folder.id),
                     &info(folder.id),
@@ -1001,6 +1019,14 @@ impl Render for FolderPaneView {
                 );
                 content.push(row);
             }
+        }
+
+        if !has_accounts {
+            content.push(
+                EmptyState::new(IconName::Inbox, tr(cx, "No account yet"))
+                    .description(tr(cx, "Add an account in Settings to see your folders."))
+                    .into_any_element(),
+            );
         }
 
         let prefs = self.prefs.clone();
@@ -1017,7 +1043,7 @@ impl Render for FolderPaneView {
                     .flex_shrink_0()
                     .items_center()
                     .gap(SPACE_1)
-                    .h(px(40.))
+                    .h(PANE_HEADER_HEIGHT)
                     .px(SPACE_3)
                     .border_b_1()
                     .border_color(t.border_subtle)
@@ -1026,13 +1052,13 @@ impl Render for FolderPaneView {
                             .flex_1()
                             .text_size(TEXT_MD)
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Folders"),
+                            .child(tr(cx, "Folders")),
                     )
                     .when_some(first_account, |el, account_id| {
                         el.child(
                             IconButton::new("folder-new", IconName::FolderPlus)
                                 .icon_size(ICON_SIZE_SM)
-                                .tooltip("New folder")
+                                .tooltip(tr(cx, "New folder"))
                                 .on_click(move |_, window, cx| {
                                     let parent = new_state.read(cx).selected_folder();
                                     let (account, parent) = parent
@@ -1060,7 +1086,7 @@ impl Render for FolderPaneView {
                     .child(
                         IconButton::new("folders-collapse", IconName::PanelLeftClose)
                             .icon_size(ICON_SIZE_SM)
-                            .tooltip("Hide folders")
+                            .tooltip(tr(cx, "Hide folders"))
                             .on_click(move |_, _, cx| Self::set_collapsed(&prefs, true, cx)),
                     ),
             )
