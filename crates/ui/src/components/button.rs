@@ -132,7 +132,11 @@ impl RenderOnce for Button {
                 el.cursor_pointer().hover(move |style| style.bg(hover_bg))
             })
             .when_some(self.on_click.filter(|_| interactive), |el, handler| {
-                el.on_click(move |event, window, cx| handler(event, window, cx))
+                el.on_click(move |event, window, cx| {
+                    // A button inside a clickable row must not click the row too.
+                    cx.stop_propagation();
+                    handler(event, window, cx)
+                })
             })
     }
 }

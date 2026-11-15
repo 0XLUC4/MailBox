@@ -3,12 +3,14 @@
 //! not the rate-limited GitHub API), then the exe it points to.
 //!
 //! Release convention (README, "Releasing"): tag `vX.Y.Z`, assets
-//! `Mailbox-X.Y.Z-windows-x64.exe`, `Mailbox-X.Y.Z-macos-arm64.app.tar.gz` and `latest.json`:
+//! `Mailbox-X.Y.Z-windows-x64.exe`, `Mailbox-X.Y.Z-macos-arm64.app.tar.gz`,
+//! `Mailbox-X.Y.Z-linux-x64.tar.gz` and `latest.json`:
 //! `{ "version", "pub_date", "notes", "platforms": { "<platform>": { "url", "sha256", "size" } } }`
-//! with `windows-x86_64` (the exe) and `darwin-aarch64` (Mailbox.app as a tar.gz).
+//! with `windows-x86_64` (the exe), `darwin-aarch64` (Mailbox.app as a tar.gz) and
+//! `linux-x86_64` (`mailbox/mailbox` in a tar.gz).
 //!
-//! Windows swaps the running exe; macOS swaps the running `Mailbox.app` bundle. Elsewhere
-//! (Linux) a newer release is only announced.
+//! Windows and Linux swap the running exe; macOS swaps the running `Mailbox.app` bundle. Other
+//! builds (e.g. Windows on ARM) only announce a newer release.
 //!
 //! Test hook: `MAILBOX_UPDATE_FEED=<path or URL of a latest.json>` replaces the GitHub manifest;
 //! its asset URL may then be a local file path.
@@ -29,10 +31,12 @@ pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Points the check at another `latest.json` (local path or URL) instead of GitHub.
 pub const FEED_ENV: &str = "MAILBOX_UPDATE_FEED";
 /// The `platforms` key this build installs; `None`: no in-place install (only announced).
-pub const PLATFORM: Option<&str> = if cfg!(windows) {
+pub const PLATFORM: Option<&str> = if cfg!(all(windows, target_arch = "x86_64")) {
     Some("windows-x86_64")
 } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
     Some("darwin-aarch64")
+} else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    Some("linux-x86_64")
 } else {
     None
 };
@@ -68,7 +72,7 @@ impl Error {
             Error::MissingAsset => "This release has no package for this system",
             Error::Checksum => "The download is damaged (checksum mismatch)",
             Error::DevBuild => "Development build: updates are installed only in a release build",
-            Error::Unsupported => "Updates are installed automatically only on Windows and macOS",
+            Error::Unsupported => "Updates are not installed automatically on this system",
             Error::Install(_) => "Could not install the update",
         }
     }
@@ -280,7 +284,7 @@ pub fn installed_exe() -> Result<PathBuf, Error> {
 }
 
 /// Downloads the package of `release`, checks its size and SHA-256, puts it in place of the
-/// running app (the exe on Windows, `Mailbox.app` on macOS) and starts the new one with the
+/// running app (the exe on Windows and Linux, `Mailbox.app` on macOS) and starts the new one with the
 /// same arguments. `on_progress` receives the bytes downloaded so far (out of `release.size`).
 /// On `Ok` the caller must quit right away; on any error the installed app is left (or put
 /// back) as it was.
@@ -293,12 +297,14 @@ pub fn install(release: &Release, on_progress: impl Fn(u64)) -> Result<(), Error
     verify(&bytes, release)?;
     #[cfg(target_os = "macos")]
     return macos::install(&exe, &bundle, &bytes);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    return linux::install(&exe, &bytes);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     install_exe(&exe, &bytes)
 }
 
 /// Windows: the downloaded exe replaces the running one.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn install_exe(exe: &Path, bytes: &[u8]) -> Result<(), Error> {
     // Staged next to the exe so the final rename never crosses volumes.
     let staged = staged_exe_path(exe);
@@ -306,7 +312,13 @@ fn install_exe(exe: &Path, bytes: &[u8]) -> Result<(), Error> {
         let _ = fs::remove_file(&staged);
         return Err(err.into());
     }
-    swap_exe(exe, &staged)?;
+    swap_staged(exe, &staged)
+}
+
+/// Swaps `staged` in place of `exe` and starts it; puts the previous exe back on failure.
+#[cfg(not(target_os = "macos"))]
+fn swap_staged(exe: &Path, staged: &Path) -> Result<(), Error> {
+    swap_exe(exe, staged)?;
     if let Err(err) = relaunch(exe) {
         let _ = rollback(exe);
         return Err(err);
@@ -478,6 +490,50 @@ mod macos {
             return Err(err);
         }
         Ok(())
+    }
+}
+
+/// Linux: the release is `mailbox/mailbox` (plus its .desktop entry and icon) in a tar.gz;
+/// the binary replaces the running one (Linux lets a running exe be renamed).
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::*;
+
+    pub fn install(exe: &Path, archive: &[u8]) -> Result<(), Error> {
+        let dir = exe
+            .parent()
+            .ok_or_else(|| Error::Install("no folder around the executable".into()))?;
+        // Unpacked next to the exe so the final rename never crosses volumes.
+        let staging = dir.join(".mailbox-update");
+        let _ = fs::remove_dir_all(&staging);
+        let result = unpack_and_swap(exe, &staging, archive);
+        let _ = fs::remove_dir_all(&staging);
+        result
+    }
+
+    fn unpack_and_swap(exe: &Path, staging: &Path, archive: &[u8]) -> Result<(), Error> {
+        fs::create_dir_all(staging)?;
+        let archive_path = staging.join("update.tar.gz");
+        fs::write(&archive_path, archive)?;
+        let status = Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive_path)
+            .arg("-C")
+            .arg(staging)
+            .status()?;
+        if !status.success() {
+            return Err(Error::Install(format!("tar failed ({status})")));
+        }
+        let staged = staging.join("mailbox").join("mailbox");
+        if !staged.is_file() {
+            return Err(Error::Install(
+                "the update has no Mailbox executable".into(),
+            ));
+        }
+        fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))?;
+        swap_staged(exe, &staged)
     }
 }
 

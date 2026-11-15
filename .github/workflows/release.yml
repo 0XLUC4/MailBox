@@ -3,8 +3,9 @@
 #   Mailbox-X.Y.Z-windows-x64.exe          Windows (also the in-app update package)
 #   Mailbox-X.Y.Z-macos-arm64.dmg          macOS install
 #   Mailbox-X.Y.Z-macos-arm64.app.tar.gz   macOS in-app update package
-#   Mailbox-X.Y.Z-linux-x64.tar.gz         Linux
-#   latest.json                            read by the in-app updater (windows-x86_64, darwin-aarch64)
+#   Mailbox-X.Y.Z-linux-x64.tar.gz         Linux (also the in-app update package)
+#   latest.json                            read by the in-app updater (windows-x86_64,
+#                                          darwin-aarch64, linux-x86_64)
 # Run manually (Actions > release > Run workflow) to build everything without publishing: the
 # packages are kept as workflow artifacts.
 #
@@ -130,16 +131,21 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Add the macOS update package to latest.json
+      - name: Add the macOS and Linux update packages to latest.json
         run: |
           version="${GITHUB_REF_NAME#v}"
-          name="Mailbox-$version-macos-arm64.app.tar.gz"
-          jq --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$name" \
-             --arg sha256 "$(sha256sum "dist/$name" | cut -d' ' -f1)" \
-             --argjson size "$(stat -c %s "dist/$name")" \
-             '.platforms["darwin-aarch64"] = {url: $url, sha256: $sha256, size: $size}' \
-             dist/latest.json > dist/latest.tmp
-          mv dist/latest.tmp dist/latest.json
+          add() { # <platform key> <asset suffix>
+            local name="Mailbox-$version-$2"
+            jq --arg platform "$1" \
+               --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$name" \
+               --arg sha256 "$(sha256sum "dist/$name" | cut -d' ' -f1)" \
+               --argjson size "$(stat -c %s "dist/$name")" \
+               '.platforms[$platform] = {url: $url, sha256: $sha256, size: $size}' \
+               dist/latest.json > dist/latest.tmp
+            mv dist/latest.tmp dist/latest.json
+          }
+          add darwin-aarch64 macos-arm64.app.tar.gz
+          add linux-x86_64 linux-x64.tar.gz
           cat dist/latest.json
 
       - name: Publish the release

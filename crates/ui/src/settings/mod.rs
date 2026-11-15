@@ -14,7 +14,7 @@ use mailbox_core::settings::{
     Density, Language, ReadingPane, RibbonMode, Settings, ThemePreference, WeekStart,
 };
 
-use crate::actions::{OpenAbout, OpenRules, OpenSignatures};
+use crate::actions::{OpenAbout, OpenSignatures};
 use crate::app_state::AppState;
 use crate::components::{Button, Icon, IconName};
 use crate::dialogs;
@@ -481,7 +481,6 @@ impl SettingsView {
     }
 }
 
-/// Moves an hour by `step`, kept within `[min, max]`.
 /// Out of office, read receipts and the default mail app (see `crate::everyday`).
 fn everyday_rows(cx: &App) -> Vec<AnyElement> {
     let row = |id: &'static str,
@@ -529,6 +528,7 @@ fn everyday_rows(cx: &App) -> Vec<AnyElement> {
     ]
 }
 
+/// Moves an hour by `step`, kept within `[min, max]`.
 fn shift_hour(hour: u8, step: i32, min: u8, max: u8) -> u8 {
     (i32::from(hour) + step).clamp(i32::from(min), i32::from(max)) as u8
 }
@@ -557,13 +557,6 @@ impl Render for SettingsView {
             Section::Language => self.render_language(&settings, cx),
             Section::About => self.render_about(cx),
         };
-        let open_rules = (section == Section::Rules).then(|| {
-            Button::new("open-rules-shortcut")
-                .ghost()
-                .icon(IconName::ListFilter)
-                .label(tr(cx, "Open rules dialog"))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenRules), cx))
-        });
 
         div()
             .flex()
@@ -588,19 +581,10 @@ impl Render for SettingsView {
                             .gap(SPACE_1)
                             .child(
                                 div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(SPACE_2)
                                     .pb(SPACE_2)
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .text_size(TEXT_LG)
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(tr(cx, section.label())),
-                                    )
-                                    .children(open_rules),
+                                    .text_size(TEXT_LG)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(tr(cx, section.label())),
                             )
                             .children(rows),
                     ),

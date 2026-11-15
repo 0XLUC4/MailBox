@@ -85,26 +85,43 @@ impl SignatureForm {
         });
     }
 
+    /// Keeps the edits of the current account, then shows another one.
     fn switch(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index == self.index || !self.store(cx) {
+            return;
+        }
         self.index = index;
         self.load(window, cx);
         cx.notify();
     }
 
-    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Saves the fields of the current account when they changed; false when saving failed.
+    fn store(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(account_id) = self.account().map(|account| account.id) else {
-            return;
+            return false;
         };
+        let new_message = self.new_message.read(cx).value().trim_end().to_owned();
+        let reply = self.reply.read(cx).value().trim_end().to_owned();
+        let stored = compose::signature(self.state.read(cx).store(), account_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if stored.new_message == new_message && stored.reply == reply {
+            return true;
+        }
         let signature = Signature {
             id: 0,
             account_id,
-            new_message: self.new_message.read(cx).value().trim_end().to_owned(),
-            reply: self.reply.read(cx).value().trim_end().to_owned(),
+            new_message,
+            reply,
         };
-        let saved = self.state.update(cx, |state, cx| {
+        self.state.update(cx, |state, cx| {
             state.run(Command::SaveSignature(Box::new(signature)), cx)
-        });
-        if saved {
+        })
+    }
+
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.store(cx) {
             self.state
                 .update(cx, |state, cx| state.notify_info("Signature saved", cx));
             window.close_dialog(cx);

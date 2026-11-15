@@ -1,10 +1,10 @@
 //! Desktop notifications and the unread count of the main window.
 //!
 //! - New mail (called by the sync bridge with the ids that just arrived in an inbox): muted
-//!   conversations are archived silently, automatic replies are queued, then one Windows toast
-//!   shows the sender and subject (`Settings::notify_new_mail`, `notify_sound`).
+//!   conversations are archived silently, automatic replies are queued, then one system
+//!   notification shows the sender and subject (`Settings::notify_new_mail`, `notify_sound`).
 //! - Reminders: [`reminder`] (`Settings::notify_reminders`).
-//! - Clicking a toast brings the main window forward (and opens the message).
+//! - Windows: a toast; clicking it brings the main window forward (and opens the message).
 //! - The window title (shown on the taskbar button) carries the inbox unread count. A real
 //!   overlay badge needs `ITaskbarList3` (unsafe COM), which this workspace forbids.
 //!

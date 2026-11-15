@@ -82,8 +82,8 @@ const FR: &[(&str, &str)] = &[
         "Version de développement : les mises à jour s'installent seulement dans une version publiée",
     ),
     (
-        "Updates are installed automatically only on Windows and macOS",
-        "Les mises à jour automatiques ne sont disponibles que sous Windows et macOS",
+        "Updates are not installed automatically on this system",
+        "Les mises à jour ne s'installent pas automatiquement sur ce système",
     ),
     (
         "Could not install the update",
@@ -255,7 +255,6 @@ const FR: &[(&str, &str)] = &[
         "Notification sur le bureau à l'arrivée d'un message.",
     ),
     ("Menus, ribbon and settings.", "Menus, ruban et paramètres."),
-    ("Open rules dialog", "Ouvrir la fenêtre des règles"),
     (
         "{} rule(s). Rules run on new mail, in order, and can be run on a folder at any time.",
         "{} règle(s). Les règles s'appliquent aux nouveaux messages, dans l'ordre, et peuvent \

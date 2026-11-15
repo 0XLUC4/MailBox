@@ -1,5 +1,4 @@
-//! Shared dialogs: confirmation, About, keyboard shortcuts, folder and category pickers,
-//! plus the account wizard ([`account`]) and the rules editor ([`rules`]).
+//! Shared dialogs: confirmation, About, keyboard shortcuts, plus the account wizard ([`account`]) and the rules editor ([`rules`]).
 //!
 //! All use `gpui::component::WindowExt::open_dialog`; persistent entities (inputs) are created
 //! before opening because the dialog builder may re-run.
@@ -13,15 +12,13 @@ use gpui::component::WindowExt as _;
 use gpui::component::button::ButtonVariant;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use mailbox_core::{Command, Id, Message};
 
 use crate::actions::ACTIONS;
-use crate::app_state::AppState;
-use crate::components::{Icon, IconName};
+use crate::components::Icon;
 use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_LG,
-    TEXT_SM, TEXT_XS, hex, theme,
+    ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_SM,
+    TEXT_XS, theme,
 };
 
 /// Text of a confirmation dialog.
@@ -165,181 +162,6 @@ pub fn open_shortcuts(window: &mut Window, cx: &mut App) {
                     .flex_col()
                     .children(shortcut_rows(cx)),
             )
-    });
-}
-
-/// A selectable row with a leading icon or colour dot.
-fn picker_row(
-    id: impl Into<ElementId>,
-    leading: AnyElement,
-    label: SharedString,
-    checked: bool,
-    cx: &App,
-) -> Stateful<Div> {
-    let (hover, accent) = (theme(cx).hover, theme(cx).accent);
-    div()
-        .id(id)
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(SPACE_2)
-        .h(px(32.))
-        .px(SPACE_2)
-        .rounded(RADIUS_MD)
-        .cursor_pointer()
-        .hover(move |style| style.bg(hover))
-        .child(leading)
-        .child(div().flex_1().truncate().text_size(TEXT_SM).child(label))
-        .when(checked, |row| {
-            row.child(
-                Icon::new(IconName::Check)
-                    .size(ICON_SIZE_SM)
-                    .text_color(accent),
-            )
-        })
-}
-
-/// Lets the user pick a destination folder for a message, then moves it (undoable).
-pub fn pick_folder(state: Entity<AppState>, message_id: Id, window: &mut Window, cx: &mut App) {
-    let store = state.read(cx).store();
-    let current = store
-        .get::<Message>(message_id)
-        .ok()
-        .flatten()
-        .map(|message| message.folder_id);
-    let mut groups = Vec::new();
-    for account in store.list_accounts().unwrap_or_default() {
-        let folders = store.list_folders(account.id).unwrap_or_default();
-        groups.push((account, folders));
-    }
-    let groups = Rc::new(groups);
-    window.open_dialog(cx, move |dialog, _, cx| {
-        let t = theme(cx).clone();
-        let mut list = div().flex().flex_col().gap(SPACE_1);
-        for (account, folders) in groups.iter() {
-            list = list.child(
-                div()
-                    .pt(SPACE_2)
-                    .pb(SPACE_1)
-                    .px(SPACE_2)
-                    .text_size(TEXT_XS)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(t.text_subtle)
-                    .child(account.name.to_uppercase()),
-            );
-            for folder in folders {
-                let state = state.clone();
-                let folder_id = folder.id;
-                let icon = Icon::new(IconName::Folder)
-                    .size(ICON_SIZE_SM)
-                    .text_color(t.text_muted)
-                    .into_any_element();
-                list = list.child(
-                    picker_row(
-                        ("folder", folder_id as u64),
-                        icon,
-                        folder.name.clone().into(),
-                        current == Some(folder_id),
-                        cx,
-                    )
-                    .on_click(move |_, window, cx| {
-                        state.update(cx, |state, cx| {
-                            let moved = state.run(
-                                Command::MoveMessages {
-                                    ids: vec![message_id],
-                                    folder_id,
-                                },
-                                cx,
-                            );
-                            if moved {
-                                state.select_message(None, cx);
-                            }
-                        });
-                        window.close_dialog(cx);
-                    }),
-                );
-            }
-        }
-        dialog.w(px(360.)).title(tr(cx, "Move to folder")).child(
-            div()
-                .id("folder-picker")
-                .max_h(px(420.))
-                .overflow_y_scroll()
-                .child(list),
-        )
-    });
-}
-
-/// Toggles categories on a message (undoable), from the category list.
-pub fn pick_category(state: Entity<AppState>, message_id: Id, window: &mut Window, cx: &mut App) {
-    let categories = Rc::new(state.read(cx).store().list_categories().unwrap_or_default());
-    if categories.is_empty() {
-        state.update(cx, |state, cx| {
-            state.notify_info("No categories defined yet", cx)
-        });
-        return;
-    }
-    window.open_dialog(cx, move |dialog, _, cx| {
-        // Re-read on each render so checks follow the toggles.
-        let assigned = state
-            .read(cx)
-            .store()
-            .get::<Message>(message_id)
-            .ok()
-            .flatten()
-            .map(|message| message.categories)
-            .unwrap_or_default();
-        let rows = categories
-            .iter()
-            .map(|category| {
-                let checked = assigned.iter().any(|name| name == &category.name);
-                let dot = div()
-                    .size(px(10.))
-                    .rounded(RADIUS_FULL)
-                    .bg(hex(category.color))
-                    .into_any_element();
-                let state = state.clone();
-                let name = category.name.clone();
-                picker_row(
-                    ("category", category.id as u64),
-                    dot,
-                    category.name.clone().into(),
-                    checked,
-                    cx,
-                )
-                .on_click(move |_, _, cx| {
-                    state.update(cx, |state, cx| {
-                        let Some(message) = state.store().get::<Message>(message_id).ok().flatten()
-                        else {
-                            return;
-                        };
-                        let mut categories = message.categories;
-                        if let Some(index) = categories.iter().position(|c| c == &name) {
-                            categories.remove(index);
-                        } else {
-                            categories.push(name.clone());
-                        }
-                        state.run(
-                            Command::SetMessageCategories {
-                                ids: vec![message_id],
-                                categories,
-                            },
-                            cx,
-                        );
-                    });
-                })
-            })
-            .collect::<Vec<_>>();
-        dialog.w(px(320.)).title(tr(cx, "Categorize")).child(
-            div()
-                .id("category-picker")
-                .max_h(px(420.))
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap(SPACE_1)
-                .children(rows),
-        )
     });
 }
 
