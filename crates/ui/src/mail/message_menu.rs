@@ -563,24 +563,38 @@ const CATEGORY_COLORS: [u32; 8] = [
     0x3b82f6, 0x22c55e, 0xf59e0b, 0xef4444, 0xa855f7, 0x14b8a6, 0xec4899, 0x64748b,
 ];
 
-/// Creates category `name` (unless it exists) and adds it to `ids`.
+/// Creates category `name` (unless it exists, in any case) and adds it to `ids`.
 fn create_category(state: &Entity<AppState>, ids: &[Id], name: &str, cx: &mut App) -> bool {
     let existing = state.read(cx).store().list_categories().unwrap_or_default();
-    if !existing.iter().any(|c| c.name.eq_ignore_ascii_case(name)) {
-        let color = CATEGORY_COLORS[existing.len() % CATEGORY_COLORS.len()];
-        let category = mailbox_core::Category {
-            id: 0,
-            name: name.to_owned(),
-            color,
-        };
-        if !ops::run(
-            state,
-            Ok(mailbox_core::Command::SaveCategory(Box::new(category))),
-            cx,
-        ) {
-            return false;
+    let name = match existing.iter().find(|c| c.name.eq_ignore_ascii_case(name)) {
+        Some(category) => category.name.clone(),
+        None => {
+            let category = mailbox_core::Category {
+                id: 0,
+                name: name.to_owned(),
+                color: CATEGORY_COLORS[existing.len() % CATEGORY_COLORS.len()],
+            };
+            if !ops::run(
+                state,
+                Ok(mailbox_core::Command::SaveCategory(Box::new(category))),
+                cx,
+            ) {
+                return false;
+            }
+            name.to_owned()
         }
+    };
+    // Toggling would remove a category every message already has.
+    if !all_have_category(state, ids, &name, cx) {
+        ops::toggle_category(state, ids.to_vec(), &name, cx);
     }
-    ops::toggle_category(state, ids.to_vec(), name, cx);
     true
+}
+
+/// Whether every message of `ids` has category `name`.
+fn all_have_category(state: &Entity<AppState>, ids: &[Id], name: &str, cx: &App) -> bool {
+    let store = state.read(cx).store();
+    ids.iter()
+        .filter_map(|&id| store.get::<Message>(id).ok().flatten())
+        .all(|message| message.categories.iter().any(|c| c == name))
 }
