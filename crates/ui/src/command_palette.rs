@@ -300,7 +300,7 @@ impl Render for CommandPalette {
                 )
                 .child(
                     div()
-                        .flex_shrink()
+                        .min_w(px(0.))
                         .max_w(px(220.))
                         .truncate()
                         .text_size(TEXT_XS)
