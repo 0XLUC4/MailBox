@@ -113,6 +113,16 @@ impl CalendarView {
 
     /// Deletes a calendar and its events in one undoable step.
     fn delete_calendar(&mut self, id: Id, cx: &mut Context<Self>) {
+        // Deleting locally would delete every event on the server at the next sync.
+        if crate::dav_bridge::is_synced_calendar(id, cx) {
+            self.state.update(cx, |state, cx| {
+                state.report_error(
+                    "This calendar is synced with a CalDAV server: delete it on the server.",
+                    cx,
+                )
+            });
+            return;
+        }
         let events: Vec<Id> = self
             .state
             .read(cx)
@@ -152,7 +162,8 @@ impl CalendarView {
                 .store()
                 .list_calendars()
                 .map_or(0, |c| c.len())
-                > 1;
+                > 1
+            && !id.is_some_and(|id| crate::dav_bridge::is_synced_calendar(id, cx));
         let swatches = ACCENTS.iter().map(|&(label, color)| {
             let active = color == edit.color;
             div()

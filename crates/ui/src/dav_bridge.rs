@@ -100,6 +100,18 @@ pub fn contacts_account(cx: &App) -> Option<Id> {
         .map(|account| account.account_id)
 }
 
+/// Whether a local calendar mirrors a CalDAV collection.
+pub fn is_synced_calendar(calendar_id: Id, cx: &App) -> bool {
+    cx.try_global::<GlobalDavBridge>().is_some_and(|global| {
+        global
+            .0
+            .read(cx)
+            .accounts
+            .iter()
+            .any(|account| account.state.collection_of_calendar(calendar_id).is_some())
+    })
+}
+
 /// How an invitation leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvitationRoute {
@@ -234,6 +246,7 @@ impl DavBridge {
     }
 
     fn start(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.detach_missing_calendars(index, cx);
         // An unreadable local store must not look like "everything was deleted locally".
         let local = match self.local_snapshot(&self.accounts[index], cx) {
             Ok(local) => local,
@@ -315,6 +328,23 @@ impl DavBridge {
             self.accounts[index].last_error = Some(message);
         }
         self.publish_status(cx);
+    }
+
+    /// A synced calendar deleted locally (e.g. undo history, older versions) is re-downloaded
+    /// from scratch instead of being read as "every event deleted here" and wiped remotely.
+    fn detach_missing_calendars(&mut self, index: usize, cx: &App) {
+        let store = self.state.read(cx).store();
+        for collection in self.accounts[index].state.collections.values_mut() {
+            let Some(calendar_id) = collection.local_id else {
+                continue;
+            };
+            if matches!(store.get::<Calendar>(calendar_id), Ok(None)) {
+                collection.local_id = None;
+                collection.items.clear();
+                collection.sync_token = None;
+                collection.ctag = None;
+            }
+        }
     }
 
     // ---------- local -> resources ----------
@@ -455,14 +485,26 @@ impl DavBridge {
                 .ok()
                 .flatten()
         });
+        // A local rename/recolour sticks until the server's own value changes.
+        let previous = self
+            .accounts
+            .iter()
+            .find_map(|account| account.state.collections.get(&state.url));
+        let name_changed = previous.is_none_or(|p| p.name != state.name);
+        let color_changed = previous.is_none_or(|p| p.color != state.color);
         let wanted = Calendar {
             id: existing.as_ref().map_or(0, |c| c.id),
             account_id,
-            name: state.name.clone(),
-            color: state
-                .color
-                .or(existing.as_ref().map(|c| c.color))
-                .unwrap_or(DEFAULT_ACCENT),
+            name: match &existing {
+                Some(calendar) if !name_changed => calendar.name.clone(),
+                _ => state.name.clone(),
+            },
+            color: match (&existing, state.color) {
+                (Some(calendar), _) if !color_changed => calendar.color,
+                (_, Some(color)) => color,
+                (Some(calendar), None) => calendar.color,
+                (None, None) => DEFAULT_ACCENT,
+            },
         };
         if existing.as_ref() == Some(&wanted) {
             return Some(wanted.id);
