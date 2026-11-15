@@ -10,9 +10,10 @@ use mailbox_core::{Address, Id, PeopleCommand};
 use super::{PeopleView, decode_photo};
 use crate::app_state::Module;
 use crate::components::{Avatar, Badge, Button, Icon, IconButton, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE, ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2,
-    SPACE_3, SPACE_4, SPACE_6, TEXT_2XL, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex,
+    ICON_SIZE, ICON_SIZE_SM, ICON_SIZE_XS, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_1_5,
+    SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_2XL, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex,
 };
 
 /// How many recent messages / days of meetings the card shows.
@@ -60,7 +61,7 @@ impl PeopleView {
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
-            .join(" - ");
+            .join(" · ");
         let header = div()
             .flex()
             .items_center()
@@ -79,6 +80,7 @@ impl PeopleView {
                             .gap(SPACE_2)
                             .child(
                                 div()
+                                    .min_w(px(0.))
                                     .truncate()
                                     .text_size(TEXT_2XL)
                                     .font_weight(FontWeight::SEMIBOLD)
@@ -93,11 +95,12 @@ impl PeopleView {
                             }),
                     )
                     .when(!headline.is_empty(), |el| {
-                        el.child(div().text_color(t.text_muted).child(headline))
+                        el.child(div().truncate().text_color(t.text_muted).child(headline))
                     })
                     .when(!details.nickname.trim().is_empty(), |el| {
                         el.child(
                             div()
+                                .truncate()
                                 .text_size(TEXT_SM)
                                 .text_color(t.text_subtle)
                                 .child(format!("“{}”", details.nickname.trim())),
@@ -118,7 +121,7 @@ impl PeopleView {
                 Button::new("card-email")
                     .primary()
                     .icon(IconName::Mail)
-                    .label("Email")
+                    .label(tr(cx, "Email"))
                     .disabled(recipients.is_empty())
                     .on_click(
                         cx.listener(move |this, _, _, cx| {
@@ -129,7 +132,7 @@ impl PeopleView {
             .child(
                 Button::new("card-call")
                     .icon(IconName::Phone)
-                    .label("Call")
+                    .label(tr(cx, "Call"))
                     .disabled(first_phone.is_none())
                     .on_click(move |_, _, cx| {
                         if let Some(phone) = &first_phone {
@@ -140,7 +143,7 @@ impl PeopleView {
             .child(
                 Button::new("card-meeting")
                     .icon(IconName::CalendarPlus)
-                    .label("Schedule meeting")
+                    .label(tr(cx, "Schedule meeting"))
                     .disabled(recipients.is_empty())
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.emit_meeting(meet_with.clone(), cx)),
@@ -150,11 +153,14 @@ impl PeopleView {
             .child(
                 IconButton::new("card-favorite", IconName::Star)
                     .active(favorite)
-                    .tooltip(if favorite {
-                        "Remove from favorites"
-                    } else {
-                        "Add to favorites"
-                    })
+                    .tooltip(tr(
+                        cx,
+                        if favorite {
+                            "Remove from favorites"
+                        } else {
+                            "Add to favorites"
+                        },
+                    ))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.run(
                             PeopleCommand::SetFavorite {
@@ -167,19 +173,19 @@ impl PeopleView {
             )
             .child(
                 IconButton::new("card-edit", IconName::Pencil)
-                    .tooltip("Edit")
+                    .tooltip(tr(cx, "Edit"))
                     .on_click(
                         cx.listener(move |this, _, window, cx| this.edit_contact(id, window, cx)),
                     ),
             )
             .child(
                 IconButton::new("card-export", IconName::Upload)
-                    .tooltip("Export as .vcf")
+                    .tooltip(tr(cx, "Export as .vcf"))
                     .on_click(cx.listener(move |this, _, _, cx| this.export(Some(vec![id]), cx))),
             )
             .child(
                 IconButton::new("card-delete", IconName::Trash)
-                    .tooltip("Delete contact")
+                    .tooltip(tr(cx, "Delete contact"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.delete_contacts(vec![id], window, cx)
                     })),
@@ -189,7 +195,7 @@ impl PeopleView {
         let mut info: Vec<AnyElement> = Vec::new();
         for (index, email) in contact.emails.iter().enumerate() {
             let to = vec![Address::new(name.clone(), email.clone())];
-            let label = field_label(details.email_label(index), "Email");
+            let label = field_label(details.email_label(index), tr(cx, "Email"));
             info.push(
                 info_row(
                     ("card-email-row", index as u64),
@@ -205,7 +211,7 @@ impl PeopleView {
         }
         for (index, phone) in contact.phones.iter().enumerate() {
             let url = tel_url(phone);
-            let label = field_label(details.phone_label(index), "Phone");
+            let label = field_label(details.phone_label(index), tr(cx, "Phone"));
             info.push(
                 info_row(
                     ("card-phone-row", index as u64),
@@ -220,11 +226,7 @@ impl PeopleView {
             );
         }
         for (index, address) in details.addresses.iter().enumerate() {
-            let label = if address.label.trim().is_empty() {
-                "Address".to_owned()
-            } else {
-                capitalize(address.label.trim())
-            };
+            let label = field_label(address.label.trim(), tr(cx, "Address"));
             let value = address.one_line();
             let copied = value.clone();
             info.push(
@@ -246,7 +248,7 @@ impl PeopleView {
                     "card-birthday",
                     IconName::Cake,
                     birthday.format("%-d %B %Y").to_string(),
-                    "Birthday",
+                    tr(cx, "Birthday"),
                     t,
                 )
                 .into_any_element(),
@@ -260,9 +262,15 @@ impl PeopleView {
                 format!("https://{website}")
             };
             info.push(
-                info_row("card-website", IconName::Globe, website, "Website", t)
-                    .on_click(move |_, _, cx| cx.open_url(&url))
-                    .into_any_element(),
+                info_row(
+                    "card-website",
+                    IconName::Globe,
+                    website,
+                    tr(cx, "Website"),
+                    t,
+                )
+                .on_click(move |_, _, cx| cx.open_url(&url))
+                .into_any_element(),
             );
         }
 
@@ -295,6 +303,8 @@ impl PeopleView {
             .collect();
 
         // ----- activity -----
+        let no_subject = tr(cx, "(no subject)");
+        let recurring = tr(cx, "Recurring");
         let messages: Vec<AnyElement> = recent
             .into_iter()
             .map(|message| {
@@ -303,7 +313,7 @@ impl PeopleView {
                     ("card-message", message_id as u64),
                     IconName::Mail,
                     if message.subject.trim().is_empty() {
-                        "(no subject)".to_owned()
+                        no_subject.to_owned()
                     } else {
                         message.subject.clone()
                     },
@@ -325,11 +335,11 @@ impl PeopleView {
             .map(|event| {
                 let start = event.start.with_timezone(&Local);
                 let when = if event.recurrence.is_some() && event.start < now {
-                    "Recurring".to_owned()
+                    recurring.to_owned()
                 } else if event.all_day {
                     start.format("%a %-d %b").to_string()
                 } else {
-                    start.format("%a %-d %b - %H:%M").to_string()
+                    start.format("%a %-d %b · %H:%M").to_string()
                 };
                 activity_row(
                     ("card-event", event.id as u64),
@@ -358,11 +368,11 @@ impl PeopleView {
                     .child(header)
                     .child(actions)
                     .when(!info.is_empty(), |el| {
-                        el.child(section("Contact info", t).children(info))
+                        el.child(section(tr(cx, "Contact info"), t).children(info))
                     })
                     .when(!categories.is_empty(), |el| {
                         el.child(
-                            section("Categories", t).child(
+                            section(tr(cx, "Categories"), t).child(
                                 div()
                                     .flex()
                                     .flex_wrap()
@@ -374,7 +384,7 @@ impl PeopleView {
                     })
                     .when(!group_chips.is_empty(), |el| {
                         el.child(
-                            section("Groups", t).child(
+                            section(tr(cx, "Groups"), t).child(
                                 div()
                                     .flex()
                                     .flex_wrap()
@@ -386,7 +396,7 @@ impl PeopleView {
                     })
                     .when(!contact.notes.trim().is_empty(), |el| {
                         el.child(
-                            section("Notes", t).child(
+                            section(tr(cx, "Notes"), t).child(
                                 div()
                                     .px(SPACE_2)
                                     .text_color(t.text_muted)
@@ -395,16 +405,19 @@ impl PeopleView {
                             ),
                         )
                     })
-                    .child(section("Recent emails", t).map(|el| {
+                    .child(section(tr(cx, "Recent emails"), t).map(|el| {
                         if messages.is_empty() {
-                            el.child(empty_note("No emails with this person yet.", t))
+                            el.child(empty_note(tr(cx, "No emails with this person yet"), t))
                         } else {
                             el.children(messages)
                         }
                     }))
-                    .child(section("Upcoming meetings", t).map(|el| {
+                    .child(section(tr(cx, "Upcoming meetings"), t).map(|el| {
                         if meetings.is_empty() {
-                            el.child(empty_note("Nothing scheduled in the next 60 days.", t))
+                            el.child(empty_note(
+                                tr(cx, "Nothing scheduled in the next 60 days"),
+                                t,
+                            ))
                         } else {
                             el.children(meetings)
                         }
@@ -423,33 +436,30 @@ impl PeopleView {
         Some(image)
     }
 
-    /// Small "Copy" button shown on row hover (does not trigger the row's own click).
+    /// Small "Copy" button (does not trigger the row's own click).
     fn copy_button(
         &self,
         id: impl Into<ElementId>,
         text: String,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        div()
-            .flex_shrink_0()
-            .opacity(0.)
-            .group_hover("info-row", |style| style.opacity(1.))
-            .child(
-                IconButton::new(id, IconName::Copy)
-                    .size(px(24.))
-                    .icon_size(ICON_SIZE_SM)
-                    .tooltip("Copy")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.copy(text.clone(), cx)
-                    })),
-            )
+        div().flex_shrink_0().child(
+            IconButton::new(id, IconName::Copy)
+                .size(px(24.))
+                .icon_size(ICON_SIZE_SM)
+                .tooltip(tr(cx, "Copy"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.copy(text.clone(), cx)
+                })),
+        )
     }
 
     fn copy(&mut self, text: String, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(text));
+        let message = tr(cx, "Copied to clipboard");
         self.state
-            .update(cx, |state, cx| state.notify_info("Copied to clipboard", cx));
+            .update(cx, |state, cx| state.notify_info(message, cx));
     }
 
     fn open_message(&mut self, message_id: Id, folder_id: Id, cx: &mut Context<Self>) {
@@ -499,7 +509,6 @@ fn info_row(
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .group("info-row")
         .flex()
         .items_center()
         .gap(SPACE_3)
@@ -518,6 +527,7 @@ fn info_row(
                 .child(div().truncate().text_size(TEXT_MD).child(value))
                 .child(
                     div()
+                        .truncate()
                         .text_size(TEXT_XS)
                         .text_color(t.text_subtle)
                         .child(label.into()),
@@ -583,7 +593,7 @@ pub(super) fn chip(
             el.bg(t.accent_subtle)
                 .border_color(t.accent)
                 .text_color(t.accent)
-                .child(Icon::new(IconName::Check).size(px(12.)))
+                .child(Icon::new(IconName::Check).size(ICON_SIZE_XS))
         })
         .when(!active, |el| {
             el.border_color(t.border)

@@ -25,8 +25,10 @@ use mailbox_core::{Address, Command, Id, PeopleCommand, vcard};
 
 use crate::app_state::{AppState, Module};
 use crate::components::{Avatar, Button, EmptyState, Icon, IconButton, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE, ICON_SIZE_SM, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, TEXT_LG, TEXT_MD,
+    DISABLED_OPACITY, ICON_SIZE, ICON_SIZE_SM, NAV_ROW_HEIGHT, PANE_HEADER_HEIGHT, RADIUS_FULL,
+    RADIUS_MD, RADIUS_SM, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, TEXT_2XS, TEXT_LG, TEXT_MD,
     TEXT_SM, TEXT_XS, Theme, theme,
 };
 
@@ -34,6 +36,8 @@ use form::ContactForm;
 
 /// Height of a contact row (the list is a uniform, virtualized list).
 const ROW_HEIGHT: Pixels = px(52.);
+/// Height of the visible row inside it (same as the Tasks rows).
+const LIST_ROW_HEIGHT: Pixels = px(48.);
 /// Jump-bar letters, in list order.
 const LETTERS: [char; 27] = [
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
@@ -137,8 +141,8 @@ pub fn delete_selection(window: &mut Window, cx: &mut App) -> bool {
 
 impl PeopleView {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search people"));
-        let new_group = cx.new(|cx| InputState::new(window, cx).placeholder("New group"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, "Search people")));
+        let new_group = cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, "New group")));
         let subscriptions = vec![
             cx.observe_in(&state, window, |this: &mut Self, state, window, cx| {
                 this.suggestions = None;
@@ -288,9 +292,9 @@ impl PeopleView {
         }
         let targets = self.targets();
         if targets.is_empty() {
-            self.state.update(cx, |state, cx| {
-                state.notify_info("Select a contact to delete", cx)
-            });
+            let message = tr(cx, "Select a contact to delete");
+            self.state
+                .update(cx, |state, cx| state.notify_info(message, cx));
         } else {
             self.delete_contacts(targets, window, cx);
         }
@@ -316,11 +320,11 @@ impl PeopleView {
     fn require_account(&mut self, cx: &mut Context<Self>) -> Option<Id> {
         let account_id = self.account_id(cx);
         if account_id.is_none() {
-            self.report(
-                "Contacts are stored with an account: add a mail or CardDAV account first."
-                    .to_owned(),
+            let message = tr(
                 cx,
+                "Contacts are stored with an account: add a mail or CardDAV account first.",
             );
+            self.report(message.to_owned(), cx);
         }
         account_id
     }
@@ -390,14 +394,17 @@ impl PeopleView {
         self.form = None;
         self.selected = id;
         self.anchor = id;
-        let noun = if is_new {
-            "Contact created"
-        } else {
-            "Contact saved"
-        };
-        self.state.update(cx, |state, cx| {
-            state.notify_info(format!("{noun} - Ctrl+Z to undo"), cx)
-        });
+        let noun = tr(
+            cx,
+            if is_new {
+                "Contact created"
+            } else {
+                "Contact saved"
+            },
+        );
+        let message = format!("{noun} · {}", tr(cx, "Ctrl+Z to undo"));
+        self.state
+            .update(cx, |state, cx| state.notify_info(message, cx));
         cx.notify();
     }
 
@@ -410,10 +417,7 @@ impl PeopleView {
         let count = ids.len();
         if self.run(PeopleCommand::DeleteContacts(ids), cx) {
             self.select(None, cx);
-            let message = match count {
-                1 => "Contact deleted".to_owned(),
-                n => format!("{n} contacts deleted"),
-            };
+            let message = count_label(count, "Contact deleted", "{} contacts deleted", cx);
             self.undo_toast(message, window, cx);
         }
     }
@@ -428,7 +432,7 @@ impl PeopleView {
                 let notification = cx.entity();
                 KitButton::new("people-undo")
                     .primary()
-                    .label("Undo")
+                    .label(tr(cx, "Undo"))
                     .on_click(move |_, window, cx| {
                         state.update(cx, |state, cx| state.undo(cx));
                         notification
@@ -446,9 +450,9 @@ impl PeopleView {
         };
         let card = people::card_from_address(&address, account_id);
         if self.run(PeopleCommand::SaveContact(Box::new(card)), cx) {
-            self.state.update(cx, |state, cx| {
-                state.notify_info(format!("Saved {} to contacts", address.display()), cx)
-            });
+            let message = tr(cx, "Saved {} to contacts").replace("{}", &address.display());
+            self.state
+                .update(cx, |state, cx| state.notify_info(message, cx));
         }
     }
 
@@ -473,9 +477,11 @@ impl PeopleView {
         let added = group.members.len() - before;
         let name = group.name.clone();
         if added > 0 && self.run(PeopleCommand::SaveGroup(Box::new(group)), cx) {
-            self.state.update(cx, |state, cx| {
-                state.notify_info(format!("Added {added} to {name}"), cx)
-            });
+            let message = tr(cx, "Added {} to {}")
+                .replacen("{}", &added.to_string(), 1)
+                .replacen("{}", &name, 1);
+            self.state
+                .update(cx, |state, cx| state.notify_info(message, cx));
         }
     }
 
@@ -490,7 +496,8 @@ impl PeopleView {
             })
             .collect();
         if recipients.is_empty() {
-            self.report("None of these contacts has an email address".to_owned(), cx);
+            let message = tr(cx, "None of these contacts has an email address");
+            self.report(message.to_owned(), cx);
         } else {
             self.emit_compose(recipients, cx);
         }
@@ -581,14 +588,13 @@ impl PeopleView {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Import contacts (.vcf)".into()),
+            prompt: Some(tr(cx, "Import contacts (.vcf)").into()),
         });
         cx.spawn(async move |this, cx| {
             let paths = match picked.await {
                 Ok(Ok(Some(paths))) => paths,
                 Ok(Err(err)) => {
-                    let message = format!("Could not open the file picker: {err}");
-                    let _ = this.update(cx, |this, cx| this.report(message, cx));
+                    let _ = this.update(cx, |this, cx| this.report_picker_error(err, cx));
                     return;
                 }
                 _ => return,
@@ -616,10 +622,12 @@ impl PeopleView {
         cx: &mut Context<Self>,
     ) {
         for failure in failures {
-            self.report(format!("Import failed: {failure}"), cx);
+            let message = tr(cx, "Import failed: {}").replace("{}", &failure);
+            self.report(message, cx);
         }
         if cards.is_empty() {
-            self.report("No contacts found in the selected files".to_owned(), cx);
+            let message = tr(cx, "No contacts found in the selected files");
+            self.report(message.to_owned(), cx);
             return;
         }
         let count = cards.len();
@@ -627,10 +635,14 @@ impl PeopleView {
             .into_iter()
             .map(|card| Command::People(PeopleCommand::SaveContact(Box::new(card))))
             .collect();
+        let message = format!(
+            "{} · {}",
+            count_label(count, "Imported 1 contact", "Imported {} contacts", cx),
+            tr(cx, "Ctrl+Z to undo")
+        );
         self.state.update(cx, |state, cx| {
             if state.run(Command::Batch(commands), cx) {
-                let noun = if count == 1 { "contact" } else { "contacts" };
-                state.notify_info(format!("Imported {count} {noun} - Ctrl+Z to undo"), cx);
+                state.notify_info(message, cx);
             }
         });
         self.set_filter(Filter::All, cx);
@@ -644,7 +656,8 @@ impl PeopleView {
             .filter(|card| ids.as_ref().is_none_or(|ids| ids.contains(&card.id())))
             .collect();
         if cards.is_empty() {
-            self.report("No contacts to export".to_owned(), cx);
+            let message = tr(cx, "No contacts to export");
+            self.report(message.to_owned(), cx);
             return;
         }
         let file_name = match cards.as_slice() {
@@ -662,19 +675,23 @@ impl PeopleView {
             let path = match picked.await {
                 Ok(Ok(Some(path))) => path,
                 Ok(Err(err)) => {
-                    let message = format!("Could not open the file picker: {err}");
-                    let _ = this.update(cx, |this, cx| this.report(message, cx));
+                    let _ = this.update(cx, |this, cx| this.report_picker_error(err, cx));
                     return;
                 }
                 _ => return,
             };
             let result = std::fs::write(&path, text);
             let _ = this.update(cx, |this, cx| match result {
-                Ok(()) => this.state.update(cx, |state, cx| {
-                    let noun = if count == 1 { "contact" } else { "contacts" };
-                    state.notify_info(format!("Exported {count} {noun}"), cx);
-                }),
-                Err(err) => this.report(format!("Export failed: {err}"), cx),
+                Ok(()) => {
+                    let message =
+                        count_label(count, "Exported 1 contact", "Exported {} contacts", cx);
+                    this.state
+                        .update(cx, |state, cx| state.notify_info(message, cx));
+                }
+                Err(err) => {
+                    let message = tr(cx, "Export failed: {}").replace("{}", &err.to_string());
+                    this.report(message, cx);
+                }
             });
         })
         .detach();
@@ -683,6 +700,11 @@ impl PeopleView {
     fn report(&mut self, message: String, cx: &mut Context<Self>) {
         self.state
             .update(cx, |state, cx| state.report_error(message, cx));
+    }
+
+    fn report_picker_error(&mut self, err: impl std::fmt::Display, cx: &mut Context<Self>) {
+        let message = tr(cx, "Could not open the file picker: {}").replace("{}", &err.to_string());
+        self.report(message, cx);
     }
 
     // ---------- rendering ----------
@@ -754,7 +776,7 @@ impl PeopleView {
             filter_row(
                 "people-all".into(),
                 IconName::Users,
-                "All contacts".into(),
+                tr(cx, "All contacts").into(),
                 cards.len(),
                 Filter::All,
                 cx,
@@ -762,7 +784,7 @@ impl PeopleView {
             filter_row(
                 "people-favorites".into(),
                 IconName::Star,
-                "Favorites".into(),
+                tr(cx, "Favorites").into(),
                 favorites,
                 Filter::Favorites,
                 cx,
@@ -770,7 +792,7 @@ impl PeopleView {
             filter_row(
                 "people-recent".into(),
                 IconName::Clock,
-                "Recent contacts".into(),
+                tr(cx, "Recent contacts").into(),
                 recent,
                 Filter::Recent,
                 cx,
@@ -780,17 +802,19 @@ impl PeopleView {
             top.push(filter_row(
                 "people-duplicates".into(),
                 IconName::GitMerge,
-                "Duplicates".into(),
+                tr(cx, "Duplicates").into(),
                 duplicates,
                 Filter::Duplicates,
                 cx,
             ));
         }
 
+        let delete_group_tooltip = tr(cx, "Delete group");
         let group_rows: Vec<AnyElement> = groups
             .iter()
             .map(|group| {
                 let group_id = group.id;
+                let active = self.filter == Filter::Group(group_id);
                 let present = group
                     .members
                     .iter()
@@ -807,13 +831,15 @@ impl PeopleView {
                 .group("group-row")
                 .child(
                     div()
-                        .opacity(0.)
-                        .group_hover("group-row", |style| style.opacity(1.))
+                        .when(!active, |el| {
+                            el.opacity(0.)
+                                .group_hover("group-row", |style| style.opacity(1.))
+                        })
                         .child(
                             IconButton::new(("delete-group", group_id as u64), IconName::Trash)
                                 .size(px(22.))
                                 .icon_size(ICON_SIZE_SM)
-                                .tooltip("Delete group")
+                                .tooltip(delete_group_tooltip)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     cx.stop_propagation();
                                     this.delete_group(group_id, cx)
@@ -843,14 +869,14 @@ impl PeopleView {
                     .flex()
                     .items_center()
                     .gap(SPACE_2)
-                    .h(px(30.))
+                    .h(NAV_ROW_HEIGHT)
                     .px(SPACE_2)
                     .rounded(RADIUS_MD)
                     .cursor_pointer()
                     .text_size(TEXT_MD)
                     .when(active, |el| el.bg(t.accent_subtle).text_color(t.accent))
                     .when(!active, |el| el.hover(|s| s.bg(t.hover)))
-                    .child(div().size(px(10.)).rounded(px(3.)).bg(color).mx(px(3.)))
+                    .child(div().size(px(10.)).rounded(RADIUS_SM).bg(color).mx(SPACE_1))
                     .child(div().flex_1().min_w(px(0.)).truncate().child(category))
                     .child(
                         div()
@@ -878,12 +904,12 @@ impl PeopleView {
                     Button::new("new-contact")
                         .primary()
                         .icon(IconName::UserPlus)
-                        .label("New contact")
+                        .label(tr(cx, "New contact"))
                         .on_click(cx.listener(|this, _, window, cx| this.new_contact(window, cx))),
                 ),
             )
             .children(top)
-            .child(section_label("Groups", t))
+            .child(section_label(tr(cx, "Groups"), t))
             .children(group_rows)
             .child(
                 div().px(SPACE_1).pt(SPACE_1).child(
@@ -895,7 +921,7 @@ impl PeopleView {
                 ),
             )
             .when(!category_rows.is_empty(), |el| {
-                el.child(section_label("Categories", t))
+                el.child(section_label(tr(cx, "Categories"), t))
                     .children(category_rows)
             })
             .child(div().flex_1().min_h(SPACE_3))
@@ -912,7 +938,7 @@ impl PeopleView {
                             .ghost()
                             .compact()
                             .icon(IconName::Download)
-                            .label("Import")
+                            .label(tr(cx, "Import"))
                             .on_click(cx.listener(|this, _, _, cx| this.import(cx))),
                     )
                     .child(
@@ -920,7 +946,7 @@ impl PeopleView {
                             .ghost()
                             .compact()
                             .icon(IconName::Upload)
-                            .label("Export")
+                            .label(tr(cx, "Export"))
                             .on_click(cx.listener(|this, _, _, cx| this.export(None, cx))),
                     ),
             )
@@ -949,7 +975,7 @@ impl PeopleView {
                 .child(
                     IconButton::new("carddav-sync", IconName::RefreshCw)
                         .icon_size(ICON_SIZE_SM)
-                        .tooltip("Sync contacts now")
+                        .tooltip(tr(cx, "Sync contacts now"))
                         .on_click(|_, _, cx| crate::dav_bridge::sync_now(cx)),
                 ),
             None => row.child(
@@ -957,7 +983,7 @@ impl PeopleView {
                     .ghost()
                     .compact()
                     .icon(IconName::RefreshCw)
-                    .label("Connect CardDAV")
+                    .label(tr(cx, "Connect CardDAV"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         crate::dav_bridge::open_add_dav_account(this.state.clone(), window, cx)
                     })),
@@ -969,16 +995,17 @@ impl PeopleView {
     fn render_empty(&self, has_account: bool, recent: usize, cx: &mut Context<Self>) -> AnyElement {
         let carddav = Button::new("empty-carddav")
             .icon(IconName::RefreshCw)
-            .label("Connect CardDAV account")
+            .label(tr(cx, "Connect CardDAV account"))
             .on_click(cx.listener(|this, _, window, cx| {
                 crate::dav_bridge::open_add_dav_account(this.state.clone(), window, cx)
             }));
         if !has_account {
-            return EmptyState::new(IconName::Contact, "No account yet")
-                .description(
+            return EmptyState::new(IconName::Contact, tr(cx, "No account yet"))
+                .description(tr(
+                    cx,
                     "Contacts are kept with an account. Add a mail account, or connect a \
                      CardDAV address book (iCloud, Fastmail, Nextcloud…).",
-                )
+                ))
                 .action(
                     div()
                         .flex()
@@ -989,7 +1016,7 @@ impl PeopleView {
                             Button::new("empty-add-account")
                                 .primary()
                                 .icon(IconName::UserPlus)
-                                .label("Add mail account")
+                                .label(tr(cx, "Add mail account"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     crate::dialogs::account::open_add_account(
                                         this.state.clone(),
@@ -1002,15 +1029,21 @@ impl PeopleView {
                 )
                 .into_any_element();
         }
-        let description = if recent > 0 {
-            format!(
-                "Create one, import a .vcf file or sync an address book. \
-                 {recent} people from your mail are waiting in Recent contacts."
-            )
-        } else {
-            "Create one, import a .vcf file or sync an address book.".to_owned()
-        };
-        EmptyState::new(IconName::Users, "No contacts yet")
+        let mut description = tr(
+            cx,
+            "Create one, import a .vcf file or sync an address book.",
+        )
+        .to_owned();
+        if recent > 0 {
+            description.push(' ');
+            description.push_str(&count_label(
+                recent,
+                "1 person from your mail is waiting in Recent contacts.",
+                "{} people from your mail are waiting in Recent contacts.",
+                cx,
+            ));
+        }
+        EmptyState::new(IconName::Users, tr(cx, "No contacts yet"))
             .description(description)
             .action(
                 div()
@@ -1022,7 +1055,7 @@ impl PeopleView {
                         Button::new("empty-new")
                             .primary()
                             .icon(IconName::UserPlus)
-                            .label("New contact")
+                            .label(tr(cx, "New contact"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.new_contact(window, cx)),
                             ),
@@ -1030,7 +1063,7 @@ impl PeopleView {
                     .child(
                         Button::new("empty-import")
                             .icon(IconName::Download)
-                            .label("Import .vcf")
+                            .label(tr(cx, "Import .vcf"))
                             .on_click(cx.listener(|this, _, _, cx| this.import(cx))),
                     )
                     .child(carddav)
@@ -1039,7 +1072,7 @@ impl PeopleView {
                             Button::new("empty-recent")
                                 .ghost()
                                 .icon(IconName::Clock)
-                                .label("See recent contacts")
+                                .label(tr(cx, "See recent contacts"))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.set_filter(Filter::Recent, cx)
                                 })),
@@ -1067,10 +1100,16 @@ impl PeopleView {
             .cloned()
             .collect();
         if shown.is_empty() {
-            return EmptyState::new(IconName::Clock, "No recent contacts")
-                .description("People you write to or hear from show up here until you save them.")
+            return EmptyState::new(IconName::Clock, tr(cx, "No recent contacts"))
+                .description(tr(
+                    cx,
+                    "People you write to or hear from show up here until you save them.",
+                ))
                 .into_any_element();
         }
+        let email_tooltip = tr(cx, "Email");
+        let save_label = tr(cx, "Save");
+        let last_template = tr(cx, "Last on {}");
         div()
             .id("recent-contacts")
             .size_full()
@@ -1080,18 +1119,17 @@ impl PeopleView {
                 let address = suggestion.address.clone();
                 let to = vec![address.clone()];
                 let name = address.display().to_owned();
-                let noun = if suggestion.messages == 1 {
-                    "email"
-                } else {
-                    "emails"
-                };
                 let meta = format!(
-                    "{} {noun} - last {}",
-                    suggestion.messages,
-                    suggestion
-                        .last
-                        .with_timezone(&chrono::Local)
-                        .format("%-d %b %Y")
+                    "{} · {}",
+                    count_label(suggestion.messages, "1 email", "{} emails", cx),
+                    last_template.replace(
+                        "{}",
+                        &suggestion
+                            .last
+                            .with_timezone(&chrono::Local)
+                            .format("%-d %b %Y")
+                            .to_string()
+                    )
                 );
                 div()
                     .id(("recent", index as u64))
@@ -1102,7 +1140,7 @@ impl PeopleView {
                     .flex()
                     .items_center()
                     .gap(SPACE_3)
-                    .h(ROW_HEIGHT)
+                    .h(LIST_ROW_HEIGHT)
                     .mx(SPACE_2)
                     .px(SPACE_2)
                     .rounded(RADIUS_MD)
@@ -1130,7 +1168,7 @@ impl PeopleView {
                     .child(
                         IconButton::new(("recent-email", index as u64), IconName::Mail)
                             .icon_size(ICON_SIZE_SM)
-                            .tooltip("Email")
+                            .tooltip(email_tooltip)
                             .on_click(
                                 cx.listener(move |this, _, _, cx| {
                                     this.emit_compose(to.clone(), cx)
@@ -1141,7 +1179,7 @@ impl PeopleView {
                         Button::new(("recent-save", index as u64))
                             .compact()
                             .icon(IconName::UserPlus)
-                            .label("Save")
+                            .label(save_label)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.save_suggestion(address.clone(), cx)
                             })),
@@ -1191,7 +1229,7 @@ impl PeopleView {
                     .items_center()
                     .justify_center()
                     .size(px(64.))
-                    .rounded(px(32.))
+                    .rounded(RADIUS_FULL)
                     .bg(t.accent_subtle)
                     .text_color(t.accent)
                     .text_size(TEXT_LG)
@@ -1202,13 +1240,19 @@ impl PeopleView {
                 div()
                     .text_size(TEXT_LG)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(format!("{count} contacts selected")),
+                    .child(tr(cx, "{} contacts selected").replace("{}", &count.to_string())),
             )
             .child(
                 div()
                     .text_size(TEXT_SM)
                     .text_color(t.text_subtle)
-                    .child("Ctrl+click to add or remove - Shift+click for a range - Esc to clear"),
+                    .text_center()
+                    .child(format!(
+                        "{} · {} · {}",
+                        tr(cx, "Ctrl+click to add or remove"),
+                        tr(cx, "Shift+click for a range"),
+                        tr(cx, "Esc to clear")
+                    )),
             )
             .child(
                 div()
@@ -1220,7 +1264,7 @@ impl PeopleView {
                         Button::new("bulk-email")
                             .primary()
                             .icon(IconName::Mail)
-                            .label("Email all")
+                            .label(tr(cx, "Email all"))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.compose_to(&email_ids, cx)),
                             ),
@@ -1228,7 +1272,7 @@ impl PeopleView {
                     .child(
                         Button::new("bulk-export")
                             .icon(IconName::Upload)
-                            .label("Export")
+                            .label(tr(cx, "Export"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.export(Some(export_ids.clone()), cx)
                             })),
@@ -1237,7 +1281,7 @@ impl PeopleView {
                         Button::new("bulk-delete")
                             .danger()
                             .icon(IconName::Trash)
-                            .label("Delete")
+                            .label(tr(cx, "Delete"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.delete_contacts(delete_ids.clone(), window, cx)
                             })),
@@ -1250,7 +1294,7 @@ impl PeopleView {
                         .text_size(TEXT_XS)
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(t.text_subtle)
-                        .child("ADD TO GROUP"),
+                        .child(tr(cx, "Add to group")),
                 )
                 .child(
                     div()
@@ -1277,15 +1321,15 @@ impl PeopleView {
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .gap(SPACE_2)
-            .p(SPACE_3)
+            .px(SPACE_3)
+            .pb(SPACE_3)
             .border_b_1()
             .border_color(t.border_subtle)
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .h(px(28.))
+                    .h(PANE_HEADER_HEIGHT)
                     .gap(SPACE_2)
                     .child(
                         div()
@@ -1306,7 +1350,7 @@ impl PeopleView {
                         el.child(
                             IconButton::new("email-group", IconName::Mail)
                                 .size(px(28.))
-                                .tooltip("Email everyone")
+                                .tooltip(tr(cx, "Email everyone"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.emit_compose(group_emails.clone(), cx)
                                 })),
@@ -1359,7 +1403,7 @@ impl PeopleView {
                     .min_w(px(0.))
                     .items_center()
                     .gap(SPACE_3)
-                    .h(px(44.))
+                    .h(LIST_ROW_HEIGHT)
                     .px(SPACE_2)
                     .rounded(RADIUS_MD)
                     .cursor_pointer()
@@ -1372,7 +1416,7 @@ impl PeopleView {
                             .items_center()
                             .justify_center()
                             .size(px(32.))
-                            .rounded(px(16.))
+                            .rounded(RADIUS_FULL)
                             .bg(t.accent)
                             .text_color(t.on_accent)
                             .child(Icon::new(IconName::Check).size(ICON_SIZE))
@@ -1436,18 +1480,19 @@ impl PeopleView {
                     .id(("jump", index as u64))
                     .flex()
                     .justify_center()
-                    .text_size(px(9.5))
+                    .text_size(TEXT_2XS)
                     .line_height(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .text_color(if available {
-                        t.accent
-                    } else {
-                        t.text_subtle.alpha(0.5)
-                    })
-                    .hover(|s| s.text_color(t.text))
                     .child(letter.to_string())
-                    .on_click(cx.listener(move |this, _, _, cx| this.jump_to(letter, cx)))
+                    .when(available, |el| {
+                        el.cursor_pointer()
+                            .text_color(t.accent)
+                            .hover(|s| s.text_color(t.text))
+                            .on_click(cx.listener(move |this, _, _, cx| this.jump_to(letter, cx)))
+                    })
+                    .when(!available, |el| {
+                        el.text_color(t.text_subtle).opacity(DISABLED_OPACITY)
+                    })
             }))
     }
 
@@ -1459,10 +1504,11 @@ impl PeopleView {
     ) -> AnyElement {
         let groups = people::find_duplicates(cards);
         if groups.is_empty() {
-            return EmptyState::new(IconName::GitMerge, "No duplicates")
-                .description("Contacts sharing an email or a name show up here.")
+            return EmptyState::new(IconName::GitMerge, tr(cx, "No duplicates"))
+                .description(tr(cx, "Contacts sharing an email or a name show up here."))
                 .into_any_element();
         }
+        let merge_template = tr(cx, "Merge {}");
         let find = |id: Id| cards.iter().find(|card| card.id() == id);
         div()
             .id("duplicates")
@@ -1475,7 +1521,7 @@ impl PeopleView {
             .children(groups.into_iter().enumerate().map(|(index, ids)| {
                 let keep = ids[0];
                 let others: Vec<Id> = ids[1..].to_vec();
-                let label = format!("Merge {}", ids.len());
+                let label = merge_template.replace("{}", &ids.len().to_string());
                 div()
                     .flex()
                     .flex_col()
@@ -1498,6 +1544,7 @@ impl PeopleView {
                                 div()
                                     .flex()
                                     .flex_col()
+                                    .flex_1()
                                     .min_w(px(0.))
                                     .child(div().truncate().text_size(TEXT_MD).child(card.name()))
                                     .child(
@@ -1534,7 +1581,9 @@ impl Render for PeopleView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
         let store = self.state.read(cx).store();
-        let cards = people::list_contact_cards(store).unwrap_or_default();
+        let cards = people::list_contact_cards(store);
+        let load_failed = cards.is_err();
+        let cards = cards.unwrap_or_default();
         let groups = people::list_contact_groups(store).unwrap_or_default();
         let duplicates = people::find_duplicates(&cards).len();
         let has_account = store
@@ -1562,7 +1611,7 @@ impl Render for PeopleView {
                     .into_iter()
                     .filter(|part| !part.is_empty())
                     .collect::<Vec<_>>()
-                    .join(" - ");
+                    .join(" · ");
                 let subtitle = if subtitle.is_empty() {
                     card.primary_email().unwrap_or_default().to_owned()
                 } else {
@@ -1579,16 +1628,16 @@ impl Render for PeopleView {
             .collect();
 
         let (title, group_emails): (SharedString, Vec<Address>) = match &self.filter {
-            Filter::All => ("All contacts".into(), Vec::new()),
-            Filter::Favorites => ("Favorites".into(), Vec::new()),
-            Filter::Recent => ("Recent contacts".into(), Vec::new()),
-            Filter::Duplicates => ("Duplicates".into(), Vec::new()),
+            Filter::All => (tr(cx, "All contacts").into(), Vec::new()),
+            Filter::Favorites => (tr(cx, "Favorites").into(), Vec::new()),
+            Filter::Recent => (tr(cx, "Recent contacts").into(), Vec::new()),
+            Filter::Duplicates => (tr(cx, "Duplicates").into(), Vec::new()),
             Filter::Category(category) => (category.clone().into(), Vec::new()),
             Filter::Group(id) => (
                 groups
                     .iter()
                     .find(|group| group.id == *id)
-                    .map_or_else(|| "Group".into(), |group| group.name.clone().into()),
+                    .map_or_else(|| tr(cx, "Group").into(), |group| group.name.clone().into()),
                 visible
                     .iter()
                     .filter_map(|card| {
@@ -1606,11 +1655,15 @@ impl Render for PeopleView {
             self.render_duplicates(&cards, &t, cx)
         } else if self.filter == Filter::Recent {
             self.render_recent(&suggestions, &t, cx)
+        } else if load_failed {
+            EmptyState::new(IconName::TriangleAlert, tr(cx, "Couldn't load contacts"))
+                .description(tr(cx, "Try again in a moment."))
+                .into_any_element()
         } else if cards.is_empty() {
             self.render_empty(has_account, suggestions.len(), cx)
         } else if self.rows.is_empty() {
-            EmptyState::new(IconName::Users, "Nobody here")
-                .description("Try another search or filter.")
+            EmptyState::new(IconName::Users, tr(cx, "Nobody here"))
+                .description(tr(cx, "Try another search or filter."))
                 .into_any_element()
         } else {
             div()
@@ -1640,10 +1693,11 @@ impl Render for PeopleView {
         } else if self.checked.len() > 1 {
             self.render_bulk(&groups, &t, cx)
         } else if self.filter == Filter::Recent {
-            EmptyState::new(IconName::UserPlus, "Save people you mail with")
-                .description(
+            EmptyState::new(IconName::UserPlus, tr(cx, "Save people you mail with"))
+                .description(tr(
+                    cx,
                     "Everyone you write to or hear from appears here until saved. Save adds them to your contacts and to compose suggestions.",
-                )
+                ))
                 .into_any_element()
         } else if let Some(card) = self
             .selected
@@ -1652,11 +1706,11 @@ impl Render for PeopleView {
             let card = card.clone();
             self.render_card(&card, &groups, &t, cx).into_any_element()
         } else {
-            EmptyState::new(IconName::Contact, "Select a contact")
+            EmptyState::new(IconName::Contact, tr(cx, "Select a contact"))
                 .description(format!(
-                    "{} contacts - {} groups",
-                    cards.len(),
-                    groups.len()
+                    "{} · {}",
+                    count_label(cards.len(), "1 contact", "{} contacts", cx),
+                    count_label(groups.len(), "1 group", "{} groups", cx)
                 ))
                 .into_any_element()
         };
@@ -1739,7 +1793,7 @@ fn nav_row(
         .flex()
         .items_center()
         .gap(SPACE_2)
-        .h(px(30.))
+        .h(NAV_ROW_HEIGHT)
         .px(SPACE_2)
         .rounded(RADIUS_MD)
         .cursor_pointer()
@@ -1776,6 +1830,15 @@ fn section_label(label: &'static str, t: &Theme) -> impl IntoElement {
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(t.text_subtle)
         .child(label.to_uppercase())
+}
+
+/// `one` when `count` is 1, else `many` with `{}` replaced by the count (both translated).
+fn count_label(count: usize, one: &'static str, many: &'static str, cx: &App) -> String {
+    if count == 1 {
+        tr(cx, one).to_owned()
+    } else {
+        tr(cx, many).replace("{}", &count.to_string())
+    }
 }
 
 /// Keeps letters, digits, spaces, `-` and `_` (for a suggested file name).

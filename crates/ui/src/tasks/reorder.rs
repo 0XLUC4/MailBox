@@ -140,9 +140,9 @@ impl TasksView {
             if let Some(at) = card.details.reminder {
                 crate::notifications::reminder(&title, at, cx);
             }
-            self.state.update(cx, |state, cx| {
-                state.notify_info(format!("Reminder: {title}"), cx)
-            });
+            let message = crate::settings::tr(cx, "Reminder: {}").replace("{}", &title);
+            self.state
+                .update(cx, |state, cx| state.notify_info(message, cx));
         }
         true
     }

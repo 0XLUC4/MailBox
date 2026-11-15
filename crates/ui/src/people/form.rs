@@ -13,6 +13,8 @@ use mailbox_core::vcard;
 use super::PeopleView;
 use super::card::chip;
 use crate::components::{Avatar, Banner, Button, IconButton, IconName};
+use crate::dialogs::kbd;
+use crate::settings::tr;
 use crate::theme::{
     ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_XL,
     TEXT_XS, Theme,
@@ -136,7 +138,7 @@ impl ContactForm {
         let notes_text = contact.notes.clone();
         let notes = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Notes")
+                .placeholder(tr(cx, "Notes"))
                 .default_value(notes_text)
         });
         // A name computed from first + last is left empty so renaming updates it.
@@ -199,21 +201,28 @@ impl ContactForm {
         let mut card = self.base.clone();
         let (emails, email_labels) = read_labeled(&self.emails, cx);
         if let Some(invalid) = emails.iter().find(|email| !is_valid_email(email)) {
-            return Err(format!("“{invalid}” is not an email address."));
+            return Err(tr(cx, "“{}” is not an email address.").replace("{}", invalid));
         }
         let (phones, phone_labels) = read_labeled(&self.phones, cx);
         if let Some(invalid) = phones.iter().find(|phone| !is_phone(phone)) {
-            return Err(format!("“{invalid}” is not a phone number."));
+            return Err(tr(cx, "“{}” is not a phone number.").replace("{}", invalid));
         }
         let website = value(&self.website, cx);
         if website.chars().any(char::is_whitespace) {
-            return Err("The website should be a single address, like example.com.".into());
+            return Err(tr(
+                cx,
+                "The website should be a single address, like example.com.",
+            )
+            .into());
         }
         let birthday = value(&self.birthday, cx);
         let birthday = if birthday.is_empty() {
             None
         } else {
-            Some(parse_birthday(&birthday).ok_or("Birthday should look like 1990-12-31.")?)
+            Some(
+                parse_birthday(&birthday)
+                    .ok_or_else(|| tr(cx, "Birthday should look like 1990-12-31.").to_owned())?,
+            )
         };
 
         let contact = &mut card.contact;
@@ -243,7 +252,7 @@ impl ContactForm {
             .collect();
 
         if card.name().is_empty() {
-            return Err("Add a name or an email address.".into());
+            return Err(tr(cx, "Add a name or an email address.").into());
         }
         Ok(card)
     }
@@ -269,6 +278,7 @@ impl PeopleView {
         };
         let is_new = form.base.id() == 0;
         let preview_name = form.base.name();
+        let remove = tr(cx, "Remove");
 
         let portrait = match photo {
             Some(image) => img(image)
@@ -289,6 +299,7 @@ impl PeopleView {
             labeled_row(
                 row,
                 ("remove-email", index as u64),
+                remove,
                 cx.listener(move |this, _, _, cx| {
                     if let Some(form) = this.form.as_mut().filter(|form| index < form.emails.len())
                     {
@@ -302,6 +313,7 @@ impl PeopleView {
             labeled_row(
                 row,
                 ("remove-phone", index as u64),
+                remove,
                 cx.listener(move |this, _, _, cx| {
                     if let Some(form) = this.form.as_mut().filter(|form| index < form.phones.len())
                     {
@@ -323,6 +335,7 @@ impl PeopleView {
                 .child(removable(
                     &fields.label,
                     ("remove-address", index as u64),
+                    remove,
                     cx.listener(move |this, _, _, cx| {
                         if let Some(form) = this
                             .form
@@ -416,23 +429,26 @@ impl PeopleView {
                                     .flex_1()
                                     .text_size(TEXT_XL)
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(if is_new {
-                                        "New contact"
-                                    } else {
-                                        "Edit contact"
-                                    }),
+                                    .child(tr(
+                                        cx,
+                                        if is_new {
+                                            "New contact"
+                                        } else {
+                                            "Edit contact"
+                                        },
+                                    )),
                             )
                             .child(
                                 Button::new("form-cancel")
                                     .ghost()
-                                    .label("Cancel")
+                                    .label(tr(cx, "Cancel"))
                                     .on_click(cx.listener(|this, _, _, cx| this.cancel_form(cx))),
                             )
                             .child(
                                 Button::new("form-save")
                                     .primary()
                                     .icon(IconName::Check)
-                                    .label("Save")
+                                    .label(tr(cx, "Save"))
                                     .on_click(cx.listener(|this, _, _, cx| this.save_form(cx))),
                             ),
                     )
@@ -448,18 +464,21 @@ impl PeopleView {
                             .child(
                                 Button::new("form-photo")
                                     .icon(IconName::Camera)
-                                    .label(if form.photo.is_some() {
-                                        "Change photo"
-                                    } else {
-                                        "Add photo"
-                                    })
+                                    .label(tr(
+                                        cx,
+                                        if form.photo.is_some() {
+                                            "Change photo"
+                                        } else {
+                                            "Add photo"
+                                        },
+                                    ))
                                     .on_click(cx.listener(|this, _, _, cx| this.pick_photo(cx))),
                             )
                             .when(form.photo.is_some(), |el| {
                                 el.child(
                                     Button::new("form-photo-remove")
                                         .ghost()
-                                        .label("Remove")
+                                        .label(remove)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             if let Some(form) = this.form.as_mut() {
                                                 form.photo = None;
@@ -470,30 +489,29 @@ impl PeopleView {
                             })
                             .child(div().flex_1())
                             .child(
-                                chip("form-favorite", "Favorite", form.favorite, t).on_click(
-                                    cx.listener(|this, _, _, cx| {
+                                chip("form-favorite", tr(cx, "Favorite"), form.favorite, t)
+                                    .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(form) = this.form.as_mut() {
                                             form.favorite = !form.favorite;
                                         }
                                         cx.notify();
-                                    }),
-                                ),
+                                    })),
                             ),
                     )
                     .child(pair(
-                        labeled("First name", Input::new(&form.first_name), t),
-                        labeled("Last name", Input::new(&form.last_name), t),
+                        labeled(tr(cx, "First name"), Input::new(&form.first_name), t),
+                        labeled(tr(cx, "Last name"), Input::new(&form.last_name), t),
                     ))
                     .child(pair(
-                        labeled("Display name", Input::new(&form.display_name), t),
-                        labeled("Nickname", Input::new(&form.nickname), t),
+                        labeled(tr(cx, "Display name"), Input::new(&form.display_name), t),
+                        labeled(tr(cx, "Nickname"), Input::new(&form.nickname), t),
                     ))
                     .child(pair(
-                        labeled("Company", Input::new(&form.company), t),
-                        labeled("Job title", Input::new(&form.job_title), t),
+                        labeled(tr(cx, "Company"), Input::new(&form.company), t),
+                        labeled(tr(cx, "Job title"), Input::new(&form.job_title), t),
                     ))
                     .child(labeled(
-                        "Email",
+                        tr(cx, "Email"),
                         div()
                             .flex()
                             .flex_col()
@@ -501,7 +519,7 @@ impl PeopleView {
                             .children(email_rows)
                             .child(add_button(
                                 "add-email",
-                                "Add email",
+                                tr(cx, "Add email"),
                                 cx.listener(|this, _, window, cx| {
                                     let row =
                                         LabeledInput::new("", "", EMAIL_PLACEHOLDER, window, cx);
@@ -515,7 +533,7 @@ impl PeopleView {
                         t,
                     ))
                     .child(labeled(
-                        "Phone",
+                        tr(cx, "Phone"),
                         div()
                             .flex()
                             .flex_col()
@@ -523,7 +541,7 @@ impl PeopleView {
                             .children(phone_rows)
                             .child(add_button(
                                 "add-phone",
-                                "Add phone",
+                                tr(cx, "Add phone"),
                                 cx.listener(|this, _, window, cx| {
                                     let row =
                                         LabeledInput::new("", "", PHONE_PLACEHOLDER, window, cx);
@@ -537,7 +555,7 @@ impl PeopleView {
                         t,
                     ))
                     .child(labeled(
-                        "Addresses",
+                        tr(cx, "Addresses"),
                         div()
                             .flex()
                             .flex_col()
@@ -545,7 +563,7 @@ impl PeopleView {
                             .children(address_rows)
                             .child(add_button(
                                 "add-address",
-                                "Add address",
+                                tr(cx, "Add address"),
                                 cx.listener(|this, _, window, cx| {
                                     let fields =
                                         AddressFields::new(&PostalAddress::default(), window, cx);
@@ -558,12 +576,12 @@ impl PeopleView {
                         t,
                     ))
                     .child(pair(
-                        labeled("Birthday", Input::new(&form.birthday), t),
-                        labeled("Website", Input::new(&form.website), t),
+                        labeled(tr(cx, "Birthday"), Input::new(&form.birthday), t),
+                        labeled(tr(cx, "Website"), Input::new(&form.website), t),
                     ))
                     .when(has_categories, |el| {
                         el.child(labeled(
-                            "Categories",
+                            tr(cx, "Categories"),
                             div()
                                 .flex()
                                 .flex_wrap()
@@ -572,12 +590,23 @@ impl PeopleView {
                             t,
                         ))
                     })
-                    .child(labeled("Notes", Textarea::new(&form.notes).h(px(110.)), t))
+                    .child(labeled(
+                        tr(cx, "Notes"),
+                        Textarea::new(&form.notes).h(px(110.)),
+                        t,
+                    ))
                     .child(
                         div()
+                            .flex()
+                            .items_center()
+                            .gap(SPACE_1)
                             .text_size(TEXT_XS)
                             .text_color(t.text_subtle)
-                            .child("Enter saves - Esc cancels"),
+                            .child(kbd("Enter", cx))
+                            .child(tr(cx, "Save"))
+                            .child("·")
+                            .child(kbd("Esc", cx))
+                            .child(tr(cx, "Cancel")),
                     ),
             )
             .into_any_element()
@@ -588,8 +617,11 @@ impl PeopleView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose a photo".into()),
+            prompt: Some(tr(cx, "Choose a photo").into()),
         });
+        let wrong_type = tr(cx, "Choose a PNG, JPEG, GIF, WebP or BMP image.");
+        let too_large = tr(cx, "That photo is larger than 1 MB.");
+        let unreadable = tr(cx, "Could not read the photo: {}");
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = picked.await else {
                 return;
@@ -602,15 +634,13 @@ impl PeopleView {
                 .and_then(|extension| extension.to_str())
                 .and_then(vcard::image_mime);
             let result = match mime {
-                None => Err("Choose a PNG, JPEG, GIF, WebP or BMP image.".to_owned()),
+                None => Err(wrong_type.to_owned()),
                 Some(mime) => match std::fs::metadata(&path) {
-                    Ok(meta) if meta.len() > MAX_PHOTO_BYTES => {
-                        Err("That photo is larger than 1 MB.".to_owned())
-                    }
+                    Ok(meta) if meta.len() > MAX_PHOTO_BYTES => Err(too_large.to_owned()),
                     Ok(_) => std::fs::read(&path)
                         .map(|bytes| vcard::photo_data_uri(mime, &bytes))
-                        .map_err(|err| format!("Could not read the photo: {err}")),
-                    Err(err) => Err(format!("Could not read the photo: {err}")),
+                        .map_err(|err| unreadable.replace("{}", &err.to_string())),
+                    Err(err) => Err(unreadable.replace("{}", &err.to_string())),
                 },
             };
             let _ = this.update(cx, |this, cx| {
@@ -643,7 +673,7 @@ fn text_input(
     let initial = initial.to_owned();
     let input = cx.new(|cx| {
         InputState::new(window, cx)
-            .placeholder(placeholder)
+            .placeholder(tr(cx, placeholder))
             .default_value(initial)
     });
     // Detached: ends when the input is dropped with the form.
@@ -706,6 +736,7 @@ fn pair(left: impl IntoElement, right: impl IntoElement) -> Div {
 fn labeled_row(
     row: &LabeledInput,
     id: impl Into<ElementId>,
+    remove_tooltip: &'static str,
     on_remove: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
     div()
@@ -722,7 +753,7 @@ fn labeled_row(
         .child(
             IconButton::new(id, IconName::X)
                 .icon_size(ICON_SIZE_SM)
-                .tooltip("Remove")
+                .tooltip(remove_tooltip)
                 .on_click(on_remove),
         )
 }
@@ -731,6 +762,7 @@ fn labeled_row(
 fn removable(
     input: &Entity<InputState>,
     id: impl Into<ElementId>,
+    remove_tooltip: &'static str,
     on_remove: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
     div()
@@ -741,7 +773,7 @@ fn removable(
         .child(
             IconButton::new(id, IconName::X)
                 .icon_size(ICON_SIZE_SM)
-                .tooltip("Remove")
+                .tooltip(remove_tooltip)
                 .on_click(on_remove),
         )
 }
