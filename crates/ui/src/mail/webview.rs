@@ -72,6 +72,11 @@ pub struct MailWebView {
     /// Key of the page loaded in the webview.
     loaded: std::cell::RefCell<String>,
     visible: Cell<bool>,
+    /// Natively shown once (see [`MailWebView::set_visible`]).
+    shown: Cell<bool>,
+    /// Where the paper is (last [`MailWebView::place`]).
+    target: Cell<Option<Bounds<Pixels>>>,
+    /// Rectangle last given to the webview (`None`: off-screen or not set).
     bounds: Cell<Option<Bounds<Pixels>>>,
     /// Bumped each time the paper is painted (see [`hide_unless_painted`]).
     paints: Cell<u64>,
@@ -153,6 +158,8 @@ impl MailWebView {
             page,
             loaded: Default::default(),
             visible: Cell::new(false),
+            shown: Cell::new(false),
+            target: Cell::new(None),
             bounds: Cell::new(None),
             paints: Cell::new(0),
             _context: context,
@@ -171,10 +178,29 @@ impl MailWebView {
         }
     }
 
+    /// Hiding moves the webview off-screen instead of hiding it natively: WebView2 repaints its
+    /// white background each time it is shown again, a white flash whenever a toast, menu or
+    /// dialog had covered the message.
     pub fn set_visible(&self, visible: bool) {
-        if self.visible.get() != visible && self.webview.set_visible(visible).is_ok() {
-            self.visible.set(visible);
+        if self.visible.get() == visible {
+            return;
         }
+        if visible {
+            if !self.shown.get() {
+                if self.webview.set_visible(true).is_err() {
+                    return;
+                }
+                self.shown.set(true);
+            }
+            if let Some(bounds) = self.target.get() {
+                self.apply(bounds);
+            }
+        } else if self.shown.get() {
+            self.move_off_screen();
+            // Off-screen but still a live window: it must not keep the keyboard.
+            self.focus_app();
+        }
+        self.visible.set(visible);
     }
 
     /// Gives keyboard focus back to the GPUI window. A click in the message moves the system
@@ -185,10 +211,31 @@ impl MailWebView {
     }
 
     fn place(&self, bounds: Bounds<Pixels>) {
-        if self.bounds.get() == Some(bounds) {
-            return;
+        self.target.set(Some(bounds));
+        // Off-screen while hidden: moved back by `set_visible(true)`.
+        if self.visible.get() || !self.shown.get() {
+            self.apply(bounds);
         }
-        let rect = wry::Rect {
+    }
+
+    fn apply(&self, bounds: Bounds<Pixels>) {
+        if self.bounds.get() != Some(bounds) && self.set_rect(bounds).is_ok() {
+            self.bounds.set(Some(bounds));
+        }
+    }
+
+    fn move_off_screen(&self) {
+        let size = self.target.get().map_or(size(px(1.), px(1.)), |b| b.size);
+        if self
+            .set_rect(Bounds::new(point(px(-32000.), px(-32000.)), size))
+            .is_ok()
+        {
+            self.bounds.set(None);
+        }
+    }
+
+    fn set_rect(&self, bounds: Bounds<Pixels>) -> Result<(), wry::Error> {
+        self.webview.set_bounds(wry::Rect {
             position: wry::dpi::LogicalPosition::new(
                 f32::from(bounds.origin.x),
                 f32::from(bounds.origin.y),
@@ -199,10 +246,7 @@ impl MailWebView {
                 f32::from(bounds.size.height),
             )
             .into(),
-        };
-        if self.webview.set_bounds(rect).is_ok() {
-            self.bounds.set(Some(bounds));
-        }
+        })
     }
 }
 
