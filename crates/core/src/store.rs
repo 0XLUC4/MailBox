@@ -336,6 +336,26 @@ impl Store {
         )
     }
 
+    /// `(id, folder_id, flags)` of every message in the account's folders: what sync compares,
+    /// without loading bodies (fast even for a large mailbox).
+    pub fn message_flags(&self, account_id: Id) -> Result<Vec<(Id, Id, MessageFlags)>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, folder_id, is_read, is_flagged, is_pinned FROM messages              WHERE folder_id IN (SELECT id FROM folders WHERE account_id = ?1)",
+        )?;
+        let rows = statement.query_map([account_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                MessageFlags {
+                    read: row.get(2)?,
+                    flagged: row.get(3)?,
+                    pinned: row.get(4)?,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// All messages of a conversation, oldest first.
     pub fn list_thread(&self, thread_id: &str) -> Result<Vec<Message>> {
         self.query(
@@ -965,6 +985,37 @@ pub(crate) mod tests {
         assert_eq!(store.schema_version().unwrap(), MIGRATIONS.len() as i64);
         store.migrate().unwrap();
         assert_eq!(store.schema_version().unwrap(), MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn message_flags_cover_only_the_account() {
+        let store = store();
+        let account_a = account(&store);
+        let account_b = account(&store);
+        let inbox = folder(&store, account_a.id, FolderRole::Inbox);
+        let archive = folder(&store, account_a.id, FolderRole::Archive);
+        let other = folder(&store, account_b.id, FolderRole::Inbox);
+        let mut read = message(account_a.id, inbox.id);
+        read.flags.read = true;
+        let mut flagged = message(account_a.id, archive.id);
+        flagged.flags = MessageFlags {
+            read: false,
+            flagged: true,
+            pinned: true,
+        };
+        store.save(&mut read).unwrap();
+        store.save(&mut flagged).unwrap();
+        store.save(&mut message(account_b.id, other.id)).unwrap();
+
+        let mut flags = store.message_flags(account_a.id).unwrap();
+        flags.sort_by_key(|(id, ..)| *id);
+        assert_eq!(
+            flags,
+            vec![
+                (read.id, inbox.id, read.flags),
+                (flagged.id, archive.id, flagged.flags),
+            ]
+        );
     }
 
     #[test]

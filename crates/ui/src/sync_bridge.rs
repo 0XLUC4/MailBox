@@ -486,20 +486,16 @@ impl SyncBridge {
         account_id: Id,
         cx: &App,
     ) -> mailbox_core::Result<HashMap<Id, LocalMessage>> {
+        // Runs on the UI thread at each sync: ids and flags only, never the bodies.
         let store = self.state.read(cx).store();
-        let mut local = HashMap::new();
-        for folder in store.list_folders(account_id)? {
-            for message in store.list_messages(folder.id)? {
-                local.insert(
-                    message.id,
-                    LocalMessage {
-                        folder_id: message.folder_id,
-                        flags: RemoteFlags::from(message.flags),
-                    },
-                );
-            }
-        }
-        Ok(local)
+        Ok(store
+            .message_flags(account_id)?
+            .into_iter()
+            .map(|(id, folder_id, flags)| {
+                let flags = RemoteFlags::from(flags);
+                (id, LocalMessage { folder_id, flags })
+            })
+            .collect())
     }
 
     fn apply_event(&mut self, account: &mut AccountSync, event: SyncEvent, cx: &mut Context<Self>) {
