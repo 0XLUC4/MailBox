@@ -370,6 +370,27 @@ impl Store {
         crate::search::search(self, &crate::search::SearchQuery::parse(text), limit)
     }
 
+    /// Ids of the unread messages of a folder (or smart folder), without loading the messages.
+    pub fn unread_ids(&self, folder_id: Id) -> Result<Vec<Id>> {
+        let (sql, params): (String, Vec<Id>) =
+            match crate::smart_folder::SmartFolder::from_id(folder_id) {
+                Some(smart) => (
+                    format!(
+                        "SELECT id FROM messages WHERE {} AND is_read = 0",
+                        smart.condition()
+                    ),
+                    Vec::new(),
+                ),
+                None => (
+                    "SELECT id FROM messages WHERE folder_id = ?1 AND is_read = 0".to_owned(),
+                    vec![folder_id],
+                ),
+            };
+        let mut statement = self.conn.prepare(&sql)?;
+        let ids = statement.query_map(rusqlite::params_from_iter(params), |row| row.get(0))?;
+        Ok(ids.collect::<rusqlite::Result<Vec<Id>>>()?)
+    }
+
     pub fn unread_count(&self, folder_id: Id) -> Result<i64> {
         self.count_messages(folder_id, "AND is_read = 0")
     }
@@ -985,6 +1006,26 @@ pub(crate) mod tests {
         assert_eq!(store.schema_version().unwrap(), MIGRATIONS.len() as i64);
         store.migrate().unwrap();
         assert_eq!(store.schema_version().unwrap(), MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn unread_ids_of_a_folder_and_a_smart_folder() {
+        let store = store();
+        let account = account(&store);
+        let inbox = folder(&store, account.id, FolderRole::Inbox);
+        let archive = folder(&store, account.id, FolderRole::Archive);
+        let mut unread = message(account.id, inbox.id);
+        let mut read = message(account.id, inbox.id);
+        read.flags.read = true;
+        let mut elsewhere = message(account.id, archive.id);
+        for message in [&mut unread, &mut read, &mut elsewhere] {
+            store.save(message).unwrap();
+        }
+        assert_eq!(store.unread_ids(inbox.id).unwrap(), [unread.id]);
+        let unread_smart = crate::smart_folder::SmartFolder::Unread.id();
+        let mut all = store.unread_ids(unread_smart).unwrap();
+        all.sort_unstable();
+        assert_eq!(all, [unread.id, elsewhere.id]);
     }
 
     #[test]

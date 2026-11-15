@@ -253,12 +253,7 @@ pub fn toggle_category(store: &Store, ids: &[Id], name: &str) -> Result<Command>
 
 /// Marks every unread message of a folder as read.
 pub fn mark_folder_read(store: &Store, folder_id: Id) -> Result<Command> {
-    let ids = store
-        .list_messages(folder_id)?
-        .into_iter()
-        .filter(|message| !message.flags.read)
-        .map(|message| message.id)
-        .collect();
+    let ids = store.unread_ids(folder_id)?;
     Ok(Command::SetMessageFlags {
         ids,
         read: Some(true),

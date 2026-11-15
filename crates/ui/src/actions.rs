@@ -473,26 +473,14 @@ fn mark_all_read(state: &Entity<AppState>, cx: &mut App) {
         let Some(folder) = state.selected_folder() else {
             return;
         };
-        let ids: Vec<_> = state
-            .store()
-            .list_messages(folder)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|message| !message.flags.read)
-            .map(|message| message.id)
-            .collect();
-        if ids.is_empty() {
-            state.notify_info("Everything is already read", cx);
-        } else {
-            state.run(
-                Command::SetMessageFlags {
-                    ids,
-                    read: Some(true),
-                    flagged: None,
-                    pinned: None,
-                },
-                cx,
-            );
+        match mailbox_core::mail_ops::mark_folder_read(state.store(), folder) {
+            Ok(Command::SetMessageFlags { ids, .. }) if ids.is_empty() => {
+                state.notify_info("Everything is already read", cx)
+            }
+            Ok(command) => {
+                state.run(command, cx);
+            }
+            Err(err) => state.report_error(err, cx),
         }
     });
 }
