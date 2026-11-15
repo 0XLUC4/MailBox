@@ -68,8 +68,13 @@ pub struct ReadingPaneView {
     web_failed: bool,
     #[cfg(any(windows, target_os = "macos"))]
     web_creating: bool,
+    /// Zoom of the message body in the web view (1.0 = 100%), the same for every message.
+    zoom: f64,
     _subscription: Subscription,
 }
+
+/// Zoom levels of the message body.
+const ZOOM_LEVELS: [f64; 9] = [0.67, 0.8, 0.9, 1., 1.1, 1.25, 1.5, 1.75, 2.];
 
 fn human_size(bytes: u64) -> String {
     match bytes {
@@ -156,6 +161,7 @@ impl ReadingPaneView {
             web_failed: false,
             #[cfg(any(windows, target_os = "macos"))]
             web_creating: false,
+            zoom: 1.,
             _subscription: subscription,
         }
     }
@@ -329,6 +335,9 @@ impl ReadingPaneView {
                     }),
             )
             .child(div().flex_1())
+            .when(cfg!(any(windows, target_os = "macos")), |el| {
+                el.child(self.zoom_control(cx))
+            })
             .when(show_popout, |el| {
                 el.child(
                     IconButton::new("pane-popout", IconName::SquareArrowOutUpRight)
@@ -338,6 +347,46 @@ impl ReadingPaneView {
                         }),
                 )
             })
+    }
+
+    /// Zoom out, current zoom (click: 100%), zoom in.
+    fn zoom_control(&self, cx: &mut Context<Self>) -> Div {
+        let percent = format!("{}%", (self.zoom * 100.).round());
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .child(
+                IconButton::new("zoom-out", IconName::ZoomOut)
+                    .tooltip("Zoom out")
+                    .on_click(cx.listener(|this, _, _, cx| this.step_zoom(-1, cx))),
+            )
+            .child(
+                Button::new("zoom-reset")
+                    .ghost()
+                    .compact()
+                    .label(percent)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.zoom = 1.;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                IconButton::new("zoom-in", IconName::ZoomIn)
+                    .tooltip("Zoom in")
+                    .on_click(cx.listener(|this, _, _, cx| this.step_zoom(1, cx))),
+            )
+    }
+
+    /// Moves to the next (`1`) or previous (`-1`) zoom level.
+    fn step_zoom(&mut self, step: i32, cx: &mut Context<Self>) {
+        let current = ZOOM_LEVELS
+            .iter()
+            .position(|level| (level - self.zoom).abs() < 0.001)
+            .unwrap_or(3) as i32;
+        let next = (current + step).clamp(0, ZOOM_LEVELS.len() as i32 - 1);
+        self.zoom = ZOOM_LEVELS[next as usize];
+        cx.notify();
     }
 
     fn subject_header(&self, message: &Message, t: &Theme, cx: &App) -> Div {
@@ -874,6 +923,7 @@ impl ReadingPaneView {
             && !self.web_failed
         {
             let web = self.web(window, cx);
+            let zoom = self.zoom;
             let remote = match self.remote.get(&message.id) {
                 Some((len, remote)) if *len == html.len() => *remote,
                 _ => {
@@ -887,6 +937,7 @@ impl ReadingPaneView {
             let paper = div().size_full().when_some(web, |el, web| {
                 let key = format!("{}-{}-{}", message.id, u8::from(allowed), html.len());
                 web.load(key, (255, 255, 255), || web_page(message, html, allowed));
+                web.set_zoom(zoom);
                 el.child(webview::paper(web))
             });
             let paper = div()
@@ -904,6 +955,7 @@ impl ReadingPaneView {
         #[cfg(any(windows, target_os = "macos"))]
         if !self.web_failed && !message.body_text.trim().is_empty() {
             let web = self.web(window, cx);
+            let zoom = self.zoom;
             let colors = page_colors(t);
             let paper = div().size_full().when_some(web, |el, web| {
                 // The colors are in the key: a theme change reloads the page.
@@ -916,6 +968,7 @@ impl ReadingPaneView {
                 );
                 let page = || plain_web_page(message, &colors);
                 web.load(key, rgb_bytes(t.background), page);
+                web.set_zoom(zoom);
                 el.child(webview::paper(web))
             });
             let paper = div().flex_1().min_h(px(0.)).mx(SPACE_2).child(paper);

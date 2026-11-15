@@ -79,6 +79,8 @@ pub struct MailWebView {
     loaded: std::cell::RefCell<String>,
     /// Background painted before and under the page (white for HTML mail, the theme for text).
     background: Cell<(u8, u8, u8)>,
+    /// Page zoom (1.0 = 100%).
+    zoom: Cell<f64>,
     visible: Cell<bool>,
     /// Natively shown once (see [`MailWebView::set_visible`]).
     shown: Cell<bool>,
@@ -169,6 +171,7 @@ impl MailWebView {
             page,
             loaded: Default::default(),
             background: Cell::new((255, 255, 255)),
+            zoom: Cell::new(1.),
             visible: Cell::new(false),
             shown: Cell::new(false),
             target: Cell::new(None),
@@ -200,6 +203,13 @@ impl MailWebView {
     /// Hiding moves the webview off-screen instead of hiding it natively: WebView2 repaints its
     /// white background each time it is shown again, a white flash whenever a toast, menu or
     /// dialog had covered the message.
+    /// Zooms the page (1.0 = 100%); kept across messages.
+    pub fn set_zoom(&self, zoom: f64) {
+        if self.zoom.get() != zoom && self.webview.zoom(zoom).is_ok() {
+            self.zoom.set(zoom);
+        }
+    }
+
     pub fn set_visible(&self, visible: bool) {
         if self.visible.get() == visible {
             return;
