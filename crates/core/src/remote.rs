@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use rusqlite::{OptionalExtension, params};
 
 use crate::compose::preview_text;
-use crate::{Id, Message, Result, Store};
+use crate::{FolderRole, Id, Message, Result, Store};
 
 pub const MIGRATION: &str = r#"
 ALTER TABLE messages ADD COLUMN remote_path TEXT;
@@ -31,7 +31,8 @@ pub struct RemoteId {
     pub uid: u32,
 }
 
-/// A copy removed by [`Store::merge_duplicate_messages`] and the message that absorbed it.
+/// A copy removed by [`Store::merge_duplicate_messages`] (or a folder removed by
+/// [`Store::merge_duplicate_folders`]) and the one that absorbed it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MergedDuplicate {
     pub removed: Id,
@@ -216,6 +217,42 @@ impl Store {
             )?;
         }
         Ok(merged)
+    }
+
+    /// Merges special folders (Inbox, Sent, Trash...) stored more than once for an account:
+    /// older versions created a local folder for each server folder of a role ("Junk" and
+    /// "Junk Email"), shown twice under the same name. Messages and subfolders move to the
+    /// copy with the most messages (the oldest on a tie), the others are deleted. Idempotent.
+    pub fn merge_duplicate_folders(&self) -> Result<Vec<MergedDuplicate>> {
+        self.transaction(|store| {
+            let pairs: Vec<MergedDuplicate> = {
+                let mut statement = store.conn().prepare(
+                    "SELECT id, (SELECT kept.id FROM folders kept \
+                     WHERE kept.account_id = folders.account_id AND kept.role = folders.role \
+                     ORDER BY (SELECT COUNT(*) FROM messages WHERE folder_id = kept.id) DESC, \
+                     kept.id LIMIT 1) FROM folders WHERE role <> ?1",
+                )?;
+                let rows = statement.query_map([FolderRole::Custom.as_str()], |row| {
+                    Ok(MergedDuplicate {
+                        removed: row.get(0)?,
+                        kept: row.get(1)?,
+                    })
+                })?;
+                rows.collect::<rusqlite::Result<_>>()?
+            };
+            let merged: Vec<MergedDuplicate> = pairs
+                .into_iter()
+                .filter(|merge| merge.removed != merge.kept)
+                .collect();
+            for merge in &merged {
+                let ids = [merge.kept, merge.removed];
+                let conn = store.conn();
+                conn.execute("UPDATE messages SET folder_id = ?1 WHERE folder_id = ?2", ids)?;
+                conn.execute("UPDATE folders SET parent_id = ?1 WHERE parent_id = ?2", ids)?;
+                conn.execute("DELETE FROM folders WHERE id = ?1", [merge.removed])?;
+            }
+            Ok(merged)
+        })
     }
 
     /// Recomputes list previews that start with a separator line ("=====", "-----"), left by
@@ -517,5 +554,41 @@ mod tests {
             "See your notifications."
         );
         assert_eq!(store.repair_previews().unwrap(), 0);
+    }
+
+    /// Regression: "Junk" and "Junk Email" were both stored with the Junk role and showed
+    /// up as two "Junk" folders.
+    #[test]
+    fn duplicate_special_folders_are_merged_with_their_mail() {
+        let store = store();
+        let account = account(&store);
+        let empty = folder(&store, account.id, FolderRole::Junk);
+        let junk = folder(&store, account.id, FolderRole::Junk);
+        let mut child = folder(&store, account.id, FolderRole::Custom);
+        child.parent_id = Some(empty.id);
+        store.save(&mut child).unwrap();
+        let spam = save(&store, message(account.id, junk.id));
+        let custom = folder(&store, account.id, FolderRole::Custom);
+
+        let merged = store.merge_duplicate_folders().unwrap();
+        assert_eq!(
+            merged,
+            vec![MergedDuplicate {
+                removed: empty.id,
+                kept: junk.id,
+            }]
+        );
+        let folders = store.list_folders(account.id).unwrap();
+        let junk_folders: Vec<Id> = folders
+            .iter()
+            .filter(|folder| folder.role == FolderRole::Junk)
+            .map(|folder| folder.id)
+            .collect();
+        assert_eq!(junk_folders, vec![junk.id]);
+        assert!(folders.iter().any(|folder| folder.id == custom.id));
+        let child = store.require::<crate::Folder>(child.id).unwrap();
+        assert_eq!(child.parent_id, Some(junk.id));
+        assert_eq!(store.require::<Message>(spam).unwrap().folder_id, junk.id);
+        assert!(store.merge_duplicate_folders().unwrap().is_empty());
     }
 }

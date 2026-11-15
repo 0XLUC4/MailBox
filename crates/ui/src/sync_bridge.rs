@@ -1093,20 +1093,27 @@ impl SyncBridge {
         })
     }
 
-    /// Startup repair of what older versions left behind: the same server message stored
-    /// several times (sync state lost when the app was closed mid-sync) and list previews
-    /// made of a separator line. Duplicates are merged into the most complete copy; sync
-    /// links are pointed at it before the merge commits (a link to a deleted id would delete
-    /// the mail on the server), then the removed copies' attachment files are moved or deleted.
+    /// Startup repair of what older versions left behind: special folders stored twice
+    /// ("Junk" + "Junk Email"), the same server message stored several times (sync state lost
+    /// when the app was closed mid-sync) and list previews made of a separator line.
+    /// Duplicates are merged into the kept folder / most complete copy; sync state is pointed
+    /// at it before the merge commits (a link to a deleted id would delete the mail on the
+    /// server), then the removed copies' attachment files are moved or deleted.
     fn repair_store(&mut self, cx: &mut Context<Self>) {
         let sync_dir = self.data_dir.join("sync");
         let merged = self.update_store(cx, |store| {
             store.transaction(|store| {
                 store.repair_previews()?;
                 decode_folder_names(store)?;
+                let folders = remote::merged_map(&store.merge_duplicate_folders()?);
+                if !folders.is_empty() {
+                    remap_sync_states(&sync_dir, |state| state.remap_local_folders(&folders))
+                        .map_err(|err| mailbox_core::Error::Invalid(err.to_string()))?;
+                }
                 let merged = store.merge_duplicate_messages()?;
                 if !merged.is_empty() {
-                    remap_sync_states(&sync_dir, &remote::merged_map(&merged))
+                    let ids = remote::merged_map(&merged);
+                    remap_sync_states(&sync_dir, |state| state.remap_local_ids(&ids))
                         .map_err(|err| mailbox_core::Error::Invalid(err.to_string()))?;
                 }
                 Ok(merged)
@@ -1283,8 +1290,8 @@ fn decode_folder_names(store: &Store) -> mailbox_core::Result<usize> {
     Ok(changed)
 }
 
-/// Points every sync state file in `dir` at the messages that absorbed merged duplicates.
-fn remap_sync_states(dir: &Path, merged: &HashMap<Id, Id>) -> SyncResult<()> {
+/// Applies `remap` (merged duplicate messages or folders) to every sync state file in `dir`.
+fn remap_sync_states(dir: &Path, remap: impl Fn(&mut SyncState) -> bool) -> SyncResult<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -1294,7 +1301,7 @@ fn remap_sync_states(dir: &Path, merged: &HashMap<Id, Id>) -> SyncResult<()> {
         let path = entry?.path();
         if path.extension().is_some_and(|ext| ext == "json") {
             let mut state = SyncState::load(&path)?;
-            if state.remap_local_ids(merged) {
+            if remap(&mut state) {
                 state.save(&path)?;
             }
         }
