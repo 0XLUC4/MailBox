@@ -289,7 +289,7 @@ impl SyncBridge {
             .list_folders(account_id)
             .unwrap_or_default()
             .iter()
-            .flat_map(|folder| store.list_messages(folder.id).unwrap_or_default())
+            .flat_map(|folder| store.list_message_headers(folder.id).unwrap_or_default())
             .map(|message| message.id)
             .collect();
         // Dropping the handle stops the worker threads.
@@ -952,7 +952,7 @@ impl SyncBridge {
             .list_folders(account_id)
             .unwrap_or_default()
             .iter()
-            .flat_map(|folder| store.list_messages(folder.id).unwrap_or_default())
+            .flat_map(|folder| store.list_message_headers(folder.id).unwrap_or_default())
             .collect();
         messages.sort_by_key(|message| message.date);
         messages

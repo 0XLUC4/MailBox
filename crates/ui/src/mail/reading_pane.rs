@@ -13,7 +13,7 @@ use gpui::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::{
-    Address, Attachment, Command, Folder, FolderRole, Id, Importance, Message, mail_ops,
+    Address, Attachment, Command, Folder, FolderRole, Id, Importance, Message, Store, mail_ops,
 };
 
 use super::html::{self, Block, RenderContext};
@@ -41,6 +41,16 @@ pub enum PaneSource {
     Fixed(Id),
 }
 
+/// The open message, its conversation (newest first) and their folder roles.
+type LoadedThread = (Message, Rc<Vec<Message>>, Rc<HashMap<Id, FolderRole>>);
+
+/// [`LoadedThread`] of a message at a `Store::revision`: render runs on every frame, the
+/// store is read again only when the message or the store content changes.
+struct ThreadCache {
+    key: (Id, (u64, i64)),
+    loaded: Option<LoadedThread>,
+}
+
 pub struct ReadingPaneView {
     state: Entity<AppState>,
     source: PaneSource,
@@ -53,6 +63,7 @@ pub struct ReadingPaneView {
     viewing: Option<Id>,
     /// …while this message is selected.
     viewing_for: Option<Id>,
+    thread_cache: Option<ThreadCache>,
     /// Parsed bodies by message id, with the body length used to detect edits.
     bodies: HashMap<Id, (usize, Rc<Vec<Block>>)>,
     /// Attachments an HTML body shows inline (`cid:`), by message id (with the body length):
@@ -154,6 +165,7 @@ impl ReadingPaneView {
             blocked: HashSet::new(),
             viewing: None,
             viewing_for: None,
+            thread_cache: None,
             bodies: HashMap::new(),
             inline_parts: HashMap::new(),
             #[cfg(any(windows, target_os = "macos"))]
@@ -176,6 +188,35 @@ impl ReadingPaneView {
             PaneSource::Selected => self.state.read(cx).selected_message(),
             PaneSource::Fixed(id) => Some(id),
         }
+    }
+
+    /// The message `id` with its conversation, from [`ThreadCache`] or the store.
+    fn load_thread(&mut self, id: Id, cx: &App) -> Option<LoadedThread> {
+        let store = self.state.read(cx).store();
+        let revision = store.revision().ok();
+        if let (Some(cache), Some(revision)) = (&self.thread_cache, revision)
+            && cache.key == (id, revision)
+        {
+            return cache.loaded.clone();
+        }
+        let loaded = store
+            .get::<Message>(id)
+            .ok()
+            .flatten()
+            .map(|message| read_thread(store, message));
+        if let Some((_, thread, _)) = &loaded {
+            // Parsed bodies of messages no longer shown are dropped, not kept for the session.
+            let shown: HashSet<Id> = thread.iter().map(|m| m.id).collect();
+            self.bodies.retain(|id, _| shown.contains(id));
+            self.inline_parts.retain(|id, _| shown.contains(id));
+        }
+        if let Some(revision) = revision {
+            self.thread_cache = Some(ThreadCache {
+                key: (id, revision),
+                loaded: loaded.clone(),
+            });
+        }
+        loaded
     }
 
     fn blocks(&mut self, message: &Message) -> Rc<Vec<Block>> {
@@ -1152,6 +1193,37 @@ fn web_page(
     }
 }
 
+/// Conversation of `message`, newest first: deleted/junk messages only when viewing those
+/// folders. With the role of every folder involved.
+fn read_thread(store: &Store, message: Message) -> LoadedThread {
+    let mut roles: HashMap<Id, FolderRole> = HashMap::new();
+    let mut role_of = |folder_id: Id| {
+        if let Some(role) = roles.get(&folder_id) {
+            return Some(*role);
+        }
+        let role = store.get::<Folder>(folder_id).ok().flatten()?.role;
+        roles.insert(folder_id, role);
+        Some(role)
+    };
+    let in_role = role_of(message.folder_id);
+    let mut thread: Vec<Message> = store
+        .list_thread(&message.thread_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            let role = role_of(m.folder_id);
+            m.id == message.id
+                || !matches!(role, Some(FolderRole::Trash | FolderRole::Junk))
+                || role == in_role
+        })
+        .collect();
+    thread.reverse();
+    if !thread.iter().any(|m| m.id == message.id) {
+        thread.insert(0, message.clone());
+    }
+    (message, Rc::new(thread), Rc::new(roles))
+}
+
 impl Render for ReadingPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
@@ -1160,9 +1232,7 @@ impl Render for ReadingPaneView {
             self.viewing_for = id;
             self.viewing = None;
         }
-        let store = self.state.read(cx).store();
-        let message = id.and_then(|id| store.get::<Message>(id).ok().flatten());
-        let Some(message) = message else {
+        let Some((message, thread, roles)) = id.and_then(|id| self.load_thread(id, cx)) else {
             #[cfg(any(windows, target_os = "macos"))]
             if let Some(web) = &self.web {
                 web.set_visible(false);
@@ -1180,32 +1250,7 @@ impl Render for ReadingPaneView {
                 .child(EmptyState::new(IconName::MailOpen, title).description(description))
                 .into_any_element();
         };
-        let role_of = |folder_id: Id| {
-            store
-                .get::<Folder>(folder_id)
-                .ok()
-                .flatten()
-                .map(|folder| folder.role)
-        };
-        let in_role = role_of(message.folder_id);
-        // Conversation: newest first, deleted/junk messages only when viewing those folders.
-        let mut thread: Vec<Message> = store
-            .list_thread(&message.thread_id)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|m| {
-                m.id == message.id
-                    || !matches!(
-                        role_of(m.folder_id),
-                        Some(FolderRole::Trash | FolderRole::Junk)
-                    )
-                    || role_of(m.folder_id) == in_role
-            })
-            .collect();
-        thread.reverse();
-        if !thread.iter().any(|m| m.id == message.id) {
-            thread.insert(0, message.clone());
-        }
+        let role_of = |folder_id: Id| roles.get(&folder_id).copied();
         // Shown in full: the selected message, or the conversation message the user clicked.
         let shown = self
             .viewing
