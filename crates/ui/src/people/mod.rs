@@ -659,8 +659,14 @@ impl PeopleView {
             .unwrap_or_default();
         let picked = cx.prompt_for_new_path(&directory, Some(&file_name));
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(path))) = picked.await else {
-                return;
+            let path = match picked.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Err(err)) => {
+                    let message = format!("Could not open the file picker: {err}");
+                    let _ = this.update(cx, |this, cx| this.report(message, cx));
+                    return;
+                }
+                _ => return,
             };
             let result = std::fs::write(&path, text);
             let _ = this.update(cx, |this, cx| match result {
