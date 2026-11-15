@@ -222,8 +222,16 @@ impl TaskCard {
         card.details.message_id = None;
         // Same local clock time on the new day, across daylight-saving changes.
         card.details.reminder = self.details.reminder.and_then(|reminder| {
-            let local = reminder.with_timezone(&Local).naive_local().checked_add_days(days)?;
-            Some(local.and_local_timezone(Local).earliest()?.with_timezone(&Utc))
+            let local = reminder
+                .with_timezone(&Local)
+                .naive_local()
+                .checked_add_days(days)?;
+            Some(
+                local
+                    .and_local_timezone(Local)
+                    .earliest()?
+                    .with_timezone(&Utc),
+            )
         });
         for step in &mut card.details.steps {
             step.done = false;
