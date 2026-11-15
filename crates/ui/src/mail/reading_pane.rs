@@ -10,6 +10,7 @@ use chrono::Local;
 use gpui::component::Sizable as _;
 use gpui::component::button::{Button as KitButton, ButtonVariants as _};
 use gpui::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui::component::tooltip::Tooltip;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::{
@@ -78,10 +79,44 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
+/// Icon of an attachment's kind, from its MIME type or else its extension (mail clients often
+/// send `application/octet-stream`).
 fn attachment_icon(attachment: &Attachment) -> IconName {
-    if attachment.mime.starts_with("image/") {
+    let mime = attachment.mime.to_ascii_lowercase();
+    let extension = attachment
+        .name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    let is = |mimes: &[&str], extensions: &[&str]| {
+        mimes.iter().any(|m| mime.contains(m)) || extensions.contains(&extension.as_str())
+    };
+    if mime.starts_with("image/") || is(&[], &["png", "jpg", "jpeg", "gif", "webp", "heic"]) {
         IconName::Image
-    } else if attachment.mime.contains("pdf") || attachment.mime.starts_with("text/") {
+    } else if is(
+        &["spreadsheet", "excel", "csv"],
+        &["xls", "xlsx", "ods", "csv", "numbers"],
+    ) {
+        IconName::FileSpreadsheet
+    } else if is(
+        &["zip", "compressed", "x-7z", "x-rar", "gzip", "x-tar"],
+        &["zip", "7z", "rar", "gz", "tar"],
+    ) {
+        IconName::FileArchive
+    } else if mime.starts_with("audio/") || is(&[], &["mp3", "wav", "m4a", "ogg", "flac"]) {
+        IconName::FileMusic
+    } else if mime.starts_with("video/") || is(&[], &["mp4", "mov", "avi", "mkv", "webm"]) {
+        IconName::FilePlay
+    } else if is(&["calendar"], &["ics"]) {
+        IconName::CalendarDays
+    } else if mime.starts_with("text/")
+        || is(
+            &["pdf", "word", "document", "presentation", "rtf"],
+            &[
+                "pdf", "doc", "docx", "odt", "rtf", "txt", "ppt", "pptx", "key", "pages",
+            ],
+        )
+    {
         IconName::FileText
     } else {
         IconName::File
@@ -440,13 +475,18 @@ impl ReadingPaneView {
             .filter_map(|(index, attachment)| {
                 let path = crate::attachments::stored(message_id, &attachment.name)?;
                 let (state, name) = (self.state.clone(), attachment.name.clone());
+                let tooltip: SharedString = format!("Open {}", attachment.name).into();
+                let accent = t.accent;
                 Some(
                     div()
                         .id(("att-preview", (message_id as u64) * 1000 + index as u64))
+                        .relative()
                         .cursor_pointer()
                         .rounded(RADIUS_MD)
                         .border_1()
                         .border_color(t.border_subtle)
+                        .hover(move |style| style.border_color(accent))
+                        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
                         .overflow_hidden()
                         .w(px(160.))
                         .h(px(96.))
@@ -470,6 +510,21 @@ impl ReadingPaneView {
                                         .into_any_element()
                                 })
                         })
+                        // The file name over the bottom of the picture: what a click opens.
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom_0()
+                                .left_0()
+                                .right_0()
+                                .px(SPACE_2)
+                                .py(px(3.))
+                                .bg(black().opacity(0.55))
+                                .text_size(TEXT_XS)
+                                .text_color(white())
+                                .truncate()
+                                .child(attachment.name.clone()),
+                        )
                         .on_click(move |_, _, cx| {
                             crate::attachments::open(&state, message_id, &name, cx)
                         }),
@@ -494,9 +549,20 @@ impl ReadingPaneView {
                             (attachment.name.clone(), attachment.name.clone());
                         let (preview_state, preview_name) =
                             (self.state.clone(), attachment.name.clone());
+                        let tooltip: SharedString = format!(
+                            "{} ({}) - double-click to open",
+                            attachment.name,
+                            human_size(attachment.size)
+                        )
+                        .into();
+                        let accent = t.accent;
                         div()
                             .id(("att-chip", key))
                             .cursor_pointer()
+                            .hover(move |style| style.border_color(accent))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(tooltip.clone()).build(window, cx)
+                            })
                             // Double-click opens, like a file in Explorer.
                             .on_click(move |event, _, cx| {
                                 if event.click_count() >= 2 {
