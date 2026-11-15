@@ -82,8 +82,8 @@ const FR: &[(&str, &str)] = &[
         "Version de développement : les mises à jour s'installent seulement dans une version publiée",
     ),
     (
-        "Updates are installed automatically only on Windows and macOS",
-        "Les mises à jour automatiques ne sont disponibles que sous Windows et macOS",
+        "Updates are not installed automatically on this system",
+        "Les mises à jour ne s'installent pas automatiquement sur ce système",
     ),
     (
         "Could not install the update",

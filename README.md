@@ -86,7 +86,9 @@ start). Not notarized: the first launch needs right-click > Open. It is signed w
 self-signed certificate in the `MACOS_CERT_P12` / `MACOS_CERT_PASSWORD` secrets (ad hoc without
 them): the same signature on every release keeps the Keychain's "Always Allow" across updates.
 Linux: `Mailbox-X.Y.Z-linux-x64.tar.gz` (`scripts/package-linux.sh`: the binary, a `.desktop`
-entry and the icon); the update popover's "Download" opens the release page. A final job publishes
+entry and the icon), listed under `platforms.linux-x86_64` in `latest.json`: "Update and restart"
+swaps the running binary (kept as `mailbox.old.exe` until the next start, so its folder must be
+writable). A final job publishes
 all packages and `latest.json` together. Run the workflow by hand (Actions > release > Run
 workflow) to build everything as workflow artifacts without publishing anything.
 

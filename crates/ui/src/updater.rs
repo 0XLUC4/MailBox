@@ -233,10 +233,7 @@ fn available_card(updater: &Entity<Updater>, release: &Release, cx: &App) -> Any
     let downloaded = state.downloaded.load(Ordering::Relaxed);
     let title = tr(cx, "Mailbox {} is available").replace("{}", &release.version.to_string());
     let current = tr(cx, "You have {}.").replace("{}", &Version::current().to_string());
-    let error = state
-        .install_error
-        .as_ref()
-        .map(|err| tr(cx, err.message()));
+    let error = state.install_error.as_ref().map(|err| error_text(err, cx));
     let notes = release.highlights(NOTES_LINES);
 
     let action = if mailbox_updater::SUPPORTED {
@@ -250,7 +247,7 @@ fn available_card(updater: &Entity<Updater>, release: &Release, cx: &App) -> Any
             install_updater.update(cx, |updater, cx| updater.install(cx))
         })
     } else {
-        // No in-place install here (Linux): the release page has the download.
+        // No in-place install for this build: the release page has the download.
         let page_url = release.page_url.clone();
         big_button("download-update", tr(cx, "Download"), false, move |cx| {
             cx.open_url(&page_url)
@@ -310,6 +307,14 @@ fn available_card(updater: &Entity<Updater>, release: &Release, cx: &App) -> Any
                 .child(footer),
         )
         .into_any_element()
+}
+
+/// The translated error, with the detail of a failed install (e.g. a read-only folder).
+fn error_text(err: &Error, cx: &App) -> SharedString {
+    match err {
+        Error::Install(detail) => format!("{}: {detail}", tr(cx, err.message())).into(),
+        other => tr(cx, other.message()).into(),
+    }
 }
 
 /// Full-width blue button (the popover's one action).
