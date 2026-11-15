@@ -5,6 +5,10 @@
 //! hit-tests those regions (`WindowControlArea`), so snap layouts, double-click
 //! maximize, Aero drag and the native resize frame keep working. Secondary windows
 //! get a slim bar for free through [`open_window`].
+//!
+//! macOS keeps its native traffic lights (no caption buttons of ours): they are moved to the
+//! vertical middle of the bar ([`traffic_lights_in`]) and views leave
+//! [`MACOS_TRAFFIC_LIGHTS_WIDTH`] free on the left of it.
 
 use std::sync::{Arc, LazyLock};
 
@@ -18,8 +22,12 @@ use crate::theme::{ICON_SIZE_SM, theme};
 pub const TITLE_BAR_HEIGHT: Pixels = px(36.);
 /// Caption button width (Windows 11 uses 46px).
 const CAPTION_WIDTH: Pixels = px(46.);
-/// Room left for the macOS traffic lights.
+/// Room left for the macOS traffic lights (12px inset, three 14px buttons 6px apart, 10px gap).
 pub const MACOS_TRAFFIC_LIGHTS_WIDTH: Pixels = px(76.);
+/// Left inset of the macOS close button.
+const TRAFFIC_LIGHTS_INSET: Pixels = px(12.);
+/// Height of a macOS traffic light button.
+const TRAFFIC_LIGHT_SIZE: Pixels = px(14.);
 
 const IS_MACOS: bool = cfg!(target_os = "macos");
 const IS_WINDOWS: bool = cfg!(target_os = "windows");
@@ -42,12 +50,29 @@ pub fn window_options(title: impl Into<SharedString>) -> WindowOptions {
         titlebar: Some(TitlebarOptions {
             title: Some(title.into()),
             appears_transparent: true,
-            traffic_light_position: Some(point(px(12.), px(12.))),
+            traffic_light_position: Some(traffic_lights_in(TITLE_BAR_HEIGHT)),
         }),
         window_decorations: Some(WindowDecorations::Client),
         app_owns_titlebar_drag: true,
         ..Default::default()
     }
+}
+
+/// [`window_options`] for a window whose own title bar is `bar_height` tall (the main window).
+pub fn window_options_with_bar(
+    title: impl Into<SharedString>,
+    bar_height: Pixels,
+) -> WindowOptions {
+    let mut options = window_options(title);
+    if let Some(titlebar) = options.titlebar.as_mut() {
+        titlebar.traffic_light_position = Some(traffic_lights_in(bar_height));
+    }
+    options
+}
+
+/// macOS traffic lights position: vertically centered in a bar `bar_height` tall.
+fn traffic_lights_in(bar_height: Pixels) -> Point<Pixels> {
+    point(TRAFFIC_LIGHTS_INSET, (bar_height - TRAFFIC_LIGHT_SIZE) / 2.)
 }
 
 /// Opens a secondary window whose content sits under a slim, empty title bar
@@ -87,6 +112,19 @@ pub fn drag_area<E: InteractiveElement>(element: E) -> E {
     }
 }
 
+/// `content` as a window root. Linux: client decorations get no frame from the system, so this
+/// adds the resize edges and a 1px border (no shadow: the window is opaque).
+pub fn resizable_frame(content: impl IntoElement) -> AnyElement {
+    if cfg!(target_os = "linux") {
+        gpui::component::window_border()
+            .shadow_size(px(0.))
+            .child(content)
+            .into_any_element()
+    } else {
+        content.into_any_element()
+    }
+}
+
 /// Root of a secondary window: slim bar on top, content below.
 struct WindowFrame {
     content: AnyView,
@@ -95,34 +133,36 @@ struct WindowFrame {
 impl Render for WindowFrame {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx).clone();
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(t.background)
-            .text_color(t.text)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_shrink_0()
-                    .h(TITLE_BAR_HEIGHT)
-                    .bg(t.surface)
-                    .border_b_1()
-                    .border_color(t.border_subtle)
-                    .items_center()
-                    .when(IS_MACOS, |el| el.pl(MACOS_TRAFFIC_LIGHTS_WIDTH))
-                    .child(drag_area(div().id("title-bar-drag").flex_1().h_full()))
-                    .child(WindowControls),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(self.content.clone()),
-            )
+        resizable_frame(
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .bg(t.background)
+                .text_color(t.text)
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_shrink_0()
+                        .h(TITLE_BAR_HEIGHT)
+                        .bg(t.surface)
+                        .border_b_1()
+                        .border_color(t.border_subtle)
+                        .items_center()
+                        .when(IS_MACOS, |el| el.pl(MACOS_TRAFFIC_LIGHTS_WIDTH))
+                        .child(drag_area(div().id("title-bar-drag").flex_1().h_full()))
+                        .child(WindowControls),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h(px(0.))
+                        .child(self.content.clone()),
+                ),
+        )
     }
 }
 

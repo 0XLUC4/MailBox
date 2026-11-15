@@ -4,17 +4,21 @@
 //!   `<data dir>/instance.port`. A second launch ([`forward_to_running`]) sends its `mailto:`
 //!   (or just "activate") there, waits for `ok`, and exits; the running window comes forward
 //!   and opens compose. Without an answer the second launch simply starts normally.
-//! - Default mail app ([`register_mail_handler`], Windows only, explicit button): registers
+//! - macOS sends `mailto:` links as Apple Events, not arguments: [`receive_open_urls`] keeps them
+//!   until the main window polls them (with the requests above).
+//! - Default mail app ([`register_mail_handler`], explicit button): on Windows registers
 //!   Mailbox as a `mailto:` handler under HKCU, then opens Windows' Default apps page where
-//!   the user confirms (Windows does not let apps make themselves the default).
+//!   the user confirms (Windows does not let apps make themselves the default). On Linux,
+//!   writes a desktop entry and makes it the `mailto:` handler with `xdg-mime`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use gpui::{AnyWindowHandle, App, Entity};
+use gpui::{AnyWindowHandle, App, Application, Entity};
 
 use crate::app_state::AppState;
 use crate::compose::{ComposeRequest, open_compose};
@@ -26,6 +30,25 @@ const ACTIVATE: &str = "activate";
 const MAX_LINE: u64 = 16 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// URLs the OS asked the app to open (macOS Apple Events), until [`poll_requests`] takes them.
+static OPENED_URLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Keeps the URLs the OS asks `app` to open (macOS `mailto:` links, including the one a launch
+/// was for); the main window opens them (see [`listen`]).
+pub fn receive_open_urls(app: Application) -> Application {
+    app.on_open_urls(|urls| {
+        OPENED_URLS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(urls);
+    });
+    app
+}
+
+fn take_queued_urls() -> Vec<String> {
+    std::mem::take(&mut *OPENED_URLS.lock().unwrap_or_else(PoisonError::into_inner))
+}
 
 /// The `mailto:` URL among command-line arguments (as passed by the Windows handler).
 pub fn mailto_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<String> {
@@ -66,39 +89,38 @@ fn send_line(port: u16, payload: &str) -> std::io::Result<bool> {
     Ok(answer.trim() == "ok")
 }
 
-/// Starts listening for later launches. Call once, after the main window opens.
+/// Starts listening for later launches and OS open requests. Call once, after the main window
+/// opens.
 pub fn listen(state: Entity<AppState>, main_window: AnyWindowHandle, cx: &mut App) {
-    let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
-        Ok(listener) => listener,
-        Err(err) => {
-            return crate::log::error(format_args!("single-instance listener failed: {err}"));
+    let (sender, received) = channel::<String>();
+    match bind_instance_port() {
+        Ok(listener) => {
+            std::thread::spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    if let Some(payload) = read_request(stream)
+                        && sender.send(payload).is_err()
+                    {
+                        break;
+                    }
+                }
+            });
         }
-    };
-    let port = match listener.local_addr() {
-        Ok(address) => address.port(),
-        Err(err) => {
-            return crate::log::error(format_args!("single-instance listener failed: {err}"));
-        }
-    };
+        Err(err) => crate::log::error(format_args!("single-instance listener failed: {err}")),
+    }
+    // Polled even without the listener: macOS open requests arrive through `receive_open_urls`.
+    poll_requests(state, main_window, received, cx);
+}
+
+/// Listens on a loopback port and writes it to [`port_file`].
+fn bind_instance_port() -> std::io::Result<TcpListener> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let port = listener.local_addr()?.port();
     let path = port_file();
     if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        std::fs::create_dir_all(dir)?;
     }
-    if let Err(err) = std::fs::write(&path, port.to_string()) {
-        return crate::log::error(format_args!("cannot write {}: {err}", path.display()));
-    }
-
-    let (sender, received) = channel::<String>();
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            if let Some(payload) = read_request(stream)
-                && sender.send(payload).is_err()
-            {
-                break;
-            }
-        }
-    });
-    poll_requests(state, main_window, received, cx);
+    std::fs::write(&path, port.to_string())?;
+    Ok(listener)
 }
 
 /// Reads one request and acknowledges it. `None` for anything that is not ours.
@@ -123,7 +145,7 @@ fn poll_requests(
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(POLL_INTERVAL).await;
-            for payload in received.try_iter() {
+            for payload in received.try_iter().chain(take_queued_urls()) {
                 cx.update(|cx| {
                     notifications::focus(&state, main_window, Activation::App, cx);
                     if payload != ACTIVATE {
@@ -219,19 +241,61 @@ pub fn register_mail_handler(cx: &App) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+/// Writes `<data home>/applications/mailbox.desktop` (this executable, `%u` for the URL) and
+/// makes it the `mailto:` handler with `xdg-mime`.
+#[cfg(target_os = "linux")]
 pub fn register_mail_handler(_cx: &App) -> Result<(), String> {
-    Err("Setting the default mail app is only supported on Windows for now".into())
+    const DESKTOP_FILE: &str = "mailbox.desktop";
+
+    let exe = std::env::current_exe().map_err(|err| err.to_string())?;
+    let applications = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .ok_or("no home folder")?
+        .join("applications");
+    std::fs::create_dir_all(&applications).map_err(|err| err.to_string())?;
+    // Desktop entry quoting: the path in double quotes with `"`, `` ` ``, `$` and `\` escaped,
+    // then every `\` doubled again for the key's string escaping.
+    let mut quoted = String::new();
+    for c in exe.to_string_lossy().chars() {
+        match c {
+            '"' | '`' | '$' => quoted.push_str(&format!("\\\\{c}")),
+            '\\' => quoted.push_str("\\\\\\\\"),
+            c => quoted.push(c),
+        }
+    }
+    let entry = format!(
+        "[Desktop Entry]\nType=Application\nName=Mailbox\nTerminal=false\n\
+         Exec=\"{quoted}\" %u\nCategories=Network;Email;\nMimeType=x-scheme-handler/mailto;\n"
+    );
+    std::fs::write(applications.join(DESKTOP_FILE), entry).map_err(|err| err.to_string())?;
+    let status = std::process::Command::new("xdg-mime")
+        .args(["default", DESKTOP_FILE, "x-scheme-handler/mailto"])
+        .status()
+        .map_err(|err| format!("xdg-mime: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("xdg-mime failed ({status})"))
+    }
+}
+
+/// macOS only lets the user pick the default mail app (from Apple Mail's settings).
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn register_mail_handler(_cx: &App) -> Result<(), String> {
+    Err("choose Mailbox in Mail > Settings > General > Default email reader".into())
 }
 
 /// Settings / palette entry: registers, then explains what to confirm.
 pub fn set_default_mail_app(state: &Entity<AppState>, cx: &mut App) {
     let result = register_mail_handler(cx);
+    let done = if cfg!(windows) {
+        "Mailbox is registered for mailto: links. Pick it under Email in the Default apps page."
+    } else {
+        "Mailbox now opens mailto: links."
+    };
     state.update(cx, |state, cx| match result {
-        Ok(()) => state.notify_info(
-            "Mailbox is registered for mailto: links. Pick it under Email in the Default apps page.",
-            cx,
-        ),
+        Ok(()) => state.notify_info(done, cx),
         Err(err) => state.report_error(format!("Could not register Mailbox: {err}"), cx),
     });
 }

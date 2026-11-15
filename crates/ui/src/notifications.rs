@@ -8,7 +8,8 @@
 //! - The window title (shown on the taskbar button) carries the inbox unread count. A real
 //!   overlay badge needs `ITaskbarList3` (unsafe COM), which this workspace forbids.
 //!
-//! Other platforms: only the in-app toasts (the bridge already shows one) and the title.
+//! macOS and Linux: a system notification through `osascript` / `notify-send` (clicking it
+//! does not open the message), the in-app toasts and the title.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
@@ -270,5 +271,51 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    pub fn show(_title: &str, _body: &str, _sound: bool, _on_click: impl Fn() + Send + 'static) {}
+    use std::process::Command;
+
+    /// Shows a system notification. Clicks are not reported (`on_click` unused).
+    pub fn show(title: &str, body: &str, sound: bool, _on_click: impl Fn() + Send + 'static) {
+        let mut command = command(title, body, sound);
+        // Waited on a thread: no zombie process, no blocking the UI.
+        std::thread::spawn(move || {
+            if let Err(err) = command.status() {
+                crate::log::error(format_args!("notification failed: {err}"));
+            }
+        });
+    }
+
+    /// The text as one argument: never read as an option (a sender named `-e ...` would
+    /// otherwise add AppleScript to run).
+    fn argument(text: &str) -> String {
+        if text.starts_with('-') {
+            format!(" {text}")
+        } else {
+            text.to_owned()
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn command(title: &str, body: &str, sound: bool) -> Command {
+        let display = if sound {
+            r#"display notification (item 2 of argv) with title (item 1 of argv) sound name "Glass""#
+        } else {
+            "display notification (item 2 of argv) with title (item 1 of argv)"
+        };
+        let mut command = Command::new("osascript");
+        command
+            .args(["-e", "on run argv", "-e", display, "-e", "end run"])
+            .args([argument(title), argument(body)]);
+        command
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn command(title: &str, body: &str, sound: bool) -> Command {
+        let mut command = Command::new("notify-send");
+        command.args(["--app-name=Mailbox", "--icon=mail-unread"]);
+        if sound {
+            command.arg("--hint=string:sound-name:message-new-email");
+        }
+        command.arg("--").args([argument(title), argument(body)]);
+        command
+    }
 }

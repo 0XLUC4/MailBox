@@ -14,12 +14,17 @@ use crate::ribbon::RibbonView;
 use crate::search::SearchView;
 use crate::settings::SettingsView;
 use crate::tasks::TasksView;
-use crate::theme::{
-    RAIL_WIDTH, SPACE_1, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TOP_BAR_HEIGHT, Theme, theme,
-};
+use crate::theme::{SPACE_1, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TOP_BAR_HEIGHT, Theme, theme};
 use crate::titlebar;
 use crate::updater::Updater;
 use crate::{GoToCalendar, GoToMail, GoToPeople, GoToSettings, GoToTasks, Redo, Undo};
+
+/// Rail width: on macOS wide enough to hold the native traffic lights above its buttons.
+pub const RAIL_WIDTH: Pixels = if cfg!(target_os = "macos") {
+    titlebar::MACOS_TRAFFIC_LIGHTS_WIDTH
+} else {
+    crate::theme::RAIL_WIDTH
+};
 
 pub struct Shell {
     state: Entity<AppState>,
@@ -154,12 +159,21 @@ impl Shell {
             .w(RAIL_WIDTH)
             .h_full()
             .py(SPACE_3)
-            // Clear the native traffic lights.
-            .when(cfg!(target_os = "macos"), |el| el.pt(px(40.)))
             .gap(SPACE_1)
             .bg(t.rail)
             .border_r_1()
             .border_color(t.border_subtle)
+            // macOS: the traffic lights sit in the top bar's height of the rail, which drags
+            // the window like the bar next to it.
+            .when(cfg!(target_os = "macos"), |el| {
+                el.pt(px(0.)).child(titlebar::drag_area(
+                    div()
+                        .id("rail-drag")
+                        .flex_shrink_0()
+                        .w_full()
+                        .h(TOP_BAR_HEIGHT),
+                ))
+            })
             .children(Module::MAIN.map(&rail_item))
             .child(div().flex_1())
             .child(crate::updater::rail_button(&self.updater, cx))
@@ -240,50 +254,54 @@ impl Render for Shell {
             Module::Settings => self.settings.clone().into_any_element(),
         };
 
-        div()
-            .id("shell")
-            .key_context("Shell")
-            .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|this, _: &Undo, _, cx| {
-                this.state.update(cx, |state, cx| state.undo(cx));
-            }))
-            .on_action(cx.listener(|this, _: &Redo, _, cx| {
-                this.state.update(cx, |state, cx| state.redo(cx));
-            }))
-            .on_action(cx.listener(|this, _: &GoToMail, _, cx| this.go_to(Module::Mail, cx)))
-            .on_action(
-                cx.listener(|this, _: &GoToCalendar, _, cx| this.go_to(Module::Calendar, cx)),
-            )
-            .on_action(cx.listener(|this, _: &GoToPeople, _, cx| this.go_to(Module::People, cx)))
-            .on_action(cx.listener(|this, _: &GoToTasks, _, cx| this.go_to(Module::Tasks, cx)))
-            .on_action(
-                cx.listener(|this, _: &GoToSettings, _, cx| this.go_to(Module::Settings, cx)),
-            )
-            .map(|el| crate::actions::install(el, self.state.clone(), self.search.clone()))
-            .flex()
-            .flex_row()
-            .size_full()
-            .bg(t.background)
-            .text_color(t.text)
-            .text_size(TEXT_MD)
-            .child(self.render_rail(active, &t, cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .h_full()
-                    .child(self.render_top_bar(active, &t, cx))
-                    .child(self.ribbon.clone())
-                    .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_h(px(0.))
-                            .child(content)
-                            .children(crate::compose::dock(cx)),
-                    ),
-            )
+        titlebar::resizable_frame(
+            div()
+                .id("shell")
+                .key_context("Shell")
+                .track_focus(&self.focus_handle)
+                .on_action(cx.listener(|this, _: &Undo, _, cx| {
+                    this.state.update(cx, |state, cx| state.undo(cx));
+                }))
+                .on_action(cx.listener(|this, _: &Redo, _, cx| {
+                    this.state.update(cx, |state, cx| state.redo(cx));
+                }))
+                .on_action(cx.listener(|this, _: &GoToMail, _, cx| this.go_to(Module::Mail, cx)))
+                .on_action(
+                    cx.listener(|this, _: &GoToCalendar, _, cx| this.go_to(Module::Calendar, cx)),
+                )
+                .on_action(
+                    cx.listener(|this, _: &GoToPeople, _, cx| this.go_to(Module::People, cx)),
+                )
+                .on_action(cx.listener(|this, _: &GoToTasks, _, cx| this.go_to(Module::Tasks, cx)))
+                .on_action(
+                    cx.listener(|this, _: &GoToSettings, _, cx| this.go_to(Module::Settings, cx)),
+                )
+                .map(|el| crate::actions::install(el, self.state.clone(), self.search.clone()))
+                .flex()
+                .flex_row()
+                .size_full()
+                .bg(t.background)
+                .text_color(t.text)
+                .text_size(TEXT_MD)
+                .child(self.render_rail(active, &t, cx))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h_full()
+                        .child(self.render_top_bar(active, &t, cx))
+                        .child(self.ribbon.clone())
+                        .child(
+                            div()
+                                .relative()
+                                .flex_1()
+                                .min_h(px(0.))
+                                .child(content)
+                                .children(crate::compose::dock(cx)),
+                        ),
+                ),
+        )
     }
 }
