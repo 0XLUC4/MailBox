@@ -9,12 +9,14 @@
 //!   the account's calendar with the answer (one undoable step) and queues a
 //!   `METHOD:REPLY` to the organizer.
 
+use crate::settings::prefs;
 use chrono::Local;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::calendar::{
     self as cal, CalendarCommand, EventDetails, EventSnapshot, Method, ShowAs,
 };
+use mailbox_core::dates::LocalizedFormat;
 use mailbox_core::{
     Account, Address, Attachment, Calendar, CalendarEvent, Command, Id, Importance, Message,
     MessageFlags, ResponseStatus, Store, command, ics,
@@ -155,12 +157,16 @@ pub fn queue_calendar_mail(
 pub(crate) fn when_text(snapshot: &EventSnapshot, cx: &App) -> String {
     let start = snapshot.event.start.with_timezone(&Local);
     if snapshot.event.all_day {
-        format!("{} ({})", start.format("%A %e %B %Y"), tr(cx, "All day"))
+        format!(
+            "{} ({})",
+            start.format_in(prefs(cx).language, "%A %e %B %Y"),
+            tr(cx, "All day")
+        )
     } else {
         let end = snapshot.event.end.with_timezone(&Local);
         format!(
             "{} – {}",
-            start.format("%A %e %B %Y, %H:%M"),
+            start.format_in(prefs(cx).language, "%A %e %B %Y, %H:%M"),
             end.format("%H:%M")
         )
     }

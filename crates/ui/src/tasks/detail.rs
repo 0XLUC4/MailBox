@@ -1,6 +1,7 @@
 //! Task detail side panel (title, steps, My Day, reminder, due date, repeat, list, linked
 //! email, notes) and the panel for a flagged message that has no task yet.
 
+use crate::settings::prefs;
 use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Timelike, Utc};
 use gpui::component::date_picker::{DatePicker, DatePickerEvent, DatePickerState};
 use gpui::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
@@ -8,6 +9,7 @@ use gpui::component::time_field::TimePrecision;
 use gpui::component::tooltip::Tooltip;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use mailbox_core::dates::LocalizedFormat;
 use mailbox_core::todo::{self, Repeat, Step, TaskCard, TaskList};
 use mailbox_core::{Command, Id, Message, TaskCommand};
 
@@ -607,7 +609,8 @@ impl TasksView {
         let footer_text = match card.details.completed_at {
             Some(at) if completed => tr(cx, "Completed {}").replace(
                 "{}",
-                &at.with_timezone(&Local).format("%a %-d %b").to_string(),
+                &at.with_timezone(&Local)
+                    .format_in(prefs(cx).language, "%a %-d %b"),
             ),
             _ => tr(cx, "Created {}").replace(
                 "{}",
@@ -615,8 +618,7 @@ impl TasksView {
                     .task
                     .created
                     .with_timezone(&Local)
-                    .format("%a %-d %b")
-                    .to_string(),
+                    .format_in(prefs(cx).language, "%a %-d %b"),
             ),
         };
 
@@ -729,13 +731,19 @@ impl TasksView {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(subject),
                             )
-                            .child(div().text_size(TEXT_SM).text_color(t.text_muted).child(
-                                format!(
-                                    "{} · {}",
-                                    tr(cx, "From {}").replace("{}", &message.from.display()),
-                                    message.date.with_timezone(&Local).format("%a %-d %b %Y, %H:%M")
-                                ),
-                            ))
+                            .child(
+                                div()
+                                    .text_size(TEXT_SM)
+                                    .text_color(t.text_muted)
+                                    .child(format!(
+                                        "{} · {}",
+                                        tr(cx, "From {}").replace("{}", &message.from.display()),
+                                        message
+                                            .date
+                                            .with_timezone(&Local)
+                                            .format_in(prefs(cx).language, "%a %-d %b %Y, %H:%M")
+                                    )),
+                            )
                             .when(!message.preview.trim().is_empty(), |el| {
                                 el.child(
                                     div()

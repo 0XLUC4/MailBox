@@ -1,10 +1,12 @@
 //! Month view: 6 week rows; multi-day events as bars, timed events as dotted lines.
 //! Drag an event to another day to move it (Ctrl to copy); double-click a day to create.
 
+use crate::settings::prefs;
 use chrono::{Datelike, Weekday};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::calendar::Occurrence;
+use mailbox_core::dates::LocalizedFormat;
 
 use super::layout::{self, ViewKind};
 use super::time_grid::chip_body;
@@ -39,7 +41,7 @@ impl CalendarView {
                     .text_size(TEXT_XS)
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.text_subtle)
-                    .child(day.format("%a").to_string().to_uppercase())
+                    .child(day.format_in(prefs(cx).language, "%a").to_uppercase())
             }));
         let weeks: Vec<AnyElement> = data
             .days
@@ -139,7 +141,7 @@ impl CalendarView {
                 let is_drop = drop_day == Some(day);
                 let hits = self.hits.clone();
                 let label = if day.day() == 1 {
-                    day.format("%-d %b").to_string()
+                    day.format_in(prefs(cx).language, "%-d %b")
                 } else {
                     day.day().to_string()
                 };

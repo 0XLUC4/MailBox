@@ -6,6 +6,8 @@
 //!   normal send path (Outbox → Send/Receive). Editing or sending it earlier is harmless.
 //! - Muted conversations: new messages are marked read and archived on arrival.
 
+use crate::settings::prefs;
+use mailbox_core::dates::LocalizedFormat;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -192,7 +194,9 @@ pub fn snooze(state: &Entity<AppState>, ids: &[Id], until: DateTime<Utc>, cx: &m
     if moving.is_empty() || !save(state, &later, cx) {
         return;
     }
-    let when = until.with_timezone(&Local).format("%a %d %b, %H:%M");
+    let when = until
+        .with_timezone(&Local)
+        .format_in(prefs(cx).language, "%a %d %b, %H:%M");
     state.update(cx, |state, cx| {
         if state.run(
             Command::MoveMessages {
@@ -297,8 +301,7 @@ pub fn open_time_picker(title: &'static str, on_pick: OnPick, window: &mut Windo
                     .child(
                         div().text_size(TEXT_XS).text_color(t.text_subtle).child(
                             at.with_timezone(&Local)
-                                .format("%a %d %b, %H:%M")
-                                .to_string(),
+                                .format_in(prefs(cx).language, "%a %d %b, %H:%M"),
                         ),
                     )
                     .on_click(move |_, window, cx| {
@@ -369,7 +372,9 @@ pub fn schedule_send(state: &Entity<AppState>, message_id: Id, at: DateTime<Utc>
     let mut later = load(state, cx);
     later.schedule(message_id, at);
     if save(state, &later, cx) {
-        let when = at.with_timezone(&Local).format("%a %d %b, %H:%M");
+        let when = at
+            .with_timezone(&Local)
+            .format_in(prefs(cx).language, "%a %d %b, %H:%M");
         state.update(cx, |state, cx| {
             let message = tr(cx, "Will be sent {} (kept in Drafts until then)")
                 .replace("{}", &when.to_string());

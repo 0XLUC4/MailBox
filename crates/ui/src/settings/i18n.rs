@@ -1625,6 +1625,18 @@ const FR: &[(&str, &str)] = &[
         "Could not read the photo: {}",
         "Impossible de lire la photo : {}",
     ),
+    // macOS menu bar (app_menu.rs)
+    ("Settings…", "Réglages…"),
+    ("Hide Mailbox", "Masquer Mailbox"),
+    ("Hide Others", "Masquer les autres"),
+    ("Show All", "Tout afficher"),
+    ("Quit Mailbox", "Quitter Mailbox"),
+    ("Cut", "Couper"),
+    ("Paste", "Coller"),
+    ("Select All", "Tout sélectionner"),
+    ("Window", "Fenêtre"),
+    ("Minimize", "Réduire"),
+    ("Close Window", "Fermer la fenêtre"),
 ];
 
 /// Translates an English UI string for `language`.

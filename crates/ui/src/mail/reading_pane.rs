@@ -3,6 +3,9 @@
 //! bodies are shown exactly as sent by the system web engine on Windows (see `webview`), plain
 //! text and other platforms use our renderer. Remote pictures stay blocked until "Show pictures".
 
+use crate::settings::{prefs, tr};
+use mailbox_core::dates::LocalizedFormat;
+use mailbox_core::settings::Language;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -499,8 +502,12 @@ impl ReadingPaneView {
                             })
                             .when(message.flags.flagged, |el| {
                                 let label = match due {
-                                    Some(due) => format!("Follow up - {}", due.format("%a %d %b")),
-                                    None => "Follow up".into(),
+                                    Some(due) => format!(
+                                        "{} - {}",
+                                        tr(cx, "Follow up"),
+                                        due.format_in(prefs(cx).language, "%a %d %b")
+                                    ),
+                                    None => tr(cx, "Follow up").into(),
                                 };
                                 el.child(Badge::new(label).color(t.danger))
                             })
@@ -810,12 +817,17 @@ impl ReadingPaneView {
     }
 
     /// Sender, recipients (or the preview when `compact`) and date of a message.
-    fn message_header(&self, message: &Message, compact: bool, t: &Theme) -> Div {
+    fn message_header(
+        &self,
+        message: &Message,
+        compact: bool,
+        language: Language,
+        t: &Theme,
+    ) -> Div {
         let date = message
             .date
             .with_timezone(&Local)
-            .format("%a %d %b %Y, %H:%M")
-            .to_string();
+            .format_in(language, "%a %d %b %Y, %H:%M");
         // Expanded: every name opens its contact card. Collapsed rows expand on click instead.
         let details = if compact {
             div().truncate().child(message.preview.clone())
@@ -921,7 +933,7 @@ impl ReadingPaneView {
             .border_color(t.border_subtle)
             .bg(t.background)
             .hover(move |el| el.bg(hover))
-            .child(self.message_header(message, true, t))
+            .child(self.message_header(message, true, prefs(cx).language, t))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.viewing = Some(id);
                 cx.notify();
@@ -1319,7 +1331,7 @@ impl Render for ReadingPaneView {
                         .children(others),
                 )
             })
-            .child(self.message_header(&shown, false, &t))
+            .child(self.message_header(&shown, false, prefs(cx).language, &t))
             .when(remote && !allowed, |el| {
                 el.child(self.pictures_bar(shown.id, &shown.from.email, &t, cx))
             })

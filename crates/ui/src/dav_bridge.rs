@@ -14,6 +14,8 @@
 //! Entry points: [`init`], [`sync_now`], [`reload`], [`status`], [`send_invitation`],
 //! [`open_add_dav_account`].
 
+use crate::settings::prefs;
+use mailbox_core::dates::LocalizedFormat;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -748,7 +750,7 @@ impl DavBridge {
         let when = event
             .start
             .with_timezone(&Local)
-            .format("%A %e %B %Y, %H:%M");
+            .format_in(prefs(cx).language, "%A %e %B %Y, %H:%M");
         let body = format!(
             "{}\n{when}\n{}\n\n{}",
             event.title, event.location, event.description

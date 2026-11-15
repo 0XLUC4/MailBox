@@ -8,6 +8,10 @@
 mod detail;
 mod reorder;
 
+use crate::settings::i18n::translate;
+use crate::settings::prefs;
+use mailbox_core::dates::LocalizedFormat;
+use mailbox_core::settings::Language;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -485,8 +489,8 @@ impl TasksView {
             SmartList::List(id) => Some(id),
             _ => None,
         };
-        let subtitle =
-            (self.list == SmartList::MyDay).then(|| Local::now().format("%A, %-d %B").to_string());
+        let subtitle = (self.list == SmartList::MyDay)
+            .then(|| Local::now().format_in(prefs(cx).language, "%A, %-d %B"));
         let rename_name = title.clone();
 
         let title_element = match &self.rename {
@@ -892,11 +896,16 @@ impl TasksView {
                             .text_size(TEXT_XS)
                             .text_color(t.text_muted)
                             .child(Icon::new(IconName::Mail).size(ICON_SIZE_XS))
-                            .child(div().min_w(px(0.)).truncate().child(format!(
-                                "{} · {}",
-                                message.from.display(),
-                                message.date.with_timezone(&Local).format("%-d %b")
-                            ))),
+                            .child(
+                                div().min_w(px(0.)).truncate().child(format!(
+                                    "{} · {}",
+                                    message.from.display(),
+                                    message
+                                        .date
+                                        .with_timezone(&Local)
+                                        .format_in(prefs(cx).language, "%-d %b")
+                                )),
+                            ),
                     ),
             )
             .child(
@@ -1267,25 +1276,20 @@ fn unflag(message_id: Id) -> Command {
 }
 
 /// "Today", "Tomorrow", "Yesterday", "Friday" (this week), "Mon 7 Dec" otherwise.
-fn day_label(date: NaiveDate, today: NaiveDate) -> String {
+fn day_label(date: NaiveDate, today: NaiveDate, language: Language) -> String {
     match (date - today).num_days() {
-        0 => "Today".into(),
-        1 => "Tomorrow".into(),
-        -1 => "Yesterday".into(),
-        2..=6 => date.format("%A").to_string(),
-        _ if date.year() == today.year() => date.format("%a %-d %b").to_string(),
-        _ => date.format("%a %-d %b %Y").to_string(),
+        0 => translate(language, "Today").into(),
+        1 => translate(language, "Tomorrow").into(),
+        -1 => translate(language, "Yesterday").into(),
+        2..=6 => date.format_in(language, "%A"),
+        _ if date.year() == today.year() => date.format_in(language, "%a %-d %b"),
+        _ => date.format_in(language, "%a %-d %b %Y"),
     }
 }
 
-/// [`day_label`] with "Today", "Tomorrow" and "Yesterday" translated.
+/// [`day_label`] in the app's language.
 fn day_text(date: NaiveDate, today: NaiveDate, cx: &App) -> String {
-    match (date - today).num_days() {
-        0 => tr(cx, "Today").to_owned(),
-        1 => tr(cx, "Tomorrow").to_owned(),
-        -1 => tr(cx, "Yesterday").to_owned(),
-        _ => day_label(date, today),
-    }
+    day_label(date, today, prefs(cx).language)
 }
 
 fn reminder_label(at: DateTime<Utc>, today: NaiveDate, cx: &App) -> String {
@@ -1338,20 +1342,24 @@ impl TasksView {
 
 #[cfg(test)]
 mod tests {
-    use super::day_label;
+    use super::{Language, day_label};
     use chrono::NaiveDate;
 
     #[test]
     fn day_labels() {
         let today = NaiveDate::from_ymd_opt(2026, 11, 14).unwrap();
         let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
-        assert_eq!(day_label(today, today), "Today");
-        assert_eq!(day_label(day(15), today), "Tomorrow");
-        assert_eq!(day_label(day(13), today), "Yesterday");
-        assert_eq!(day_label(day(18), today), "Wednesday");
-        assert_eq!(day_label(day(30), today), "Mon 30 Nov");
+        assert_eq!(day_label(today, today, Language::En), "Today");
+        assert_eq!(day_label(day(15), today, Language::En), "Tomorrow");
+        assert_eq!(day_label(day(13), today, Language::En), "Yesterday");
+        assert_eq!(day_label(day(18), today, Language::En), "Wednesday");
+        assert_eq!(day_label(day(30), today, Language::En), "Mon 30 Nov");
         assert_eq!(
-            day_label(NaiveDate::from_ymd_opt(2027, 1, 4).unwrap(), today),
+            day_label(
+                NaiveDate::from_ymd_opt(2027, 1, 4).unwrap(),
+                today,
+                Language::En
+            ),
             "Mon 4 Jan 2027"
         );
     }

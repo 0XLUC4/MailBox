@@ -46,6 +46,9 @@ pub fn apply(settings: &Settings, window: &mut Window, cx: &mut App) {
         theme::set_appearance(appearance(settings.theme), window, cx);
         theme::set_accent(settings.accent, window, cx);
     }
+    if first || previous.language != settings.language {
+        crate::app_menu::set_menus(cx);
+    }
     // Scales rem-based widgets (inputs, dialogs, menus); 16px rem at the 13px default size.
     let rem = f32::from(settings.font_size) * 16. / 13.;
     if window.rem_size() != px(rem) {

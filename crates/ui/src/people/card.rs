@@ -1,9 +1,11 @@
 //! Read-only contact card: identity, actions, contact info, groups, notes, recent mail and
 //! upcoming meetings with this person.
 
+use crate::settings::prefs;
 use chrono::{Local, Utc};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use mailbox_core::dates::LocalizedFormat;
 use mailbox_core::people::{self, ContactCard, ContactGroup};
 use mailbox_core::{Address, Id, PeopleCommand};
 
@@ -247,7 +249,7 @@ impl PeopleView {
                 info_row(
                     "card-birthday",
                     IconName::Cake,
-                    birthday.format("%-d %B %Y").to_string(),
+                    birthday.format_in(prefs(cx).language, "%-d %B %Y"),
                     tr(cx, "Birthday"),
                     t,
                 )
@@ -320,8 +322,7 @@ impl PeopleView {
                     message
                         .date
                         .with_timezone(&Local)
-                        .format("%-d %b %Y")
-                        .to_string(),
+                        .format_in(prefs(cx).language, "%-d %b %Y"),
                     t,
                 )
                 .on_click(
@@ -337,9 +338,9 @@ impl PeopleView {
                 let when = if event.recurrence.is_some() && event.start < now {
                     recurring.to_owned()
                 } else if event.all_day {
-                    start.format("%a %-d %b").to_string()
+                    start.format_in(prefs(cx).language, "%a %-d %b")
                 } else {
-                    start.format("%a %-d %b · %H:%M").to_string()
+                    start.format_in(prefs(cx).language, "%a %-d %b · %H:%M")
                 };
                 activity_row(
                     ("card-event", event.id as u64),

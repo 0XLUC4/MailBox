@@ -3,6 +3,8 @@
 
 use chrono::Local;
 
+use crate::dates::LocalizedFormat;
+use crate::settings::Language;
 use crate::{Address, Message};
 
 /// Escapes text for HTML element content and attribute values.
@@ -36,8 +38,8 @@ fn address_list(list: &[Address]) -> String {
 
 /// A standalone HTML page for printing `message`. `body_text` is the plain text to show
 /// (the message's HTML is never embedded: it may carry scripts or remote content). The page
-/// opens the print dialog when loaded.
-pub fn print_html(message: &Message, body_text: &str) -> String {
+/// opens the print dialog when loaded. The date is written in `language`.
+pub fn print_html(message: &Message, body_text: &str, language: Language) -> String {
     let mut rows = vec![
         ("From", address_list(std::slice::from_ref(&message.from))),
         ("To", address_list(&message.to)),
@@ -50,8 +52,7 @@ pub fn print_html(message: &Message, body_text: &str) -> String {
         message
             .date
             .with_timezone(&Local)
-            .format("%A %d %B %Y, %H:%M")
-            .to_string(),
+            .format_in(language, "%A %d %B %Y, %H:%M"),
     ));
     if !message.attachments.is_empty() {
         let names: Vec<_> = message
@@ -136,7 +137,7 @@ mod tests {
 
     #[test]
     fn print_page_escapes_everything() {
-        let page = print_html(&message(), "<script>alert(1)</script>");
+        let page = print_html(&message(), "<script>alert(1)</script>", Language::En);
         assert!(page.contains("Q3 &lt;plan&gt; &amp; budget"));
         assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!page.contains("<script>"));

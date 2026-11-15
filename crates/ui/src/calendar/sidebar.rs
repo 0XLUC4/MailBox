@@ -1,5 +1,7 @@
 //! Left pane: "New event", mini month navigator, calendar list, side-by-side toggle.
 
+use crate::settings::prefs;
+use mailbox_core::dates::LocalizedFormat;
 use std::collections::HashSet;
 
 use chrono::{Datelike, Local, NaiveDate};
@@ -335,7 +337,7 @@ impl CalendarView {
                     .pl(SPACE_1)
                     .text_size(TEXT_MD)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(month.format("%B %Y").to_string()),
+                    .child(month.format_in(prefs(cx).language, "%B %Y")),
             )
             .child(
                 IconButton::new(("mini-prev", base as u64), IconName::ChevronLeft)

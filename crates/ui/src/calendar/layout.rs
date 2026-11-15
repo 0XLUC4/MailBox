@@ -5,7 +5,11 @@ use chrono::{
     DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc, Weekday,
 };
 use mailbox_core::calendar::Occurrence;
+use mailbox_core::dates::LocalizedFormat;
 use mailbox_core::recurrence::to_utc;
+use mailbox_core::settings::Language;
+
+use crate::settings::i18n::translate;
 
 pub const WEEK_START: Weekday = Weekday::Mon;
 pub const MINUTES_PER_DAY: i64 = 24 * 60;
@@ -106,23 +110,20 @@ pub fn step(kind: ViewKind, anchor: NaiveDate, forward: bool) -> NaiveDate {
 }
 
 /// Toolbar title for the visible range.
-pub fn title(kind: ViewKind, anchor: NaiveDate) -> String {
+pub fn title(kind: ViewKind, anchor: NaiveDate, language: Language) -> String {
+    let fmt = |day: NaiveDate, pattern: &str| day.format_in(language, pattern);
     match kind {
-        ViewKind::Day => anchor.format("%A %-d %B %Y").to_string(),
-        ViewKind::Month => anchor.format("%B %Y").to_string(),
+        ViewKind::Day => fmt(anchor, "%A %-d %B %Y"),
+        ViewKind::Month => fmt(anchor, "%B %Y"),
         _ => {
             let days = visible_days(kind, anchor);
             let (first, last) = (days[0], days[days.len() - 1]);
             if first.month() == last.month() {
-                format!("{} – {}", first.format("%-d"), last.format("%-d %B %Y"))
+                format!("{} – {}", first.format("%-d"), fmt(last, "%-d %B %Y"))
             } else if first.year() == last.year() {
-                format!("{} – {}", first.format("%-d %b"), last.format("%-d %b %Y"))
+                format!("{} – {}", fmt(first, "%-d %b"), fmt(last, "%-d %b %Y"))
             } else {
-                format!(
-                    "{} – {}",
-                    first.format("%-d %b %Y"),
-                    last.format("%-d %b %Y")
-                )
+                format!("{} – {}", fmt(first, "%-d %b %Y"), fmt(last, "%-d %b %Y"))
             }
         }
     }
@@ -303,13 +304,10 @@ pub fn format_minutes(minutes: i64) -> String {
     format!("{:02}:{:02}", minutes / 60 % 24, minutes % 60)
 }
 
-/// "09:00 – 10:30" in local time (or "All day", translated by `tr`).
-pub fn time_range_label(
-    occurrence: &Occurrence,
-    tr: impl Fn(&'static str) -> &'static str,
-) -> String {
+/// "09:00 – 10:30" in local time (or "All day"), in `language`.
+pub fn time_range_label(occurrence: &Occurrence, language: Language) -> String {
     if occurrence.event.all_day {
-        return tr("All day").into();
+        return translate(language, "All day").into();
     }
     let (start, end) = local_span(occurrence);
     if start.date() == end.date()
@@ -319,24 +317,20 @@ pub fn time_range_label(
     } else {
         format!(
             "{} – {}",
-            start.format("%a %H:%M"),
-            end.format("%a %-d %b %H:%M")
+            start.format_in(language, "%a %H:%M"),
+            end.format_in(language, "%a %-d %b %H:%M")
         )
     }
 }
 
-/// "Today", "Tomorrow", "Yesterday" (translated by `tr`) or "Mon 16 Nov".
-pub fn relative_day(
-    day: NaiveDate,
-    today: NaiveDate,
-    tr: impl Fn(&'static str) -> &'static str,
-) -> String {
+/// "Today", "Tomorrow", "Yesterday" or "Mon 16 Nov", in `language`.
+pub fn relative_day(day: NaiveDate, today: NaiveDate, language: Language) -> String {
     match (day - today).num_days() {
-        0 => tr("Today").into(),
-        1 => tr("Tomorrow").into(),
-        -1 => tr("Yesterday").into(),
-        _ if day.year() == today.year() => day.format("%a %-d %b").to_string(),
-        _ => day.format("%a %-d %b %Y").to_string(),
+        0 => translate(language, "Today").into(),
+        1 => translate(language, "Tomorrow").into(),
+        -1 => translate(language, "Yesterday").into(),
+        _ if day.year() == today.year() => day.format_in(language, "%a %-d %b"),
+        _ => day.format_in(language, "%a %-d %b %Y"),
     }
 }
 
@@ -372,14 +366,20 @@ mod tests {
     #[test]
     fn titles() {
         let anchor = date(2026, 11, 18);
-        assert_eq!(title(ViewKind::Month, anchor), "November 2026");
-        assert_eq!(title(ViewKind::Week, anchor), "16 – 22 November 2026");
         assert_eq!(
-            title(ViewKind::Week, date(2026, 12, 30)),
+            title(ViewKind::Month, anchor, Language::En),
+            "November 2026"
+        );
+        assert_eq!(
+            title(ViewKind::Week, anchor, Language::En),
+            "16 – 22 November 2026"
+        );
+        assert_eq!(
+            title(ViewKind::Week, date(2026, 12, 30), Language::En),
             "28 Dec 2026 – 3 Jan 2027"
         );
         assert_eq!(
-            title(ViewKind::Week, date(2026, 11, 30)),
+            title(ViewKind::Week, date(2026, 11, 30), Language::En),
             "30 Nov – 6 Dec 2026"
         );
     }
@@ -479,12 +479,27 @@ mod tests {
         assert_eq!(snap_down(29), 15);
         assert_eq!(format_minutes(570), "09:30");
         let today = date(2026, 11, 14);
-        assert_eq!(relative_day(today, today, |s| s), "Today");
-        assert_eq!(relative_day(date(2026, 11, 15), today, |s| s), "Tomorrow");
-        assert_eq!(relative_day(date(2026, 11, 18), today, |s| s), "Wed 18 Nov");
+        assert_eq!(relative_day(today, today, Language::En), "Today");
         assert_eq!(
-            relative_day(date(2027, 1, 4), today, |s| s),
+            relative_day(date(2026, 11, 15), today, Language::En),
+            "Tomorrow"
+        );
+        assert_eq!(
+            relative_day(date(2026, 11, 18), today, Language::En),
+            "Wed 18 Nov"
+        );
+        assert_eq!(
+            relative_day(date(2027, 1, 4), today, Language::En),
             "Mon 4 Jan 2027"
+        );
+        assert_eq!(relative_day(today, today, Language::Fr), "Aujourd'hui");
+        assert_eq!(
+            relative_day(date(2026, 11, 18), today, Language::Fr),
+            "mer. 18 nov."
+        );
+        assert_eq!(
+            title(ViewKind::Day, date(2026, 11, 16), Language::Fr),
+            "lundi 16 novembre 2026"
         );
     }
 }

@@ -1,9 +1,11 @@
 //! Day / Work week / Week: day headers, all-day lanes and the scrollable hour grid.
 
+use crate::settings::prefs;
 use chrono::{Datelike, Local, NaiveDate, Timelike, Weekday};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::calendar::Occurrence;
+use mailbox_core::dates::LocalizedFormat;
 use mailbox_core::{Calendar, Id};
 
 use super::layout::{self, Placement, ViewKind};
@@ -206,7 +208,7 @@ impl CalendarView {
                                     .text_size(TEXT_XS)
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(if is_today { t.accent } else { t.text_subtle })
-                                    .child(day.format("%a").to_string().to_uppercase()),
+                                    .child(day.format_in(prefs(cx).language, "%a").to_uppercase()),
                             ),
                     )
                     .when(show_lanes, |el| {
@@ -616,7 +618,7 @@ impl CalendarView {
                         )
                         .child(div().child(format!(
                             "{}{}",
-                            layout::time_range_label(&ghost, |text| tr(cx, text)),
+                            layout::time_range_label(&ghost, prefs(cx).language),
                             if self.drag.as_ref().is_some_and(|drag| drag.copy) {
                                 format!("  {}", tr(cx, "(copy)"))
                             } else {
@@ -806,7 +808,7 @@ pub(super) fn chip_body(
     } else {
         event.title.clone()
     };
-    let time = layout::time_range_label(occurrence, |text| tr(cx, text));
+    let time = layout::time_range_label(occurrence, prefs(cx).language);
     let icons = [
         (occurrence.is_part_of_series(), IconName::Repeat),
         (occurrence.details.private, IconName::Lock),

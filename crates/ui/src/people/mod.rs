@@ -9,6 +9,8 @@
 mod card;
 mod form;
 
+use crate::settings::prefs;
+use mailbox_core::dates::LocalizedFormat;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1127,8 +1129,7 @@ impl PeopleView {
                         &suggestion
                             .last
                             .with_timezone(&chrono::Local)
-                            .format("%-d %b %Y")
-                            .to_string()
+                            .format_in(prefs(cx).language, "%-d %b %Y")
                     )
                 );
                 div()

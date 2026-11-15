@@ -2,6 +2,7 @@
 //! recurrence (presets + custom dialog), attendees with Find a Time, reminder, show-as,
 //! private, categories, description; invitation answers for events organized by others.
 
+use crate::settings::prefs;
 use chrono::{
     DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
     Weekday,
@@ -12,6 +13,7 @@ use gpui::*;
 use mailbox_core::calendar::{
     self as cal, BusySlot, CalendarCommand, EventDetails, Occurrence, ShowAs,
 };
+use mailbox_core::dates::LocalizedFormat;
 use mailbox_core::recurrence::{
     Frequency, RRule, WeekdayNum, month_name, ordinal_name, to_utc, weekday_long, weekday_position,
     weekday_short,
@@ -1816,8 +1818,7 @@ impl EventEditor {
             .map(|(index, start)| {
                 let label = start
                     .with_timezone(&Local)
-                    .format("%a %-d - %H:%M")
-                    .to_string();
+                    .format_in(prefs(cx).language, "%a %-d - %H:%M");
                 chip(("slot", index as u64), label, false, t)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.set_times(start, start + duration, window, cx);
@@ -1855,7 +1856,7 @@ impl EventEditor {
                         div()
                             .text_size(TEXT_MD)
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(day.format("%A %-d %B").to_string()),
+                            .child(day.format_in(prefs(cx).language, "%A %-d %B")),
                     )
                     .child(
                         IconButton::new("find-next", IconName::ChevronRight)

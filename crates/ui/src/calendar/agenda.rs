@@ -1,10 +1,12 @@
 //! Agenda: the next 30 days as a list grouped by day.
 
+use crate::settings::prefs;
 use chrono::{Datelike, NaiveDate};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::ResponseStatus;
 use mailbox_core::calendar::Occurrence;
+use mailbox_core::dates::LocalizedFormat;
 
 use super::layout;
 use super::{CalendarView, ViewData};
@@ -43,8 +45,12 @@ impl CalendarView {
             return div().id("agenda").size_full().child(
                 EmptyState::new(IconName::CalendarCheck, tr(cx, "Nothing planned")).description(
                     tr(cx, "No events between {} and {}. Press N to create one.")
-                        .replacen("{}", &self.anchor.format("%-d %b").to_string(), 1)
-                        .replacen("{}", &last.format("%-d %b").to_string(), 1),
+                        .replacen(
+                            "{}",
+                            &self.anchor.format_in(prefs(cx).language, "%-d %b"),
+                            1,
+                        )
+                        .replacen("{}", &last.format_in(prefs(cx).language, "%-d %b"), 1),
                 ),
             );
         }
@@ -92,7 +98,10 @@ impl CalendarView {
                                             .text_size(TEXT_XS)
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(t.text_subtle)
-                                            .child(day.format("%a").to_string().to_uppercase()),
+                                            .child(
+                                                day.format_in(prefs(cx).language, "%a")
+                                                    .to_uppercase(),
+                                            ),
                                     ),
                             )
                             .child(
@@ -100,9 +109,9 @@ impl CalendarView {
                                     .text_size(TEXT_XS)
                                     .text_color(if is_today { t.accent } else { t.text_muted })
                                     .child(if (day - data.today).num_days().abs() <= 1 {
-                                        layout::relative_day(day, data.today, |text| tr(cx, text))
+                                        layout::relative_day(day, data.today, prefs(cx).language)
                                     } else {
-                                        day.format("%B").to_string()
+                                        day.format_in(prefs(cx).language, "%B")
                                     }),
                             ),
                     )
@@ -150,7 +159,7 @@ impl CalendarView {
                     .replacen("{}", &((last - first).num_days() + 1).to_string(), 1)
             }
         } else {
-            layout::time_range_label(occurrence, |text| tr(cx, text))
+            layout::time_range_label(occurrence, prefs(cx).language)
         };
         let guests = match event.attendees.len() {
             1 => tr(cx, "1 guest").to_owned(),

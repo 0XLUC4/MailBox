@@ -30,7 +30,7 @@ use mailbox_core::{Account, Calendar, CalendarEvent, Id, ResponseStatus};
 use crate::actions;
 use crate::app_state::{AppState, Module};
 use crate::components::{Button, Icon, IconButton, IconName, toolbar_separator};
-use crate::settings::tr;
+use crate::settings::{prefs, tr};
 use crate::theme::{
     DEFAULT_ACCENT, ICON_SIZE, ICON_SIZE_SM, PANE_HEADER_HEIGHT, RADIUS_LG, RADIUS_MD, RADIUS_SM,
     RADIUS_XL, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_LG, TEXT_MD, TEXT_SM,
@@ -1184,7 +1184,7 @@ impl CalendarView {
     // ---------- toolbar ----------
 
     fn render_toolbar(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let title = layout::title(self.kind, self.anchor);
+        let title = layout::title(self.kind, self.anchor, prefs(cx).language);
         let picker_open = self.picker.is_some();
         let segmented = div()
             .flex()

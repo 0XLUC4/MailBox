@@ -5,6 +5,7 @@
 
 pub mod command;
 pub mod compose;
+pub mod dates;
 pub mod error;
 pub mod mail_ops;
 pub mod model;

@@ -2,6 +2,8 @@
 //! top, filters, sort, multi-select (Ctrl/Shift), keyboard navigation, hover quick actions,
 //! drag to a folder and a context menu.
 
+use mailbox_core::dates::LocalizedFormat;
+use mailbox_core::settings::Language;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -42,15 +44,15 @@ const COMPACT_ROW_HEIGHT: f32 = 58.;
 const COMPACT_CHILD_ROW_HEIGHT: f32 = 36.;
 
 /// "14:05" today, "Mon" this week, "03 Nov" otherwise.
-pub fn short_date(date: DateTime<Utc>) -> String {
+pub fn short_date(date: DateTime<Utc>, language: Language) -> String {
     let local = date.with_timezone(&Local);
     let now = Local::now();
     if local.date_naive() == now.date_naive() {
         local.format("%H:%M").to_string()
     } else if (now - local).num_days() < 7 {
-        local.format("%a %H:%M").to_string()
+        local.format_in(language, "%a %H:%M")
     } else if local.year() == now.year() {
-        local.format("%d %b").to_string()
+        local.format_in(language, "%d %b")
     } else {
         local.format("%d/%m/%Y").to_string()
     }
@@ -62,13 +64,13 @@ fn due_label(due: NaiveDate, cx: &App) -> (String, bool) {
     let days = (due - today).num_days();
     match days {
         d if d < 0 => (
-            tr(cx, "Overdue {}").replace("{}", &due.format("%d %b").to_string()),
+            tr(cx, "Overdue {}").replace("{}", &due.format_in(prefs(cx).language, "%d %b")),
             true,
         ),
         0 => (tr(cx, "Due today").into(), true),
         1 => (tr(cx, "Due tomorrow").into(), false),
         _ => (
-            tr(cx, "Due {}").replace("{}", &due.format("%a %d %b").to_string()),
+            tr(cx, "Due {}").replace("{}", &due.format_in(prefs(cx).language, "%a %d %b")),
             false,
         ),
     }
@@ -833,7 +835,7 @@ impl MessageListView {
             .text_size(TEXT_SM)
             .text_color(if unread { t.accent } else { t.text_subtle })
             .when(unread, |el| el.font_weight(FontWeight::MEDIUM))
-            .child(short_date(message.date));
+            .child(short_date(message.date, prefs(cx).language));
 
         let first_line = div()
             .flex()

@@ -2,6 +2,8 @@
 //! "Reminders" window (dismiss, snooze 5/10/15 min, open the event).
 //! Dismissed/snoozed state is kept for the session only.
 
+use crate::settings::prefs;
+use mailbox_core::dates::LocalizedFormat;
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Local, Utc};
@@ -302,14 +304,16 @@ impl Render for ReminderWindow {
                                                 "{} - {}",
                                                 when_label(event.start, now, |text| tr(cx, text)),
                                                 if event.all_day {
-                                                    local_start.format("%a %-d %b").to_string()
+                                                    local_start
+                                                        .format_in(prefs(cx).language, "%a %-d %b")
                                                 } else {
                                                     format!(
                                                         "{} {}",
-                                                        local_start.format("%a"),
+                                                        local_start
+                                                            .format_in(prefs(cx).language, "%a"),
                                                         layout::time_range_label(
                                                             &reminder.occurrence,
-                                                            |text| tr(cx, text)
+                                                            prefs(cx).language
                                                         )
                                                     )
                                                 }

@@ -7,9 +7,11 @@
 
 use gpui::component::input;
 use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, Window};
+use mailbox_core::settings::Language;
 
 use crate::GoToSettings;
 use crate::actions::OpenAbout;
+use crate::settings::{prefs, tr};
 
 gpui::actions!(
     mailbox,
@@ -35,37 +37,53 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-w", CloseWindow, None),
         KeyBinding::new("cmd-m", Minimize, None),
     ]);
-    cx.set_menus([
+    set_menus(cx);
+}
+
+/// Builds the menu bar in the current language. Called again when the language changes.
+pub fn set_menus(cx: &mut App) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let app: &App = cx;
+    let t = |english| tr(app, english);
+    let menus = vec![
         // macOS names the first menu after the app itself.
         Menu::new("Mailbox").items([
-            MenuItem::action("About Mailbox", OpenAbout),
+            MenuItem::action(t("About Mailbox"), OpenAbout),
             MenuItem::separator(),
-            MenuItem::action("Settings…", GoToSettings),
+            MenuItem::action(t("Settings…"), GoToSettings),
             MenuItem::separator(),
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::os_submenu(t("Services"), SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Hide Mailbox", Hide),
-            MenuItem::action("Hide Others", HideOthers),
-            MenuItem::action("Show All", ShowAll),
+            MenuItem::action(t("Hide Mailbox"), Hide),
+            MenuItem::action(t("Hide Others"), HideOthers),
+            MenuItem::action(t("Show All"), ShowAll),
             MenuItem::separator(),
-            MenuItem::action("Quit Mailbox", Quit),
+            MenuItem::action(t("Quit Mailbox"), Quit),
         ]),
-        Menu::new("Edit").items([
-            MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
-            MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
+        // "Edit" alone already translates to the verb "Modifier".
+        Menu::new(match prefs(app).language {
+            Language::En => "Edit",
+            Language::Fr => "Édition",
+        })
+        .items([
+            MenuItem::os_action(t("Undo"), input::Undo, OsAction::Undo),
+            MenuItem::os_action(t("Redo"), input::Redo, OsAction::Redo),
             MenuItem::separator(),
-            MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
-            MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
-            MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
-            MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
+            MenuItem::os_action(t("Cut"), input::Cut, OsAction::Cut),
+            MenuItem::os_action(t("Copy"), input::Copy, OsAction::Copy),
+            MenuItem::os_action(t("Paste"), input::Paste, OsAction::Paste),
+            MenuItem::os_action(t("Select All"), input::SelectAll, OsAction::SelectAll),
         ]),
-        Menu::new("Window").items([
-            MenuItem::action("Minimize", Minimize),
-            MenuItem::action("Zoom", Zoom),
+        Menu::new(t("Window")).items([
+            MenuItem::action(t("Minimize"), Minimize),
+            MenuItem::action(t("Zoom"), Zoom),
             MenuItem::separator(),
-            MenuItem::action("Close Window", CloseWindow),
+            MenuItem::action(t("Close Window"), CloseWindow),
         ]),
-    ]);
+    ];
+    cx.set_menus(menus);
 }
 
 fn with_active_window(cx: &mut App, run: fn(&mut Window)) {

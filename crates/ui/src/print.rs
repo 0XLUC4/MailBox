@@ -9,7 +9,7 @@ use mailbox_core::{Folder, Id, Message, export};
 
 use crate::app_state::AppState;
 use crate::mail::html;
-use crate::settings::tr;
+use crate::settings::{prefs, tr};
 use crate::sync_bridge;
 
 fn report(state: &Entity<AppState>, message: impl Into<String>, cx: &mut App) {
@@ -49,7 +49,7 @@ pub fn print_message(state: &Entity<AppState>, id: Id, cx: &mut App) {
     let Some(message) = message(state, id, cx) else {
         return;
     };
-    let page = export::print_html(&message, &body_text(&message));
+    let page = export::print_html(&message, &body_text(&message), prefs(cx).language);
     let path = std::env::temp_dir()
         .join("mailbox-print")
         .join(format!("message-{id}.html"));

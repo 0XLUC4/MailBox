@@ -11,6 +11,7 @@
 //! macOS and Linux: a system notification through `osascript` / `notify-send` (clicking it
 //! does not open the message), the in-app toasts and the title.
 
+use mailbox_core::dates::LocalizedFormat;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
@@ -203,8 +204,7 @@ pub fn reminder(title: &str, start: DateTime<Utc>, cx: &App) {
     }
     let when = start
         .with_timezone(&Local)
-        .format("%a %d %b, %H:%M")
-        .to_string();
+        .format_in(prefs(cx).language, "%a %d %b, %H:%M");
     let title = if title.trim().is_empty() {
         tr(cx, "Reminder")
     } else {
