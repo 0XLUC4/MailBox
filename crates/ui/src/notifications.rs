@@ -1,14 +1,14 @@
 //! Desktop notifications and the unread count of the main window.
 //!
 //! - New mail (called by the sync bridge with the ids that just arrived in an inbox): muted
-//!   conversations are archived silently, automatic replies are queued, then one Windows toast
-//!   shows the sender and subject (`Settings::notify_new_mail`, `notify_sound`).
+//!   conversations are archived silently, automatic replies are queued, then one system
+//!   notification shows the sender and subject (`Settings::notify_new_mail`, `notify_sound`).
 //! - Reminders: [`reminder`] (`Settings::notify_reminders`).
-//! - Clicking a toast brings the main window forward (and opens the message).
+//! - Windows: a toast; clicking it brings the main window forward (and opens the message).
+//! - macOS: Notification Center through `osascript`; Linux: the desktop's notification server
+//!   through `notify-send` (libnotify). Neither reports clicks.
 //! - The window title (shown on the taskbar button) carries the inbox unread count. A real
 //!   overlay badge needs `ITaskbarList3` (unsafe COM), which this workspace forbids.
-//!
-//! Other platforms: only the in-app toasts (the bridge already shows one) and the title.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
@@ -270,5 +270,45 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    pub fn show(_title: &str, _body: &str, _sound: bool, _on_click: impl Fn() + Send + 'static) {}
+    use std::process::Command;
+
+    /// Runs the notifier in the background: the app never waits for it.
+    fn spawn(mut command: Command) {
+        std::thread::spawn(move || match command.output() {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => crate::log::error(format_args!(
+                "notification failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(err) => crate::log::error(format_args!("notification failed: {err}")),
+        });
+    }
+
+    /// Title and body are passed as `argv`, never pasted into the script.
+    #[cfg(target_os = "macos")]
+    pub fn show(title: &str, body: &str, sound: bool, _on_click: impl Fn() + Send + 'static) {
+        let sound = if sound { " sound name \"Glass\"" } else { "" };
+        let script = format!(
+            "on run argv
+display notification (item 2 of argv) with title (item 1 of argv){sound}
+end run"
+        );
+        let mut command = Command::new("/usr/bin/osascript");
+        command.args(["-e", script.as_str(), title, body]);
+        spawn(command);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn show(title: &str, body: &str, sound: bool, _on_click: impl Fn() + Send + 'static) {
+        let mut command = Command::new("notify-send");
+        command.args(["--app-name=Mailbox", "--icon=mail-unread", "--category=email"]);
+        if sound {
+            command.arg("--hint=string:sound-name:message-new-email");
+        } else {
+            command.arg("--hint=boolean:suppress-sound:true");
+        }
+        // `--` so a title starting with "-" is not read as an option.
+        command.args(["--", title, body]);
+        spawn(command);
+    }
 }
