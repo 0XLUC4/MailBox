@@ -669,6 +669,29 @@ impl CalendarCommand {
     }
 }
 
+/// Moves a series' EXDATEs and its exceptions' RECURRENCE-IDs by `delta` (the series start
+/// moved), so they keep matching the occurrences they skip or replace.
+fn shift_series(
+    tx: &mut Tx<'_>,
+    store: &Store,
+    series_id: Id,
+    details: &mut EventDetails,
+    delta: Duration,
+) -> Result<()> {
+    if delta == Duration::zero() {
+        return Ok(());
+    }
+    for exdate in &mut details.exdates {
+        *exdate += delta;
+    }
+    for exception in exceptions_of(store, series_id)? {
+        let (exception_event, mut exception_details) = tx.load(exception.event_id)?;
+        exception_details.recurrence_id = exception_details.recurrence_id.map(|at| at + delta);
+        tx.write(exception_event, Some(exception_details))?;
+    }
+    Ok(())
+}
+
 /// Applies a calendar command (inside the caller's transaction) and returns its inverse.
 pub fn apply(store: &Store, command: CalendarCommand) -> Result<Command> {
     let mut tx = Tx::new(store);
@@ -678,7 +701,14 @@ pub fn apply(store: &Store, command: CalendarCommand) -> Result<Command> {
             if event.id == 0 {
                 tx.create(*event, *details)?;
             } else {
-                tx.write(*event, Some(*details))?;
+                // A series whose start moved: skipped/modified occurrences move with it.
+                let (previous, _) = tx.load(event.id)?;
+                let mut details = *details;
+                if event.recurrence.is_some() {
+                    let delta = event.start - previous.start;
+                    shift_series(&mut tx, store, event.id, &mut details, delta)?;
+                }
+                tx.write(*event, Some(details))?;
             }
         }
         CalendarCommand::Move { id, start, end } => {
@@ -688,16 +718,8 @@ pub fn apply(store: &Store, command: CalendarCommand) -> Result<Command> {
             event.end = end;
             validate(&event)?;
             let mut details = details;
-            if event.recurrence.is_some() && delta != Duration::zero() {
-                for exdate in &mut details.exdates {
-                    *exdate += delta;
-                }
-                for exception in exceptions_of(store, id)? {
-                    let (exception_event, mut exception_details) = tx.load(exception.event_id)?;
-                    exception_details.recurrence_id =
-                        exception_details.recurrence_id.map(|at| at + delta);
-                    tx.write(exception_event, Some(exception_details))?;
-                }
+            if event.recurrence.is_some() {
+                shift_series(&mut tx, store, id, &mut details, delta)?;
             }
             tx.write(event, Some(details))?;
         }
@@ -1159,6 +1181,44 @@ mod tests {
         assert!(dump(&store).is_empty());
         history.redo(&store).unwrap();
         assert_eq!(dump(&store), created);
+    }
+
+    #[test]
+    fn saving_a_series_at_a_new_time_keeps_skipped_occurrences_skipped() {
+        let store = store();
+        let cal = calendar(&store);
+        let mut history = History::new();
+        let start = utc(2026, 11, 16, 9, 0);
+        let id = create(
+            &store,
+            &mut history,
+            event(cal.id, start, Some("FREQ=DAILY;COUNT=5")),
+        );
+        run(
+            &store,
+            &mut history,
+            CalendarCommand::SkipOccurrence {
+                series_id: id,
+                occurrence: start + Duration::days(1),
+            },
+        );
+        let series = store.require::<CalendarEvent>(id).unwrap();
+        run(
+            &store,
+            &mut history,
+            CalendarCommand::Save {
+                event: Box::new(CalendarEvent {
+                    start: series.start + Duration::hours(1),
+                    end: series.end + Duration::hours(1),
+                    ..series
+                }),
+                details: Box::new(details(&store, id).unwrap()),
+            },
+        );
+        assert_eq!(
+            details(&store, id).unwrap().exdates,
+            vec![start + Duration::days(1) + Duration::hours(1)]
+        );
     }
 
     #[test]
