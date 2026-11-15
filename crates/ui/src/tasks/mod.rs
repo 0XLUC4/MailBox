@@ -896,16 +896,14 @@ impl TasksView {
                             .text_size(TEXT_XS)
                             .text_color(t.text_muted)
                             .child(Icon::new(IconName::Mail).size(ICON_SIZE_XS))
-                            .child(
-                                div().min_w(px(0.)).truncate().child(format!(
+                            .child(div().min_w(px(0.)).truncate().child(format!(
                                     "{} · {}",
                                     message.from.display(),
                                     message
                                         .date
                                         .with_timezone(&Local)
                                         .format_in(prefs(cx).language, "%-d %b")
-                                )),
-                            ),
+                                ))),
                     ),
             )
             .child(

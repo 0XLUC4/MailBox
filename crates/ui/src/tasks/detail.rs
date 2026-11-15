@@ -731,19 +731,16 @@ impl TasksView {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(subject),
                             )
-                            .child(
-                                div()
-                                    .text_size(TEXT_SM)
-                                    .text_color(t.text_muted)
-                                    .child(format!(
+                            .child(div().text_size(TEXT_SM).text_color(t.text_muted).child(
+                                format!(
                                         "{} · {}",
                                         tr(cx, "From {}").replace("{}", &message.from.display()),
                                         message
                                             .date
                                             .with_timezone(&Local)
                                             .format_in(prefs(cx).language, "%a %-d %b %Y, %H:%M")
-                                    )),
-                            )
+                                    ),
+                            ))
                             .when(!message.preview.trim().is_empty(), |el| {
                                 el.child(
                                     div()

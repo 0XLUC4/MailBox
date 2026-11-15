@@ -211,7 +211,10 @@ pub fn one_folder_per_role(folders: Vec<(RemoteFolder, bool)>) -> Vec<RemoteFold
         .into_iter()
         .enumerate()
         .map(|(index, (mut folder, _))| {
-            if owners.get(&folder.role).is_some_and(|(owner, _)| *owner != index) {
+            if owners
+                .get(&folder.role)
+                .is_some_and(|(owner, _)| *owner != index)
+            {
                 folder.role = FolderRole::Custom;
             }
             folder
@@ -458,7 +461,10 @@ mod tests {
         let listed = |path: &str, attributes: &[&str]| {
             let attributes = attrs(attributes);
             let role = classify_folder(path, &attributes).unwrap();
-            (RemoteFolder::new(path, Some("/"), role), has_special_use(&attributes))
+            (
+                RemoteFolder::new(path, Some("/"), role),
+                has_special_use(&attributes),
+            )
         };
         let folders = one_folder_per_role(vec![
             listed("INBOX", &[]),

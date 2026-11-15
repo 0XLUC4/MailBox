@@ -256,8 +256,14 @@ impl Store {
             for merge in &merged {
                 let ids = [merge.kept, merge.removed];
                 let conn = store.conn();
-                conn.execute("UPDATE messages SET folder_id = ?1 WHERE folder_id = ?2", ids)?;
-                conn.execute("UPDATE folders SET parent_id = ?1 WHERE parent_id = ?2", ids)?;
+                conn.execute(
+                    "UPDATE messages SET folder_id = ?1 WHERE folder_id = ?2",
+                    ids,
+                )?;
+                conn.execute(
+                    "UPDATE folders SET parent_id = ?1 WHERE parent_id = ?2",
+                    ids,
+                )?;
                 conn.execute("DELETE FROM folders WHERE id = ?1", [merge.removed])?;
             }
             Ok(merged)
