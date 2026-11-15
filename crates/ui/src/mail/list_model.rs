@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, Duration, FixedOffset, NaiveDate};
-use mailbox_core::{Importance, Message};
+use mailbox_core::{Id, Importance, Message};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Filter {
@@ -36,21 +36,27 @@ impl Filter {
         }
     }
 
-    /// `mention_tokens` are lowercase names; a mention is `@name` in the body.
-    pub fn matches(self, message: &Message, mention_tokens: &[String]) -> bool {
+    /// `mentioned`: ids of the messages that mention the user (see [`mentions`]).
+    pub fn matches(self, message: &Message, mentioned: &HashSet<Id>) -> bool {
         match self {
             Self::All => true,
             Self::Unread => !message.flags.read,
             Self::Flagged => message.flags.flagged,
             Self::Attachments => !message.attachments.is_empty(),
-            Self::Mentions => {
-                let body = message.body_text.to_lowercase();
-                mention_tokens
-                    .iter()
-                    .any(|token| body.contains(&format!("@{token}")))
-            }
+            Self::Mentions => mentioned.contains(&message.id),
         }
     }
+}
+
+/// Whether `body` mentions one of `tokens` (lowercase names) as `@name`.
+pub fn mentions(body: &str, tokens: &[String]) -> bool {
+    if tokens.is_empty() || !body.contains('@') {
+        return false;
+    }
+    let body = body.to_lowercase();
+    tokens
+        .iter()
+        .any(|token| body.contains(&format!("@{token}")))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -124,7 +130,8 @@ pub struct BuildContext<'a> {
     pub today: NaiveDate,
     /// Offset used to turn message timestamps into local days.
     pub offset: FixedOffset,
-    pub mention_tokens: &'a [String],
+    /// Messages mentioning the user, for [`Filter::Mentions`].
+    pub mentioned: &'a HashSet<Id>,
     /// Thread ids the user expanded.
     pub expanded: &'a HashSet<String>,
 }
@@ -281,7 +288,7 @@ pub fn build_rows(messages: &[Message], options: &ListOptions, ctx: &BuildContex
     let mut units: Vec<Unit> = Vec::new();
     let mut by_thread: HashMap<&str, usize> = HashMap::new();
     for (index, message) in messages.iter().enumerate() {
-        if !options.filter.matches(message, ctx.mention_tokens) {
+        if !options.filter.matches(message, ctx.mentioned) {
             continue;
         }
         let existing = options
@@ -415,12 +422,12 @@ mod tests {
         }
     }
 
-    fn ctx<'a>(expanded: &'a HashSet<String>, tokens: &'a [String]) -> BuildContext<'a> {
+    fn ctx<'a>(expanded: &'a HashSet<String>, mentioned: &'a HashSet<Id>) -> BuildContext<'a> {
         BuildContext {
             // Saturday 14 Nov 2026.
             today: NaiveDate::from_ymd_opt(2026, 11, 14).unwrap(),
             offset: FixedOffset::east_opt(0).unwrap(),
-            mention_tokens: tokens,
+            mentioned,
             expanded,
         }
     }
@@ -466,7 +473,11 @@ mod tests {
         messages[4].flags.pinned = true;
         messages[2].flags.read = false;
         let expanded = HashSet::from(["a".to_owned()]);
-        let rows = build_rows(&messages, &ListOptions::default(), &ctx(&expanded, &[]));
+        let rows = build_rows(
+            &messages,
+            &ListOptions::default(),
+            &ctx(&expanded, &HashSet::new()),
+        );
         assert_eq!(
             summary(&rows, &messages),
             vec![
@@ -496,7 +507,7 @@ mod tests {
             descending: false,
             ..ListOptions::default()
         };
-        let rows = build_rows(&messages, &flat, &ctx(&expanded, &[]));
+        let rows = build_rows(&messages, &flat, &ctx(&expanded, &HashSet::new()));
         assert_eq!(
             summary(&rows, &messages),
             vec!["# Pinned (1)", "5x1", "4x1", "3x1", "2x1", "1x1"]
@@ -519,6 +530,11 @@ mod tests {
         messages[2].flags.flagged = true;
         let none = HashSet::new();
         let tokens = vec!["alex".to_owned()];
+        let mentioned: HashSet<Id> = messages
+            .iter()
+            .filter(|message| mentions(&message.body_text, &tokens))
+            .map(|message| message.id)
+            .collect();
         let only = |filter| {
             let options = ListOptions {
                 filter,
@@ -526,7 +542,7 @@ mod tests {
                 ..ListOptions::default()
             };
             summary(
-                &build_rows(&messages, &options, &ctx(&none, &tokens)),
+                &build_rows(&messages, &options, &ctx(&none, &mentioned)),
                 &messages,
             )
         };
@@ -539,11 +555,19 @@ mod tests {
             grouping: Grouping::Sender,
             ..ListOptions::default()
         };
-        let rows = build_rows(&messages, &by_sender, &ctx(&none, &tokens));
+        let rows = build_rows(&messages, &by_sender, &ctx(&none, &mentioned));
         assert_eq!(
             summary(&rows, &messages),
             vec!["# Ada (1)", "2x1", "# bob (2)", "1x1", "3x1"]
         );
+    }
+
+    #[test]
+    fn mentions_need_the_at_sign() {
+        let tokens = vec!["alex".to_owned()];
+        assert!(mentions("Thanks @Alex!", &tokens));
+        assert!(!mentions("Thanks Alex", &tokens));
+        assert!(!mentions("@alex", &[]));
     }
 
     #[test]

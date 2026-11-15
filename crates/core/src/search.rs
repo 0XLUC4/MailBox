@@ -1,4 +1,5 @@
-//! Mail search query language, parsed then executed in memory against the store.
+//! Mail search query language, parsed then executed against the store: SQLite narrows the
+//! candidates (see [`sql_filter`]), [`SearchQuery::matches`] decides on each streamed row.
 //!
 //! ```text
 //! budget "q3 plan" from:ada to:bob subject:report body:invoice has:attachment
@@ -15,6 +16,7 @@
 use std::collections::HashMap;
 
 use chrono::{NaiveDate, NaiveTime};
+use rusqlite::types::Value;
 
 use crate::error::Result;
 use crate::model::{Id, Importance, Message};
@@ -284,26 +286,122 @@ pub fn folder_names(store: &Store) -> Result<FolderNames> {
     Ok(names)
 }
 
+/// Lowercase substring test in SQL that is a superset of [`contains`] over `columns`, or None
+/// when SQLite cannot guarantee it: its `lower()` only folds ASCII, so only ASCII needles
+/// qualify, and JSON columns escape `"`, `\` and control characters.
+fn sql_contains(columns: &[&str], needle: &str) -> Option<(String, Vec<Value>)> {
+    let plain = |c: char| c.is_ascii() && !c.is_ascii_control() && c != '"' && c != '\\';
+    if needle.is_empty() || !needle.chars().all(plain) {
+        return None;
+    }
+    let haystack = columns.join(" || char(10) || ");
+    let mut sql = format!("instr(lower({haystack}), ?)");
+    // The only non-ASCII letters Rust lowercases to ASCII: U+0130 (to "i") and U+212A (to "k").
+    if needle.contains(['i', 'k']) {
+        sql = format!("({sql} OR instr({haystack}, '\u{130}') OR instr({haystack}, '\u{212A}'))");
+    }
+    Some((sql, vec![Value::Text(needle.to_owned())]))
+}
+
+/// SQL condition for one filter, and whether it is exact (else a superset, only usable when the
+/// term is not negated). None: no narrowing.
+fn sql_filter(filter: &Filter, folders: &FolderNames) -> Option<(String, Vec<Value>, bool)> {
+    let exact = |sql: &str, params: Vec<Value>| Some((sql.to_owned(), params, true));
+    let text = |value: &str| Value::Text(value.to_owned());
+    let midnight = |date: &NaiveDate| Value::Text(format!("{}T00:00:00Z", date.format("%Y-%m-%d")));
+    let superset = |columns: &[&str], needle: &str| {
+        sql_contains(columns, needle).map(|(sql, params)| (sql, params, false))
+    };
+    match filter {
+        Filter::Text(needle) => superset(
+            &[
+                "subject",
+                "from_name",
+                "from_email",
+                "to_json",
+                "cc_json",
+                "preview",
+                "body_text",
+                "categories_json",
+            ],
+            needle,
+        ),
+        Filter::From(needle) => superset(&["from_name", "from_email"], needle),
+        Filter::To(needle) => superset(&["to_json", "cc_json"], needle),
+        Filter::Subject(needle) => superset(&["subject"], needle),
+        Filter::Body(needle) => superset(&["body_text", "preview"], needle),
+        Filter::Category(needle) => superset(&["categories_json"], needle),
+        Filter::HasAttachment => exact("attachments_json <> '[]'", vec![]),
+        Filter::Is(Status::Unread) => exact("is_read = 0", vec![]),
+        Filter::Is(Status::Read) => exact("is_read = 1", vec![]),
+        Filter::Is(Status::Flagged) => exact("is_flagged = 1", vec![]),
+        Filter::Is(Status::Pinned) => exact("is_pinned = 1", vec![]),
+        Filter::Is(Status::Important) => {
+            exact("importance = ?", vec![text(Importance::High.as_str())])
+        }
+        Filter::Importance(importance) => exact("importance = ?", vec![text(importance.as_str())]),
+        Filter::After(start) => exact("date >= ?", vec![midnight(start)]),
+        Filter::Before(end) => exact("date < ?", vec![midnight(end)]),
+        Filter::AllFolders => None,
+        Filter::FolderId(id) => match crate::smart_folder::SmartFolder::from_id(*id) {
+            Some(smart) => exact(smart.condition().as_str(), vec![]),
+            None => exact("folder_id = ?", vec![Value::Integer(*id)]),
+        },
+        Filter::In(name) => {
+            let ids: Vec<String> = folders
+                .iter()
+                .filter(|(_, (folder, role))| {
+                    folder.contains(name.as_str()) || *role == name.as_str()
+                })
+                .map(|(id, _)| id.to_string())
+                .collect();
+            if ids.is_empty() {
+                exact("0", vec![])
+            } else {
+                exact(
+                    format!("folder_id IN ({})", ids.join(", ")).as_str(),
+                    vec![],
+                )
+            }
+        }
+    }
+}
+
 /// Runs `query`, newest first, at most `limit` results. An empty query returns nothing.
+/// Rows are streamed (never all in memory) and the scan stops at `limit`.
 pub fn search(store: &Store, query: &SearchQuery, limit: usize) -> Result<Vec<Message>> {
-    if query.is_empty() {
+    if query.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
-    // A single positive folder id narrows the SQL scan; everything else filters in memory.
-    let folder = query.terms.iter().find_map(|term| match term.filter {
-        Filter::FolderId(id) if !term.negated => Some(id),
-        _ => None,
-    });
-    let candidates: Vec<Message> = match folder {
-        Some(id) => store.list_messages(id)?,
-        None => store.query("ORDER BY date DESC, id DESC", [])?,
-    };
     let folders = folder_names(store)?;
-    Ok(candidates
-        .into_iter()
-        .filter(|message| query.matches(message, &folders))
-        .take(limit)
-        .collect())
+    let mut conditions = vec!["1".to_owned()];
+    let mut params: Vec<Value> = Vec::new();
+    for term in &query.terms {
+        match sql_filter(&term.filter, &folders) {
+            Some((sql, values, exact)) if exact || !term.negated => {
+                let not = if term.negated { "NOT " } else { "" };
+                conditions.push(format!("{not}({sql})"));
+                params.extend(values);
+            }
+            _ => {}
+        }
+    }
+    let clause = format!(
+        "WHERE {} ORDER BY date DESC, id DESC",
+        conditions.join(" AND ")
+    );
+    let mut results = Vec::new();
+    store.scan(
+        &clause,
+        rusqlite::params_from_iter(params),
+        |message: Message| {
+            if query.matches(&message, &folders) {
+                results.push(message);
+            }
+            results.len() < limit
+        },
+    )?;
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -415,6 +513,14 @@ mod tests {
         assert_eq!(ids("in:all"), vec![first.id, second.id]);
         assert_eq!(ids("importance:low"), Vec::<Id>::new());
         assert!(ids("").is_empty());
+        // SQL narrowing must never drop a match the in-memory test accepts.
+        assert_eq!(ids("-is:unread"), vec![second.id]);
+        assert_eq!(ids("-in:inbox"), vec![second.id]);
+        assert_eq!(ids("in:nowhere"), Vec::<Id>::new());
+        assert_eq!(ids("QUARTERLY"), vec![second.id]);
+        assert_eq!(ids("-quarterly"), vec![first.id]);
+        assert_eq!(ids("folder:-1"), vec![first.id]);
+        assert_eq!(ids("folder:-3"), vec![second.id]);
         // The plain store entry point uses the same language.
         assert_eq!(store.search_messages("from:bob", 10).unwrap().len(), 1);
     }

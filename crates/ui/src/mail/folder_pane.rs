@@ -14,7 +14,8 @@ use gpui::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::smart_folder::{self, SmartFolder};
-use mailbox_core::{Account, Command, Folder, FolderRole, Id, mail_ops};
+use mailbox_core::store::FolderCounts;
+use mailbox_core::{Account, Command, Folder, FolderRole, Id, Store, mail_ops};
 
 use super::{DraggedMessages, MailPrefs, ops};
 use crate::app_state::AppState;
@@ -230,6 +231,8 @@ pub struct FolderPaneView {
     collapsed_accounts: HashSet<Id>,
     favorites_collapsed: bool,
     smart_collapsed: bool,
+    /// Badge counts and the `Store::revision` they were read at.
+    counts: (Option<(u64, i64)>, HashMap<Id, FolderCounts>),
     _subscriptions: Vec<Subscription>,
 }
 
@@ -257,8 +260,19 @@ impl FolderPaneView {
             collapsed_accounts: HashSet::new(),
             favorites_collapsed: false,
             smart_collapsed: false,
+            counts: (None, HashMap::new()),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Counts of every (smart) folder, re-read in one query only when the store changed:
+    /// render runs on every frame.
+    fn folder_counts(&mut self, store: &Store) -> &HashMap<Id, FolderCounts> {
+        let revision = store.revision().ok();
+        if revision.is_none() || self.counts.0 != revision {
+            self.counts = (revision, store.folder_counts().unwrap_or_default());
+        }
+        &self.counts.1
     }
 
     /// Adds or removes a favorite; stored in the settings and undoable.
@@ -351,7 +365,7 @@ impl FolderPaneView {
                     let ids: Vec<Id> = state
                         .read(cx)
                         .store()
-                        .list_messages(folder_id)
+                        .list_message_headers(folder_id)
                         .unwrap_or_default()
                         .iter()
                         .map(|message| message.id)
@@ -805,26 +819,30 @@ impl Render for FolderPaneView {
             })
             .collect();
         // Badges: unread, or the total for drafts and flags. Keyed by (smart) folder id.
+        let folder_counts = self.folder_counts(store);
+        let count_of = |id: Id| folder_counts.get(&id).copied().unwrap_or_default();
         let mut counts: HashMap<Id, i64> = HashMap::new();
         for (_, folders) in &folders_by_account {
             for folder in folders {
-                let count = if folder.role == FolderRole::Drafts {
-                    store.message_count(folder.id)
+                let count = count_of(folder.id);
+                let badge = if folder.role == FolderRole::Drafts {
+                    count.total
                 } else {
-                    store.unread_count(folder.id)
+                    count.unread
                 };
-                counts.insert(folder.id, count.unwrap_or(0));
+                counts.insert(folder.id, badge);
             }
         }
         let has_accounts = !folders_by_account.is_empty();
         if has_accounts {
             for smart in SmartFolder::ALL {
-                let count = if smart.counts_all() {
-                    store.message_count(smart.id())
+                let count = count_of(smart.id());
+                let badge = if smart.counts_all() {
+                    count.total
                 } else {
-                    store.unread_count(smart.id())
+                    count.unread
                 };
-                counts.insert(smart.id(), count.unwrap_or(0));
+                counts.insert(smart.id(), badge);
             }
         }
         let multi_account = folders_by_account.len() > 1;
