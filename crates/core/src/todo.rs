@@ -209,7 +209,7 @@ impl TaskCard {
         let repeat = self.details.repeat?;
         let base = self.task.due.unwrap_or(today);
         let next = repeat.next(base)?;
-        let shift = chrono::Duration::days((next - base).num_days());
+        let days = Days::new(u64::try_from((next - base).num_days()).ok()?);
         let mut card = self.clone();
         card.task.id = 0;
         card.task.completed = false;
@@ -218,7 +218,13 @@ impl TaskCard {
         card.details.id = 0;
         card.details.my_day = None;
         card.details.completed_at = None;
-        card.details.reminder = self.details.reminder.map(|reminder| reminder + shift);
+        // Only the first occurrence comes from the flagged email.
+        card.details.message_id = None;
+        // Same local clock time on the new day, across daylight-saving changes.
+        card.details.reminder = self.details.reminder.and_then(|reminder| {
+            let local = reminder.with_timezone(&Local).naive_local().checked_add_days(days)?;
+            Some(local.and_local_timezone(Local).earliest()?.with_timezone(&Utc))
+        });
         for step in &mut card.details.steps {
             step.done = false;
         }
@@ -392,7 +398,8 @@ pub fn task_from_message(message: &Message, now: DateTime<Utc>) -> TaskCard {
     } else {
         subject
     };
-    let mut card = TaskCard::new(message.account_id, title, now);
+    // Kept on this computer (like other tasks) so removing the mail account keeps it.
+    let mut card = TaskCard::new(crate::calendar::LOCAL_ACCOUNT, title, now);
     card.task.notes = format!("From {}", message.from.display());
     card.task.categories = message.categories.clone();
     card.details.message_id = Some(message.id);
@@ -529,6 +536,20 @@ pub(crate) fn apply(store: &Store, command: TaskCommand) -> Result<Command> {
             let next = completed
                 .then(|| previous.next_occurrence(Local::now().date_naive(), now))
                 .flatten();
+            // Complete, reopen, complete: the occurrence created the first time is reused.
+            let next = match next {
+                Some(next) => {
+                    let exists = list_task_cards(store)?.iter().any(|card| {
+                        !card.task.completed
+                            && card.task.id != id
+                            && card.task.title == next.task.title
+                            && card.task.due == next.task.due
+                            && card.details.list_id == next.details.list_id
+                    });
+                    (!exists).then_some(next)
+                }
+                None => None,
+            };
             if let Some(mut next) = next {
                 let next_id = write_task(store, &mut next)?;
                 inverses.push(wrap(TaskCommand::DeleteTasks(vec![next_id])));
@@ -848,6 +869,23 @@ mod tests {
         assert_eq!(next.details.my_day, None);
 
         history.undo(&store).unwrap();
+        assert_eq!(list_task_cards(&store).unwrap(), vec![created.clone()]);
+
+        // Complete, reopen, complete: still one next occurrence.
+        for completed in [true, false, true] {
+            run(
+                &store,
+                &mut history,
+                TaskCommand::SetCompleted {
+                    id: created.id(),
+                    completed,
+                },
+            );
+        }
+        assert_eq!(list_task_cards(&store).unwrap().len(), 2);
+        for _ in 0..3 {
+            history.undo(&store).unwrap();
+        }
         assert_eq!(list_task_cards(&store).unwrap(), vec![created.clone()]);
 
         // Reopening a plain task does not spawn anything.

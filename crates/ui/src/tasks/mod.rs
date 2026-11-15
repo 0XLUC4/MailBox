@@ -1231,6 +1231,18 @@ impl TasksView {
         let Some(selection) = self.selected else {
             return false;
         };
+        // On a completed task the shortcut reopens it (like its checkbox).
+        if let Selection::Task(id) = selection {
+            let store = self.state.read(cx).store();
+            if todo::task_card(store, id)
+                .ok()
+                .flatten()
+                .is_some_and(|card| card.task.completed)
+            {
+                self.reopen(id, cx);
+                return true;
+            }
+        }
         self.check(selection, cx);
         true
     }
