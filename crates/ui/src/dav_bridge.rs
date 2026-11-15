@@ -90,6 +90,16 @@ pub fn status(cx: &App) -> Option<SharedString> {
     bridge.status_line().map(SharedString::from)
 }
 
+/// Local account of the first CardDAV account (where new contacts must go to be synced).
+pub fn contacts_account(cx: &App) -> Option<Id> {
+    let bridge = cx.try_global::<GlobalDavBridge>()?.0.read(cx);
+    bridge
+        .accounts
+        .iter()
+        .find(|account| account.config.contacts)
+        .map(|account| account.account_id)
+}
+
 /// How an invitation leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvitationRoute {

@@ -303,8 +303,11 @@ impl PeopleView {
         cx.notify();
     }
 
-    /// Account new contacts are created in (the first one).
+    /// Account new contacts are created in: the CardDAV one (so they sync), else the first.
     fn account_id(&self, cx: &App) -> Option<Id> {
+        if let Some(account_id) = crate::dav_bridge::contacts_account(cx) {
+            return Some(account_id);
+        }
         let accounts = self.state.read(cx).store().list_accounts().ok()?;
         accounts.first().map(|account| account.id)
     }
