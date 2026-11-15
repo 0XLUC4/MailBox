@@ -1,12 +1,12 @@
-//! Design tokens: colours (light/dark + accent), spacing, radii, font sizes.
+//! Design tokens: colours (light/dark + accent), spacing, radii, fonts and font sizes.
 //!
 //! Read with `let t = theme(cx).clone();` at the top of `render`, then use `t.text`, `t.border`...
 //! The appearance follows the system unless the user picks Light/Dark in settings.
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 use gpui::component::{Theme as ComponentTheme, ThemeMode};
-use gpui::{App, Global, Hsla, Pixels, Window, WindowAppearance, hsla, px, rgb};
+use gpui::{App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, hsla, px, rgb};
 
 // ---------- spacing (4px grid) ----------
 pub const SPACE_0_5: Pixels = px(2.);
@@ -32,6 +32,29 @@ pub const TEXT_MD: Pixels = px(13.);
 pub const TEXT_LG: Pixels = px(15.);
 pub const TEXT_XL: Pixels = px(18.);
 pub const TEXT_2XL: Pixels = px(22.);
+
+// ---------- fonts ----------
+/// UI families, first installed wins; none installed keeps gpui's `.SystemUIFont`.
+const UI_FONTS: &[&str] = if cfg!(target_os = "macos") {
+    &[".SystemUIFont"]
+} else if cfg!(target_os = "windows") {
+    &["Segoe UI Variable Text", "Segoe UI"]
+} else {
+    &["Inter", "Cantarell", "Ubuntu", "Noto Sans", "DejaVu Sans"]
+};
+
+/// Monospace families, first installed wins; none installed keeps gpui-kit's default.
+const MONO_FONTS: &[&str] = if cfg!(target_os = "macos") {
+    &["SF Mono", "Menlo"]
+} else if cfg!(target_os = "windows") {
+    &["Cascadia Mono", "Consolas"]
+} else {
+    &["DejaVu Sans Mono"]
+};
+
+/// The same UI stack for web views (compose editor, rendered mail).
+pub const CSS_UI_FONT: &str = "'Segoe UI Variable Text','Segoe UI',-apple-system,\
+     BlinkMacSystemFont,system-ui,Inter,Cantarell,Ubuntu,'Noto Sans',sans-serif";
 
 // ---------- layout ----------
 pub const RAIL_WIDTH: Pixels = px(56.);
@@ -247,5 +270,31 @@ fn apply(appearance: Appearance, accent: u32, window: &Window, cx: &mut App) {
         None,
         cx,
     );
+    // Mode changes reload the component theme, so the fonts are set again after it.
+    let (ui_font, mono_font) = fonts(cx).clone();
+    ComponentTheme::update(cx, |component| {
+        if let Some(family) = ui_font {
+            component.font_family = family;
+        }
+        if let Some(family) = mono_font {
+            component.mono_font_family = family;
+        }
+    });
     cx.refresh_windows();
+}
+
+/// The installed UI and monospace families, looked up once (listing fonts is slow on macOS).
+/// gpui panics on a family it cannot find, so only installed names are returned.
+fn fonts(cx: &App) -> &'static (Option<SharedString>, Option<SharedString>) {
+    static FONTS: OnceLock<(Option<SharedString>, Option<SharedString>)> = OnceLock::new();
+    FONTS.get_or_init(|| {
+        let installed = cx.text_system().all_font_names();
+        let first_installed = |candidates: &[&str]| {
+            candidates
+                .iter()
+                .find(|candidate| installed.iter().any(|name| name == *candidate))
+                .map(|family| SharedString::from(*family))
+        };
+        (first_installed(UI_FONTS), first_installed(MONO_FONTS))
+    })
 }
