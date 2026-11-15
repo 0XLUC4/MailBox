@@ -30,6 +30,7 @@ const FR: &[(&str, &str)] = &[
     ("What's new", "Nouveautés"),
     ("Update and restart", "Mettre à jour et redémarrer"),
     ("Updating…", "Mise à jour…"),
+    ("Download", "Télécharger"),
     (
         "Offline: could not reach GitHub",
         "Hors connexion : GitHub est injoignable",

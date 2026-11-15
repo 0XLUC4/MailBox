@@ -3,6 +3,8 @@
 //! `mailbox-updater`. `MAILBOX_UPDATE_FEED=<latest.json path or URL>` replaces the published
 //! manifest (tests).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui::base::Selectable;
@@ -21,6 +23,8 @@ use crate::theme::{
 const FIRST_CHECK: Duration = Duration::from_secs(10);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const NOTES_CHARS: usize = 160;
+/// How often the popover redraws the progress bar during a download.
+const PROGRESS_REDRAW: Duration = Duration::from_millis(100);
 
 enum Status {
     NotChecked,
@@ -34,6 +38,8 @@ pub struct Updater {
     status: Status,
     checking: bool,
     installing: bool,
+    /// Bytes downloaded by the running install (written by the background download).
+    downloaded: Arc<AtomicU64>,
     install_error: Option<Error>,
     _timer: Task<()>,
 }
@@ -50,6 +56,7 @@ impl Updater {
             status: Status::NotChecked,
             checking: false,
             installing: false,
+            downloaded: Arc::new(AtomicU64::new(0)),
             install_error: None,
             _timer: timer,
         }
@@ -98,10 +105,26 @@ impl Updater {
         let release = release.clone();
         self.installing = true;
         self.install_error = None;
+        self.downloaded.store(0, Ordering::Relaxed);
         cx.notify();
-        let task = cx
-            .background_executor()
-            .spawn(async move { mailbox_updater::install(&release) });
+        let downloaded = self.downloaded.clone();
+        let task = cx.background_executor().spawn(async move {
+            mailbox_updater::install(&release, |bytes| downloaded.store(bytes, Ordering::Relaxed))
+        });
+        // Redraws the progress bar until the install ends.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(PROGRESS_REDRAW).await;
+                let installing = this.update(cx, |updater, cx| {
+                    cx.notify();
+                    updater.installing
+                });
+                if !matches!(installing, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| match task.await {
             Ok(()) => cx.update(|cx| cx.quit()),
             Err(err) => {
@@ -199,6 +222,7 @@ fn card(updater: &Entity<Updater>, cx: &App) -> AnyElement {
         ));
 
     let installing = state.installing;
+    let downloaded = state.downloaded.load(Ordering::Relaxed);
     div()
         .flex()
         .flex_col()
@@ -228,7 +252,7 @@ fn card(updater: &Entity<Updater>, cx: &App) -> AnyElement {
                         .on_click(move |_, _, cx| cx.open_url(&page_url)),
                 )
             })
-            .child(
+            .child(if cfg!(windows) {
                 Button::new("update-and-restart")
                     .primary()
                     .label(if installing {
@@ -239,10 +263,42 @@ fn card(updater: &Entity<Updater>, cx: &App) -> AnyElement {
                     .disabled(installing)
                     .on_click(move |_, _, cx| {
                         install_updater.update(cx, |updater, cx| updater.install(cx));
-                    }),
-            )
+                    })
+            } else {
+                // No in-place install outside Windows: the release page has the download.
+                let page_url = release.page_url.clone();
+                Button::new("download-update")
+                    .primary()
+                    .label(tr(cx, "Download"))
+                    .on_click(move |_, _, cx| cx.open_url(&page_url))
+            })
+            .when(installing, |el| {
+                el.child(progress_bar(downloaded, release.size, t.border))
+            })
         })
         .into_any_element()
+}
+
+/// Thin blue bar filled to `done / total`.
+fn progress_bar(done: u64, total: u64, track: Hsla) -> impl IntoElement {
+    let fraction = if total == 0 {
+        0.
+    } else {
+        (done as f32 / total as f32).clamp(0., 1.)
+    };
+    div()
+        .w_full()
+        .h(px(4.))
+        .rounded(RADIUS_FULL)
+        .bg(track)
+        .overflow_hidden()
+        .child(
+            div()
+                .h_full()
+                .w(relative(fraction))
+                .rounded(RADIUS_FULL)
+                .bg(rgb(DEFAULT_ACCENT)),
+        )
 }
 
 /// Small square refresh button; the icon spins while `spinning`.

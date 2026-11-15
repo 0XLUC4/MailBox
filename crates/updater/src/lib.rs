@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::io::Read as _;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -243,11 +243,12 @@ pub fn installed_exe() -> Result<PathBuf, Error> {
 }
 
 /// Downloads the exe of `release`, checks its size and SHA-256, writes it next to the running
-/// exe, swaps the two and starts the new one with the same arguments. On `Ok` the caller must
-/// quit right away; on any error the installed exe is left (or put back) as it was.
-pub fn install(release: &Release) -> Result<(), Error> {
+/// exe, swaps the two and starts the new one with the same arguments. `on_progress` receives the
+/// bytes downloaded so far (out of `release.size`). On `Ok` the caller must quit right away; on
+/// any error the installed exe is left (or put back) as it was.
+pub fn install(release: &Release, on_progress: impl Fn(u64)) -> Result<(), Error> {
     let exe = installed_exe()?;
-    let bytes = fetch(&release.package_url, release.size)?;
+    let bytes = fetch(&release.package_url, release.size, on_progress)?;
     verify(&bytes, release)?;
     // Staged next to the exe so the final rename never crosses volumes.
     let staged = staged_exe_path(&exe);
@@ -361,9 +362,10 @@ fn get_text(url: &str) -> Result<String, Error> {
     get(url)?.into_string().map_err(|_| Error::Offline)
 }
 
-/// Downloads at most `size + 1` bytes of `url` (an oversized file then fails [`verify`]); with
-/// the [`FEED_ENV`] test hook, a non-HTTPS URL is a local file path.
-fn fetch(url: &str, size: u64) -> Result<Vec<u8>, Error> {
+/// Downloads at most `size + 1` bytes of `url` (an oversized file then fails [`verify`]),
+/// reporting the bytes read so far; with the [`FEED_ENV`] test hook, a non-HTTPS URL is a local
+/// file path.
+fn fetch(url: &str, size: u64, on_progress: impl Fn(u64)) -> Result<Vec<u8>, Error> {
     if size > MAX_DOWNLOAD {
         return Err(Error::BadResponse);
     }
@@ -371,15 +373,27 @@ fn fetch(url: &str, size: u64) -> Result<Vec<u8>, Error> {
         if std::env::var_os(FEED_ENV).is_none() {
             return Err(Error::BadResponse);
         }
-        return Ok(fs::read(url)?);
+        let bytes = fs::read(url)?;
+        on_progress(bytes.len() as u64);
+        return Ok(bytes);
     }
+    read_with_progress(get(url)?.into_reader().take(size + 1), on_progress)
+}
+
+fn read_with_progress(mut reader: impl Read, on_progress: impl Fn(u64)) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
-    get(url)?
-        .into_reader()
-        .take(size + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| Error::Offline)?;
-    Ok(bytes)
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(bytes),
+            Ok(read) => {
+                bytes.extend_from_slice(&chunk[..read]);
+                on_progress(bytes.len() as u64);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return Err(Error::Offline),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -505,6 +519,17 @@ mod tests {
         assert_eq!(verify(b"abc", &release(HASH, 4)), Err(Error::Checksum));
         assert_eq!(verify(b"abd", &release(HASH, 3)), Err(Error::Checksum));
         assert_eq!(verify(b"abcd", &release(HASH, 3)), Err(Error::Checksum));
+    }
+
+    #[test]
+    fn reports_download_progress() {
+        let data = vec![7u8; 150 * 1024];
+        let seen = std::cell::RefCell::new(Vec::new());
+        let bytes = read_with_progress(&data[..], |done| seen.borrow_mut().push(done)).unwrap();
+        assert_eq!(bytes, data);
+        let seen = seen.into_inner();
+        assert_eq!(seen.last(), Some(&(data.len() as u64)));
+        assert!(seen.windows(2).all(|pair| pair[0] < pair[1]), "{seen:?}");
     }
 
     #[test]
