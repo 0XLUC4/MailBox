@@ -216,7 +216,8 @@ impl ComposeView {
             signature_reply,
             panel: None,
             from_open: false,
-            preview: false,
+            // The formatted message shows next to the editor while typing.
+            preview: true,
             status: SaveStatus::Clean,
             autosave: None,
             closed: false,
@@ -536,7 +537,6 @@ impl ComposeView {
     // ---------- fields ----------
 
     fn focus_body(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.preview = false;
         self.body.update(cx, |body, cx| body.focus(window, cx));
         cx.notify();
     }
@@ -675,7 +675,6 @@ impl ComposeView {
         cx: &mut Context<Self>,
         make: impl FnOnce(&str, Range<usize>) -> Edit,
     ) {
-        self.preview = false;
         self.body.update(cx, |body, cx| {
             let text = body.value();
             let edit = make(&text, body.selected_range());
@@ -739,7 +738,6 @@ impl ComposeView {
     }
 
     fn insert_text(&mut self, text: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        self.preview = false;
         self.body.update(cx, |body, cx| {
             body.replace(text, window, cx);
             body.focus(window, cx);
@@ -1428,25 +1426,39 @@ impl Render for ComposeView {
         let panel = self.panel.map(|panel| self.render_panel(panel, &t, cx));
         let attachments = (!self.draft.meta.attachments.is_empty())
             .then(|| self.render_attachments(&t, cx).into_any_element());
+        let textarea = div()
+            .flex_1()
+            .min_w(px(0.))
+            .min_h(px(0.))
+            .px(SPACE_2)
+            .py(SPACE_1)
+            .child(Textarea::new(&self.body).appearance(false).h_full());
+        // The editor on the left, the message as sent on the right, updated on every keystroke.
         let editor = if self.preview {
             let source = self.body.read(cx).value();
             div()
-                .id("compose-preview")
+                .flex()
+                .flex_row()
                 .flex_1()
                 .min_h(px(0.))
-                .overflow_y_scroll()
-                .px(SPACE_4)
-                .py(SPACE_3)
-                .child(preview::render(&source, &t))
+                .child(textarea)
+                .child(
+                    div()
+                        .id("compose-preview")
+                        .flex_1()
+                        .min_w(px(0.))
+                        .min_h(px(0.))
+                        .overflow_y_scroll()
+                        .border_l_1()
+                        .border_color(t.border_subtle)
+                        .bg(t.surface)
+                        .px(SPACE_4)
+                        .py(SPACE_3)
+                        .child(preview::render(&source, &t)),
+                )
                 .into_any_element()
         } else {
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .px(SPACE_2)
-                .py(SPACE_1)
-                .child(Textarea::new(&self.body).appearance(false).h_full())
-                .into_any_element()
+            textarea.into_any_element()
         };
 
         div()
