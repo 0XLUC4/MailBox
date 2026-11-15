@@ -781,12 +781,90 @@ impl EventEditor {
                 occurrence: occurrence.series_start.unwrap_or(occurrence.event.start),
             },
         };
+        // Organizer: attendees get a cancellation. Invitee: the organizer gets a decline.
+        // (A single skipped occurrence of a series is not announced.)
+        let announce = match &command {
+            CalendarCommand::Delete { id } => {
+                let reply = match self.invitation() {
+                    Some((_, me)) if me.status != ResponseStatus::Declined => {
+                        Some(Some(ResponseStatus::Declined))
+                    }
+                    Some(_) => None,
+                    None => self.sends_invitations().then_some(None),
+                };
+                reply.and_then(|reply| Some((self.stored(*id, cx)?, reply)))
+            }
+            _ => None,
+        };
         let ok = self
             .state
             .update(cx, |state, cx| state.run(command.into_command(), cx));
         if ok {
+            if let Some(((event, details), reply)) = announce {
+                self.notify_attendees(&event, &details, reply, cx);
+            }
             window.remove_window();
         }
+    }
+
+    /// The stored event and its details.
+    fn stored(&self, id: Id, cx: &App) -> Option<(CalendarEvent, EventDetails)> {
+        let store = self.state.read(cx).store();
+        let event = store.get::<CalendarEvent>(id).ok().flatten()?;
+        let details = cal::details(store, id).ok()?;
+        Some((event, details))
+    }
+
+    /// Sends my answer (`reply`) to the organizer, or a cancellation (`None`) to the
+    /// attendees: through the CalDAV server when it schedules, else as an email.
+    fn notify_attendees(
+        &self,
+        event: &CalendarEvent,
+        details: &EventDetails,
+        reply: Option<ResponseStatus>,
+        cx: &mut App,
+    ) {
+        if crate::dav_bridge::server_schedules(event.calendar_id, cx) {
+            crate::dav_bridge::sync_now(cx);
+            return;
+        }
+        let store = self.state.read(cx).store();
+        let account_id = self
+            .calendars
+            .iter()
+            .find(|c| c.id == event.calendar_id)
+            .map_or(0, |c| c.account_id);
+        // A reply leaves from the account that was invited.
+        let invited = |account: &mailbox_core::Account| {
+            reply.is_some()
+                && event
+                    .attendees
+                    .iter()
+                    .any(|a| a.address.email.eq_ignore_ascii_case(&account.email))
+        };
+        let account = store
+            .list_accounts()
+            .ok()
+            .and_then(|accounts| accounts.into_iter().find(|account| invited(account)))
+            .or_else(|| super::invitations::sending_account(store, account_id));
+        let Some(account) = account else {
+            self.state.update(cx, |state, cx| {
+                state.report_error("Saved. Add a mail account to notify the other people", cx)
+            });
+            return;
+        };
+        let state = self.state.clone();
+        let queued = match reply {
+            Some(status) => {
+                super::invitations::queue_reply(&state, &account, event, details, status, cx)
+            }
+            None => super::invitations::queue_cancel(&state, &account, event, details, cx),
+        };
+        state.update(cx, |state, cx| match queued {
+            Ok(()) if reply.is_some() => state.notify_info("Reply queued in the Outbox", cx),
+            Ok(()) => state.notify_info("Cancellation queued in the Outbox", cx),
+            Err(err) => state.report_error(format!("Saved, but not sent: {err}"), cx),
+        });
     }
 
     fn respond(&mut self, status: ResponseStatus, cx: &mut Context<Self>) {
@@ -809,6 +887,9 @@ impl EventEditor {
             )
         });
         if ok {
+            if let Some((event, details)) = self.stored(id, cx) {
+                self.notify_attendees(&event, &details, Some(status), cx);
+            }
             if let Some(attendee) = self
                 .attendees
                 .iter_mut()

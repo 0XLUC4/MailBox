@@ -112,6 +112,13 @@ pub fn is_synced_calendar(calendar_id: Id, cx: &App) -> bool {
     })
 }
 
+/// Whether the CalDAV server of a calendar delivers replies/cancellations itself (then a
+/// sync is enough and no email must be sent).
+pub fn server_schedules(calendar_id: Id, cx: &App) -> bool {
+    cx.try_global::<GlobalDavBridge>()
+        .is_some_and(|global| global.0.read(cx).server_schedules(calendar_id))
+}
+
 /// How an invitation leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvitationRoute {
@@ -695,19 +702,23 @@ impl DavBridge {
         let event = store.get::<CalendarEvent>(event_id).ok().flatten()?;
         let details = calendar::details(store, event_id).ok()?;
         let calendar = store.get::<Calendar>(event.calendar_id).ok().flatten()?;
-        let server_schedules = self.accounts.iter().any(|account| {
-            account.state.collection_of_calendar(calendar.id).is_some()
-                && account
-                    .state
-                    .home(Kind::Calendar)
-                    .is_some_and(|home| home.auto_schedule)
-        });
-        if server_schedules {
+        if self.server_schedules(calendar.id) {
             self.sync_all(true, cx);
             return Some(InvitationRoute::Server);
         }
         self.queue_imip(calendar.account_id, &event, &details, cx)
             .map(|()| InvitationRoute::Email)
+    }
+
+    /// Whether the CalDAV server of this calendar sends scheduling messages itself.
+    fn server_schedules(&self, calendar_id: Id) -> bool {
+        self.accounts.iter().any(|account| {
+            account.state.collection_of_calendar(calendar_id).is_some()
+                && account
+                    .state
+                    .home(Kind::Calendar)
+                    .is_some_and(|home| home.auto_schedule)
+        })
     }
 
     /// Puts an invitation email (iMIP) in the Outbox of the calendar's account (the first
