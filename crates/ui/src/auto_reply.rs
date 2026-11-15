@@ -167,7 +167,19 @@ impl AutoReplyForm {
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dates = parse_date(&self.start.read(cx).value(), "Start")
             .and_then(|start| Ok((start, parse_date(&self.end.read(cx).value(), "End")?)));
-        let (start, end) = match dates {
+        let body = self.body.read(cx).value().to_string();
+        let checked = dates.and_then(|(start, end)| {
+            if let (Some(start), Some(end)) = (start, end)
+                && end < start
+            {
+                return Err("The end date is before the start date".to_owned());
+            }
+            if self.rule.enabled && body.trim().is_empty() {
+                return Err("Write the message to send".to_owned());
+            }
+            Ok((start, end))
+        });
+        let (start, end) = match checked {
             Ok(dates) => dates,
             Err(err) => {
                 return self
@@ -180,7 +192,7 @@ impl AutoReplyForm {
             start,
             end,
             subject: self.subject.read(cx).value().trim().to_owned(),
-            body: self.body.read(cx).value().to_string(),
+            body,
             replied: self.rule.replied.clone(),
         };
         // A new period (or switching on again) answers everyone once more.
