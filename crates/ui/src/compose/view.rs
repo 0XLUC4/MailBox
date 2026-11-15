@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, Local, Utc};
 use gpui::component::WindowExt as _;
+use gpui::component::button::ButtonVariant;
 use gpui::component::input::{Input, InputEvent, InputState, Search, Textarea, TextareaState};
+use gpui::component::tooltip::Tooltip;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_core::compose::markup::{self, Edit, LineFormat};
@@ -22,8 +24,8 @@ use crate::components::{Avatar, Button, Icon, IconButton, IconName, Toolbar, too
 use crate::mail::webview::{MailWebView, WebEvent};
 use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2, SPACE_3, SPACE_4,
-    TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex, theme,
+    ICON_SIZE_SM, ICON_SIZE_XS, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2,
+    SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex, theme,
 };
 
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(1500);
@@ -36,7 +38,7 @@ const TEXT_COLORS: [u32; 10] = [
     0xdb2777,
 ];
 const HIGHLIGHTS: [u32; 6] = [0xfef08a, 0xbbf7d0, 0xbfdbfe, 0xfbcfe8, 0xfed7aa, 0xe5e7eb];
-const SIZES: [(&str, u8); 3] = [("Small", 12), ("Large", 18), ("Huge", 24)];
+const SIZES: [(&'static str, u8); 3] = [("Small", 12), ("Large", 18), ("Huge", 24)];
 const SYMBOLS: [&str; 48] = [
     "😀", "😂", "😊", "😍", "🤔", "😅", "😢", "😮", "👍", "👎", "👏", "🙏", "🎉", "🔥", "✅", "❌",
     "⭐", "❤️", "💡", "📎", "📅", "⏰", "🚀", "☕", "©", "®", "™", "€", "£", "¥", "§", "¶", "°",
@@ -99,6 +101,8 @@ pub struct ComposeView {
     autosave: Option<Task<()>>,
     /// Detached from its host (closed, sent or discarded): never save again.
     closed: bool,
+    /// Send pressed and the draft is being saved for sending: Send is disabled.
+    sending: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -111,21 +115,32 @@ impl ComposeView {
         cx: &mut Context<Self>,
     ) -> Self {
         let message = &draft.message;
-        let to =
-            cx.new(|cx| RecipientField::new(state.clone(), message.to.clone(), "To", window, cx));
-        let cc =
-            cx.new(|cx| RecipientField::new(state.clone(), message.cc.clone(), "Cc", window, cx));
+        let to = cx.new(|cx| {
+            RecipientField::new(state.clone(), message.to.clone(), tr(cx, "To"), window, cx)
+        });
+        let cc = cx.new(|cx| {
+            RecipientField::new(state.clone(), message.cc.clone(), tr(cx, "Cc"), window, cx)
+        });
         let bcc = cx.new(|cx| {
-            RecipientField::new(state.clone(), draft.meta.bcc.clone(), "Bcc", window, cx)
+            RecipientField::new(
+                state.clone(),
+                draft.meta.bcc.clone(),
+                tr(cx, "Bcc"),
+                window,
+                cx,
+            )
         });
         let subject = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Subject")
+                .placeholder(tr(cx, "Subject"))
                 .default_value(message.subject.clone())
         });
         let body = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Write your message…  **bold**  *italic*  - list  > quote")
+                .placeholder(tr(
+                    cx,
+                    "Write your message…  **bold**  *italic*  - list  > quote",
+                ))
                 .searchable(true)
                 .default_value(draft.meta.markup.clone())
         });
@@ -133,12 +148,12 @@ impl ComposeView {
         let signature_new = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(2, 6)
-                .placeholder("Signature for new messages")
+                .placeholder(tr(cx, "Signature for new messages"))
         });
         let signature_reply = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(2, 6)
-                .placeholder("Signature for replies and forwards")
+                .placeholder(tr(cx, "Signature for replies and forwards"))
         });
 
         let mut subscriptions = vec![
@@ -247,6 +262,7 @@ impl ComposeView {
             status: SaveStatus::Clean,
             autosave: None,
             closed: false,
+            sending: false,
             _subscriptions: subscriptions,
         }
     }
@@ -260,7 +276,7 @@ impl ComposeView {
     pub fn title(&self, cx: &App) -> SharedString {
         let subject = self.subject.read(cx).value();
         if subject.trim().is_empty() {
-            "New message".into()
+            tr(cx, "New message").into()
         } else {
             subject
         }
@@ -327,7 +343,7 @@ impl ComposeView {
                 _ => {
                     self.status = SaveStatus::Failed;
                     self.state.update(cx, |state, cx| {
-                        state.report_error("This account has no Drafts folder", cx)
+                        state.report_error(tr(cx, "This account has no Drafts folder"), cx)
                     });
                     cx.notify();
                     return false;
@@ -395,12 +411,14 @@ impl ComposeView {
             return;
         }
         let view = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
+        window.open_alert_dialog(cx, move |alert, _, cx| {
             let view = view.clone();
             alert
-                .title("Discard this draft?")
-                .description("The draft is deleted. Undo with Ctrl+Z.")
-                .ok_text("Discard")
+                .title(tr(cx, "Discard this draft?"))
+                .description(tr(cx, "The draft is deleted. Undo with Ctrl+Z."))
+                .ok_text(tr(cx, "Discard"))
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text(tr(cx, "Cancel"))
                 .show_cancel(true)
                 .on_ok(move |_, window, cx| {
                     view.update(cx, |this, cx| this.discard_now(window, cx))
@@ -441,7 +459,7 @@ impl ComposeView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.closed {
+        if self.closed || self.sending {
             return;
         }
         let fields = [self.to.clone(), self.cc.clone(), self.bcc.clone()];
@@ -453,10 +471,8 @@ impl ComposeView {
             .flat_map(|field| field.read(cx).problems())
             .collect();
         if !problems.is_empty() {
-            let message = format!(
-                "Check these recipients (or use Check names): {}",
-                problems.join(", ")
-            );
+            let message = tr(cx, "Check these recipients (or use Check names): {}")
+                .replace("{}", &problems.join(", "));
             self.state
                 .update(cx, |state, cx| state.report_error(message, cx));
             return;
@@ -466,7 +482,7 @@ impl ComposeView {
             .all(|field| field.read(cx).addresses(cx).is_empty())
         {
             self.state.update(cx, |state, cx| {
-                state.report_error("Add at least one recipient", cx)
+                state.report_error(tr(cx, "Add at least one recipient"), cx)
             });
             self.to.update(cx, |field, cx| field.focus(window, cx));
             return;
@@ -474,8 +490,12 @@ impl ComposeView {
         if !confirmed && self.confirm_send(at, window, cx) {
             return;
         }
+        self.sending = true;
+        cx.notify();
         self.status = SaveStatus::Unsaved;
         if !self.save(cx) || self.message_id() == 0 {
+            self.sending = false;
+            cx.notify();
             return;
         }
         let subject = self.draft.message.subject.clone();
@@ -540,7 +560,7 @@ impl ComposeView {
             this.update(cx, |this, cx| this.send_at(Some(at), window, cx))
                 .ok();
         });
-        crate::later::open_time_picker("Send later", on_pick, window, cx);
+        crate::later::open_time_picker(tr(cx, "Send later"), on_pick, window, cx);
     }
 
     fn pop_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -560,7 +580,7 @@ impl ComposeView {
         match opened {
             Ok(_) => self.detach(window, cx),
             Err(err) => self.state.update(cx, |state, cx| {
-                state.report_error(format!("Cannot open a window: {err}"), cx)
+                state.report_error(format!("{}: {err}", tr(cx, "Cannot open a window")), cx)
             }),
         }
     }
@@ -606,10 +626,11 @@ impl ComposeView {
         }
         self.state.update(cx, |state, cx| {
             if unresolved == 0 {
-                state.notify_info("All names resolved", cx);
+                state.notify_info(tr(cx, "All names resolved"), cx);
             } else {
                 state.report_error(
-                    format!("{unresolved} name(s) could not be resolved (shown in colour)"),
+                    tr(cx, "{} name(s) could not be resolved (shown in colour)")
+                        .replace("{}", &unresolved.to_string()),
                     cx,
                 );
             }
@@ -633,7 +654,7 @@ impl ComposeView {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Attach".into()),
+            prompt: Some(tr(cx, "Attach").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picked.await {
@@ -684,10 +705,11 @@ impl ComposeView {
         if total > LARGE_ATTACHMENTS {
             self.state.update(cx, |state, cx| {
                 state.notify_info(
-                    format!(
+                    tr(
+                        cx,
                         "Attachments total {}: many servers refuse messages over 25 MB",
-                        format_size(total)
-                    ),
+                    )
+                    .replace("{}", &format_size(total)),
                     cx,
                 )
             });
@@ -867,7 +889,7 @@ impl ComposeView {
         };
         self.state.update(cx, |state, cx| {
             if state.run(Command::SaveSignature(Box::new(signature)), cx) {
-                state.notify_info("Signatures saved", cx);
+                state.notify_info(tr(cx, "Signatures saved"), cx);
             }
         });
     }
@@ -1037,9 +1059,11 @@ impl ComposeView {
     fn render_header(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let status = match self.status {
             SaveStatus::Clean => None,
-            SaveStatus::Unsaved => Some("Editing…".to_owned()),
-            SaveStatus::Saved(at) => Some(format!("Draft saved {}", at.format("%H:%M"))),
-            SaveStatus::Failed => Some("Not saved".to_owned()),
+            SaveStatus::Unsaved => Some(tr(cx, "Editing…").to_owned()),
+            SaveStatus::Saved(at) => {
+                Some(tr(cx, "Draft saved {}").replace("{}", &at.format("%H:%M").to_string()))
+            }
+            SaveStatus::Failed => Some(tr(cx, "Not saved").to_owned()),
         };
         div()
             .flex()
@@ -1077,7 +1101,7 @@ impl ComposeView {
             })
             .child(
                 IconButton::new("compose-signature", IconName::Signature)
-                    .tooltip("Signatures")
+                    .tooltip(tr(cx, "Signatures"))
                     .active(self.panel == Some(Panel::Signature))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_panel(Panel::Signature, window, cx)
@@ -1086,13 +1110,13 @@ impl ComposeView {
             .when(self.host == Host::Docked, |el| {
                 el.child(
                     IconButton::new("compose-pop-out", IconName::SquareArrowOutUpRight)
-                        .tooltip("Pop out")
+                        .tooltip(tr(cx, "Pop out"))
                         .on_click(cx.listener(|this, _, window, cx| this.pop_out(window, cx))),
                 )
             })
             .child(
                 IconButton::new("compose-close", IconName::X)
-                    .tooltip("Close (keeps the draft)")
+                    .tooltip(tr(cx, "Close (keeps the draft)"))
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
             )
     }
@@ -1129,11 +1153,19 @@ impl ComposeView {
                             div()
                                 .flex()
                                 .flex_col()
-                                .child(div().text_size(TEXT_SM).child(account.name.clone()))
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(
+                                    div()
+                                        .text_size(TEXT_SM)
+                                        .truncate()
+                                        .child(account.name.clone()),
+                                )
                                 .child(
                                     div()
                                         .text_size(TEXT_XS)
                                         .text_color(t.text_muted)
+                                        .truncate()
                                         .child(account.email.clone()),
                                 ),
                         )
@@ -1160,7 +1192,7 @@ impl ComposeView {
             )
             .with_priority(1)
         });
-        field_row("From", t).child(
+        field_row(tr(cx, "From"), t).child(
             div()
                 .flex()
                 .flex_col()
@@ -1203,14 +1235,14 @@ impl ComposeView {
     }
 
     fn render_fields(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let to_row = field_row("To", t)
+        let to_row = field_row(tr(cx, "To"), t)
             .child(self.to.clone())
             .when(!self.show_cc, |el| {
                 el.child(
                     Button::new("compose-show-cc")
                         .ghost()
                         .compact()
-                        .label("Cc")
+                        .label(tr(cx, "Cc"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.show_cc = true;
                             this.cc.update(cx, |field, cx| field.focus(window, cx));
@@ -1223,7 +1255,7 @@ impl ComposeView {
                     Button::new("compose-show-bcc")
                         .ghost()
                         .compact()
-                        .label("Bcc")
+                        .label(tr(cx, "Bcc"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.show_bcc = true;
                             this.bcc.update(cx, |field, cx| field.focus(window, cx));
@@ -1233,7 +1265,7 @@ impl ComposeView {
             })
             .child(
                 IconButton::new("compose-check-names", IconName::UserCheck)
-                    .tooltip("Check names")
+                    .tooltip(tr(cx, "Check names"))
                     .on_click(cx.listener(|this, _, window, cx| this.check_names(window, cx))),
             );
         div()
@@ -1243,13 +1275,13 @@ impl ComposeView {
             .child(self.render_from(t, cx))
             .child(to_row)
             .when(self.show_cc, |el| {
-                el.child(field_row("Cc", t).child(self.cc.clone()))
+                el.child(field_row(tr(cx, "Cc"), t).child(self.cc.clone()))
             })
             .when(self.show_bcc, |el| {
-                el.child(field_row("Bcc", t).child(self.bcc.clone()))
+                el.child(field_row(tr(cx, "Bcc"), t).child(self.bcc.clone()))
             })
             .child(
-                field_row("Subject", t).child(
+                field_row(tr(cx, "Subject"), t).child(
                     div()
                         .flex_1()
                         .text_size(TEXT_LG)
@@ -1263,7 +1295,9 @@ impl ComposeView {
         let panel = self.panel;
         // The editor below this row is a native window: tooltips go above the buttons.
         let tool = |id: &'static str, icon: IconName, tooltip: &'static str| {
-            IconButton::new(id, icon).tooltip(tooltip).tooltip_above()
+            IconButton::new(id, icon)
+                .tooltip(tr(cx, tooltip))
+                .tooltip_above()
         };
         Toolbar::new()
             .child(tool("fmt-bold", IconName::Bold, "Bold (Ctrl+B)").on_click(
@@ -1388,7 +1422,12 @@ impl ComposeView {
             .border_b_1()
             .border_color(t.border_subtle)
             .text_size(TEXT_SM);
-        let label = |text: &'static str| div().mr(SPACE_1).text_color(t.text_muted).child(text);
+        let label = |text: &'static str| {
+            div()
+                .mr(SPACE_1)
+                .text_color(t.text_muted)
+                .child(tr(cx, text))
+        };
         match panel {
             Panel::Link => bar
                 .child(label("Link"))
@@ -1397,7 +1436,7 @@ impl ComposeView {
                     Button::new("link-insert")
                         .primary()
                         .compact()
-                        .label("Insert")
+                        .label(tr(cx, "Insert"))
                         .on_click(cx.listener(|this, _, window, cx| this.insert_link(window, cx))),
                 )
                 .into_any_element(),
@@ -1431,7 +1470,7 @@ impl ComposeView {
                 .children(SIZES.iter().map(|&(name, size)| {
                     Button::new(("size", u64::from(size)))
                         .compact()
-                        .label(name)
+                        .label(tr(cx, name))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.wrap(format!("{{size={size}}}"), "{/}", window, cx);
                         }))
@@ -1481,13 +1520,13 @@ impl ComposeView {
                             Button::new("signature-save")
                                 .primary()
                                 .compact()
-                                .label("Save signatures")
+                                .label(tr(cx, "Save signatures"))
                                 .on_click(cx.listener(|this, _, _, cx| this.save_signatures(cx))),
                         )
                         .child(
                             Button::new("signature-insert")
                                 .compact()
-                                .label("Insert here")
+                                .label(tr(cx, "Insert here"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.insert_signature(window, cx)
                                 })),
@@ -1525,6 +1564,10 @@ impl ComposeView {
                                 .text_color(t.text_muted),
                         )
                         .child(div().max_w(px(200.)).truncate().child(file.name.clone()))
+                        .tooltip({
+                            let name = SharedString::from(file.name.clone());
+                            move |window, cx| Tooltip::new(name.clone()).build(window, cx)
+                        })
                         .child(
                             div()
                                 .text_size(TEXT_XS)
@@ -1534,8 +1577,8 @@ impl ComposeView {
                         .child(
                             IconButton::new(("attachment-remove", index as u64), IconName::X)
                                 .size(px(20.))
-                                .icon_size(px(12.))
-                                .tooltip("Remove attachment")
+                                .icon_size(ICON_SIZE_XS)
+                                .tooltip(tr(cx, "Remove attachment"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.remove_attachment(index, cx)
                                 })),
@@ -1571,12 +1614,17 @@ impl ComposeView {
                 Button::new("compose-send")
                     .primary()
                     .icon(IconName::SendHorizontal)
-                    .label("Send")
+                    .label(if self.sending {
+                        tr(cx, "Sending…")
+                    } else {
+                        tr(cx, "Send")
+                    })
+                    .disabled(self.sending)
                     .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
             )
             .child(
                 IconButton::new("compose-send-later", IconName::CalendarClock)
-                    .tooltip("Send later")
+                    .tooltip(tr(cx, "Send later"))
                     .on_click(cx.listener(|this, _, window, cx| this.pick_send_time(window, cx))),
             )
             .child(
@@ -1589,12 +1637,12 @@ impl ComposeView {
             .child(div().flex_1())
             .child(
                 IconButton::new("compose-attach", IconName::Paperclip)
-                    .tooltip("Attach files (or drop them here)")
+                    .tooltip(tr(cx, "Attach files (or drop them here)"))
                     .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))),
             )
             .child(
                 IconButton::new("compose-high", IconName::ArrowUp)
-                    .tooltip("High importance")
+                    .tooltip(tr(cx, "High importance"))
                     .active(importance == Importance::High)
                     .on_click(
                         cx.listener(|this, _, _, cx| this.toggle_importance(Importance::High, cx)),
@@ -1602,7 +1650,7 @@ impl ComposeView {
             )
             .child(
                 IconButton::new("compose-low", IconName::ArrowDown)
-                    .tooltip("Low importance")
+                    .tooltip(tr(cx, "Low importance"))
                     .active(importance == Importance::Low)
                     .on_click(
                         cx.listener(|this, _, _, cx| this.toggle_importance(Importance::Low, cx)),
@@ -1611,7 +1659,7 @@ impl ComposeView {
             .child(toolbar_separator(cx))
             .child(
                 IconButton::new("compose-discard", IconName::Trash)
-                    .tooltip("Discard draft")
+                    .tooltip(tr(cx, "Discard draft"))
                     .on_click(cx.listener(|this, _, window, cx| this.discard(window, cx))),
             )
     }

@@ -9,8 +9,10 @@ use mailbox_core::{Address, compose::display_recipient};
 
 use crate::app_state::AppState;
 use crate::components::{Avatar, IconButton, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, TEXT_SM, TEXT_XS, theme,
+    ICON_SIZE_XS, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, TEXT_SM, TEXT_XS,
+    theme,
 };
 
 const MAX_SUGGESTIONS: usize = 6;
@@ -275,8 +277,10 @@ impl RecipientField {
         };
         let tooltip: SharedString = match chip.state {
             ChipState::Valid => chip.address.email.clone().into(),
-            ChipState::Invalid => format!("“{}” is not a valid address", chip.address.email).into(),
-            ChipState::Ambiguous => "Several people match: type more of the name".into(),
+            ChipState::Invalid => tr(cx, "“{}” is not a valid address")
+                .replace("{}", &chip.address.email)
+                .into(),
+            ChipState::Ambiguous => tr(cx, "Several people match: type more of the name").into(),
         };
         div()
             .id(("recipient-chip", index as u64))
@@ -297,9 +301,9 @@ impl RecipientField {
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .child(
                 IconButton::new(("recipient-remove", index as u64), IconName::X)
-                    .size(px(18.))
-                    .icon_size(px(12.))
-                    .tooltip("Remove")
+                    .size(px(20.))
+                    .icon_size(ICON_SIZE_XS)
+                    .tooltip(tr(cx, "Remove"))
                     .on_click(cx.listener(move |this, _, _, cx| this.remove(index, cx))),
             )
     }
@@ -336,6 +340,7 @@ impl RecipientField {
                         div()
                             .flex()
                             .flex_col()
+                            .flex_1()
                             .min_w(px(0.))
                             .child(
                                 div()

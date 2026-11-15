@@ -126,7 +126,7 @@ fn on_selected<E: InteractiveElement, A: Action>(
         move |_: &A, window, cx| match state.read(cx).selected_message() {
             Some(id) => open_compose(&state, request(id), window, cx),
             None => state.update(cx, |state, cx| {
-                state.notify_info("Select a message first", cx)
+                state.notify_info(crate::settings::tr(cx, "Select a message first"), cx)
             }),
         },
     )

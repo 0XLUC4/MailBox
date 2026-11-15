@@ -6,7 +6,10 @@ use mailbox_core::Id;
 
 use super::{ComposeGlobal, ComposeView};
 use crate::components::{Icon, IconButton, IconName};
-use crate::theme::{ICON_SIZE_SM, RADIUS_MD, SPACE_1, SPACE_2, TEXT_SM, Theme, theme};
+use crate::settings::tr;
+use crate::theme::{
+    ICON_SIZE_SM, ICON_SIZE_XS, RADIUS_MD, SPACE_1, SPACE_2, TEXT_SM, Theme, theme,
+};
 
 /// Width of the docked editor (it never exceeds the content area).
 const DOCK_WIDTH: Pixels = px(760.);
@@ -96,8 +99,8 @@ impl ComposeDock {
                     .child(
                         IconButton::new(("compose-tab-close", index as u64), IconName::X)
                             .size(px(20.))
-                            .icon_size(px(12.))
-                            .tooltip("Close (keeps the draft)")
+                            .icon_size(ICON_SIZE_XS)
+                            .tooltip(tr(cx, "Close (keeps the draft)"))
                             .on_click(move |_, window, cx| {
                                 target.update(cx, |view, cx| view.close(window, cx));
                             }),
