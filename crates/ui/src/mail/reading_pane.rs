@@ -542,7 +542,7 @@ impl ReadingPaneView {
                         .border_1()
                         .border_color(t.border_subtle)
                         .hover(move |style| style.border_color(accent))
-                        .tooltip(move |_, cx| tooltip_above(tooltip.clone(), cx))
+                        .tooltip(move |window, cx| tooltip_above(tooltip.clone(), window, cx))
                         .overflow_hidden()
                         .w(px(160.))
                         .h(px(96.))
@@ -616,7 +616,7 @@ impl ReadingPaneView {
                             .id(("att-chip", key))
                             .cursor_pointer()
                             .hover(move |style| style.border_color(accent))
-                            .tooltip(move |_, cx| tooltip_above(tooltip.clone(), cx))
+                            .tooltip(move |window, cx| tooltip_above(tooltip.clone(), window, cx))
                             // Double-click opens, like a file in Explorer.
                             .on_click(move |event, _, cx| {
                                 if event.click_count() >= 2 {

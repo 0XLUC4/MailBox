@@ -3,7 +3,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::{ClickHandler, Icon, IconName};
-use crate::theme::{ICON_SIZE, RADIUS_MD, SPACE_2, TEXT_XS, theme};
+use crate::theme::{ICON_SIZE, RADIUS_MD, theme};
 
 /// Square icon-only button (rail, toolbars). `active` shows the selected state.
 #[derive(IntoElement)]
@@ -105,7 +105,7 @@ impl RenderOnce for IconButton {
                 let above = self.tooltip_above;
                 el.tooltip(move |window, cx| {
                     if above {
-                        tooltip_above(tooltip.clone(), cx)
+                        tooltip_above(tooltip.clone(), window, cx)
                     } else {
                         Tooltip::new(tooltip.clone()).build(window, cx)
                     }
@@ -117,38 +117,28 @@ impl RenderOnce for IconButton {
     }
 }
 
-/// A tooltip view drawn above the pointer, for `.tooltip(...)` on elements right above a native
-/// child window (a mail body, the compose editor) that would cover one drawn below.
-pub fn tooltip_above(text: SharedString, cx: &mut App) -> AnyView {
-    cx.new(|_| AboveTooltip { text }).into()
+/// The app's usual tooltip, drawn above the pointer instead of below it: for elements right
+/// above a native child window (a mail body, the compose editor) that would cover it.
+pub fn tooltip_above(text: SharedString, window: &mut Window, cx: &mut App) -> AnyView {
+    let tooltip = Tooltip::new(text).build(window, cx);
+    cx.new(|_| AboveTooltip { tooltip }).into()
 }
 
-/// GPUI lays a tooltip out at the pointer: this one has no size there and paints its label
-/// upward from it.
+/// GPUI lays a tooltip out at the pointer: this wrapper has no size there and paints the
+/// tooltip upward from it.
 struct AboveTooltip {
-    text: SharedString,
+    tooltip: AnyView,
 }
 
 impl Render for AboveTooltip {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx).clone();
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div().relative().child(
             div()
                 .absolute()
                 // Clear of the button under the pointer.
-                .bottom(px(22.))
+                .bottom(px(16.))
                 .left(px(-12.))
-                .whitespace_nowrap()
-                .px(SPACE_2)
-                .py(px(3.))
-                .rounded(RADIUS_MD)
-                .bg(t.elevated)
-                .border_1()
-                .border_color(t.border)
-                .shadow_sm()
-                .text_size(TEXT_XS)
-                .text_color(t.text)
-                .child(self.text.clone()),
+                .child(self.tooltip.clone()),
         )
     }
 }
