@@ -61,8 +61,9 @@ pub const CSS_UI_FONT: &str = "'Segoe UI Variable Text','Segoe UI',-apple-system
 // ---------- layout ----------
 pub const RAIL_WIDTH: Pixels = px(56.);
 pub const TOP_BAR_HEIGHT: Pixels = px(48.);
-/// Header strip of the folder, list and reading panes (their bottom borders line up).
-pub const PANE_HEADER_HEIGHT: Pixels = px(40.);
+/// Every pane and module header (folders, list, reading pane, calendar, tasks, people, editors),
+/// so their bottom borders line up.
+pub const PANE_HEADER_HEIGHT: Pixels = px(44.);
 /// Rows of the folder tree and the Calendar / Tasks / People sidebars.
 pub const NAV_ROW_HEIGHT: Pixels = px(32.);
 /// Dialog widths: confirmations, forms, wide editors.
