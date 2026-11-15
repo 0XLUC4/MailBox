@@ -61,6 +61,9 @@ pub struct ReadingPaneView {
     /// Whether an HTML body loads remote content, by message id (with the body length).
     #[cfg(any(windows, target_os = "macos"))]
     remote: HashMap<Id, (usize, bool)>,
+    /// Whether an HTML body sets its own colors, by message id (with the body length).
+    #[cfg(any(windows, target_os = "macos"))]
+    own_colors: HashMap<Id, (usize, bool)>,
     #[cfg(any(windows, target_os = "macos"))]
     web: Option<Rc<MailWebView>>,
     /// WebView2 could not start: HTML goes through our renderer.
@@ -155,6 +158,8 @@ impl ReadingPaneView {
             inline_parts: HashMap::new(),
             #[cfg(any(windows, target_os = "macos"))]
             remote: HashMap::new(),
+            #[cfg(any(windows, target_os = "macos"))]
+            own_colors: HashMap::new(),
             #[cfg(any(windows, target_os = "macos"))]
             web: None,
             #[cfg(any(windows, target_os = "macos"))]
@@ -937,22 +942,40 @@ impl ReadingPaneView {
                     remote
                 }
             };
+            // No frame: the message sits on the pane. HTML without colors of its own takes the
+            // app's; designed HTML (newsletters…) keeps its look, on white in the dark theme.
+            let own_colors = match self.own_colors.get(&message.id) {
+                Some((len, own)) if *len == html.len() => *own,
+                _ => {
+                    let own = html::has_own_colors(html);
+                    self.own_colors.insert(message.id, (html.len(), own));
+                    own
+                }
+            };
+            let colors = (!own_colors).then(|| page_colors(t));
+            let background = if own_colors && t.is_dark {
+                (255, 255, 255)
+            } else {
+                crate::theme::rgb_bytes(t.surface)
+            };
             // Nothing painted under the webview: until it exists (created in the background), or
             // if the system fails to show it, the app background shows, not a white void.
             let paper = div().size_full().when_some(web, |el, web| {
-                let key = format!("{}-{}-{}", message.id, u8::from(allowed), html.len());
-                web.load(key, (255, 255, 255), || web_page(message, html, allowed));
+                // The theme is in the key: a theme change reloads the page.
+                let (r, g, b) = background;
+                let key = format!(
+                    "{}-{}-{}-{r:02x}{g:02x}{b:02x}{}",
+                    message.id,
+                    u8::from(allowed),
+                    html.len(),
+                    colors.as_ref().map_or("", |colors| colors.text.as_str()),
+                );
+                let page = || web_page(message, html, allowed, colors.as_ref());
+                web.load(key, background, page);
                 web.set_zoom(zoom);
                 el.child(webview::paper(web))
             });
-            let paper = div()
-                .flex_1()
-                .min_h(px(0.))
-                .mx(SPACE_4)
-                .mb(SPACE_4)
-                .border_1()
-                .border_color(t.border)
-                .child(paper);
+            let paper = div().flex_1().min_h(px(0.)).mx(SPACE_4).child(paper);
             let remote = remote || self.blocked.contains(&message.id);
             return (paper.into_any_element(), remote);
         }
@@ -972,7 +995,7 @@ impl ReadingPaneView {
                     colors.text.trim_start_matches('#'),
                 );
                 let page = || plain_web_page(message, &colors);
-                web.load(key, crate::theme::rgb_bytes(t.background), page);
+                web.load(key, crate::theme::rgb_bytes(t.surface), page);
                 web.set_zoom(zoom);
                 el.child(webview::paper(web))
             });
@@ -1076,11 +1099,13 @@ fn pictures_key(email: &str) -> String {
 fn page_colors(t: &Theme) -> html::PageColors {
     use crate::theme::css_color;
     html::PageColors {
-        background: css_color(t.background),
+        // The pane's own color: the body has no backdrop of its own.
+        background: css_color(t.surface),
         text: css_color(t.text),
         muted: css_color(t.text_muted),
         link: css_color(t.accent),
         border: css_color(t.border),
+        dark: t.is_dark,
     }
 }
 
@@ -1094,9 +1119,15 @@ fn plain_web_page(message: &Message, colors: &html::PageColors) -> webview::Page
     }
 }
 
-/// The page served to the webview: `cid:` pictures map to the stored inline parts.
+/// The page served to the webview: `cid:` pictures map to the stored inline parts; with
+/// `colors`, the page takes the app's colors (HTML without colors of its own).
 #[cfg(any(windows, target_os = "macos"))]
-fn web_page(message: &Message, html: &str, remote: bool) -> webview::Page {
+fn web_page(
+    message: &Message,
+    html: &str,
+    remote: bool,
+    colors: Option<&html::PageColors>,
+) -> webview::Page {
     let prepared = webview::prepare(html);
     let inline = prepared
         .cids
@@ -1110,7 +1141,10 @@ fn web_page(message: &Message, html: &str, remote: bool) -> webview::Page {
         .collect();
     webview::Page {
         id: message.id as u64,
-        html: prepared.html,
+        html: match colors {
+            Some(colors) => html::with_app_colors(&prepared.html, colors),
+            None => prepared.html,
+        },
         remote,
         inline,
         remote_refs: prepared.remote,
