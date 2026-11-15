@@ -276,10 +276,13 @@ pub fn rows(state: &Entity<AppState>, cx: &App) -> Vec<AnyElement> {
             );
         }
         let removed = account.clone();
+        let remove_state = state.clone();
         actions.push(
             IconButton::new(("dav-remove", key), IconName::Trash)
                 .tooltip(tr(cx, "Remove account…"))
-                .on_click(move |_, window, cx| confirm_remove_dav(removed.clone(), window, cx))
+                .on_click(move |_, window, cx| {
+                    confirm_remove_dav(remove_state.clone(), removed.clone(), window, cx)
+                })
                 .into_any_element(),
         );
         rows.push(account_row(
@@ -336,7 +339,12 @@ fn confirm_remove_mail(id: Id, email: &str, window: &mut Window, cx: &mut App) {
     );
 }
 
-fn confirm_remove_dav(account: DavAccount, window: &mut Window, cx: &mut App) {
+fn confirm_remove_dav(
+    state: Entity<AppState>,
+    account: DavAccount,
+    window: &mut Window,
+    cx: &mut App,
+) {
     confirm(
         Confirm {
             title: tr(cx, "Remove {}?").replace("{}", &account.email).into(),
@@ -362,9 +370,9 @@ fn confirm_remove_dav(account: DavAccount, window: &mut Window, cx: &mut App) {
                     let _ = credentials::delete(dav_config::DAV_PASSWORD_SERVICE, account.login());
                     dav_bridge::reload(cx);
                 }
-                Err(err) => {
-                    crate::log::error(format_args!("cannot update {}: {err}", path.display()))
-                }
+                Err(err) => state.update(cx, |state, cx| {
+                    state.report_error(format!("Cannot update {}: {err}", path.display()), cx)
+                }),
             }
             cx.refresh_windows();
         },

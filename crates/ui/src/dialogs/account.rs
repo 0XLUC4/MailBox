@@ -167,6 +167,8 @@ pub struct AccountDialog {
     state: Entity<AppState>,
     /// `None` while adding a new account.
     account_id: Option<Id>,
+    /// Email of the edited account when the dialog opened (its keychain entries use it).
+    saved_email: Option<String>,
     step: Step,
     name: Entity<InputState>,
     email: Entity<InputState>,
@@ -205,6 +207,7 @@ impl AccountDialog {
                     .flatten()
             })
             .unwrap_or_default();
+        let saved_email = account.as_ref().map(|account| account.email.clone());
         let (name, email, color) = account
             .map(|account| (account.name, account.email, account.color))
             .unwrap_or_else(|| (String::new(), String::new(), DEFAULT_ACCENT));
@@ -277,6 +280,7 @@ impl AccountDialog {
         Self {
             state,
             account_id,
+            saved_email,
             step: if account_id.is_some() {
                 Step::Servers
             } else {
@@ -517,6 +521,18 @@ impl AccountDialog {
             Ok(values) => values,
             Err(message) => return self.fail(message, cx),
         };
+        let renamed = self
+            .saved_email
+            .clone()
+            .filter(|old| *old != config.email);
+        if let Some(old) = &renamed
+            && let Err(err) = move_secrets(old, &config.email)
+        {
+            return self.fail(
+                format!("The password could not be moved to the new address: {err}"),
+                cx,
+            );
+        }
         if let (AuthConfig::Password, Some(password)) = (&config.auth, self.password_value(cx))
             && let Err(err) = credentials::set_password(&config.email, &password)
         {
@@ -567,9 +583,15 @@ impl AccountDialog {
                 )
             }
         };
-        if let Some(id) = saved {
-            sync_bridge::start_account(id, cx);
-            window.close_dialog(cx);
+        match (saved, renamed) {
+            (Some(id), _) => {
+                sync_bridge::start_account(id, cx);
+                window.close_dialog(cx);
+            }
+            (None, Some(old)) => {
+                let _ = move_secrets(&config.email, &old);
+            }
+            (None, None) => {}
         }
     }
 
@@ -965,6 +987,21 @@ impl Render for AccountDialog {
             .child(primary);
         dialog_frame("account-body", header, body, messages, footer, window)
     }
+}
+
+/// The keychain keys secrets by email: after an address change, the saved password and OAuth
+/// token follow it.
+fn move_secrets(old: &str, new: &str) -> Result<(), String> {
+    for service in [
+        config::PASSWORD_SERVICE,
+        mailbox_sync::oauth::REFRESH_TOKEN_SERVICE,
+    ] {
+        if let Ok(secret) = credentials::get(service, old) {
+            credentials::set(service, new, &secret).map_err(|err| err.to_string())?;
+            let _ = credentials::delete(service, old);
+        }
+    }
+    Ok(())
 }
 
 /// Folder position: well-known folders first, in the usual order.
