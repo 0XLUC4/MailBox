@@ -255,7 +255,6 @@ const FR: &[(&str, &str)] = &[
         "Notification sur le bureau à l'arrivée d'un message.",
     ),
     ("Menus, ribbon and settings.", "Menus, ruban et paramètres."),
-    ("Open rules dialog", "Ouvrir la fenêtre des règles"),
     (
         "{} rule(s). Rules run on new mail, in order, and can be run on a folder at any time.",
         "{} règle(s). Les règles s'appliquent aux nouveaux messages, dans l'ordre, et peuvent \
