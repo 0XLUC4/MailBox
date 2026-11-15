@@ -16,8 +16,8 @@ use mailbox_core::calendar::{
     self as cal, CalendarCommand, EventDetails, EventSnapshot, Method, ShowAs,
 };
 use mailbox_core::{
-    Account, Address, Attachment, Calendar, Command, Id, Importance, Message, MessageFlags,
-    ResponseStatus, Store, command, ics,
+    Account, Address, Attachment, Calendar, CalendarEvent, Command, Id, Importance, Message,
+    MessageFlags, ResponseStatus, Store, command, ics,
 };
 
 use crate::app_state::AppState;
@@ -270,33 +270,81 @@ pub fn respond_to_invitation(
         .details
         .clone()
         .unwrap_or_else(|| EventDetails::default_for(0));
-    let reply = ics::reply(&answered.event, &details, &account.email, status);
-    let (verb, phrase) = match status {
-        ResponseStatus::Accepted => ("Accepted", "has accepted"),
-        ResponseStatus::Tentative => ("Tentative", "has tentatively accepted"),
-        ResponseStatus::Declined => ("Declined", "has declined"),
-        ResponseStatus::NeedsAction => ("Reply", "has not answered"),
-    };
-    let organizer: Vec<Address> = details.organizer.clone().into_iter().collect();
-    let queued = queue_calendar_mail(
-        state,
-        &account,
-        organizer,
-        format!("{verb}: {}", answered.event.title),
-        format!("{} {phrase} this invitation.", account.name),
-        (
-            "reply.ics".into(),
-            "text/calendar; method=REPLY; charset=utf-8".into(),
-            reply,
-        ),
-        cx,
-    );
+    let verb = reply_verb(status).0;
+    let queued = queue_reply(state, &account, &answered.event, &details, status, cx);
     state.update(cx, |state, cx| match queued {
         Ok(()) => state.notify_info(format!("{verb} - reply queued in the Outbox"), cx),
         // The answer is saved; only the reply could not be queued.
         Err(err) => state.report_error(format!("Answer saved, reply not sent: {err}"), cx),
     });
     true
+}
+
+fn reply_verb(status: ResponseStatus) -> (&'static str, &'static str) {
+    match status {
+        ResponseStatus::Accepted => ("Accepted", "has accepted"),
+        ResponseStatus::Tentative => ("Tentative", "has tentatively accepted"),
+        ResponseStatus::Declined => ("Declined", "has declined"),
+        ResponseStatus::NeedsAction => ("Reply", "has not answered"),
+    }
+}
+
+/// Queues an iTIP REPLY (my answer) to the organizer of `event`.
+pub(crate) fn queue_reply(
+    state: &Entity<AppState>,
+    account: &Account,
+    event: &CalendarEvent,
+    details: &EventDetails,
+    status: ResponseStatus,
+    cx: &mut App,
+) -> Result<(), String> {
+    let organizer: Vec<Address> = details.organizer.clone().into_iter().collect();
+    if organizer.is_empty() {
+        return Err("The invitation has no organizer".into());
+    }
+    let (verb, phrase) = reply_verb(status);
+    queue_calendar_mail(
+        state,
+        account,
+        organizer,
+        format!("{verb}: {}", event.title),
+        format!("{} {phrase} this invitation.", account.name),
+        (
+            "reply.ics".into(),
+            "text/calendar; method=REPLY; charset=utf-8".into(),
+            ics::reply(event, details, &account.email, status),
+        ),
+        cx,
+    )
+}
+
+/// Queues an iTIP CANCEL of a meeting I organize to its attendees.
+pub(crate) fn queue_cancel(
+    state: &Entity<AppState>,
+    account: &Account,
+    event: &CalendarEvent,
+    details: &EventDetails,
+    cx: &mut App,
+) -> Result<(), String> {
+    let to: Vec<Address> = event
+        .attendees
+        .iter()
+        .map(|attendee| attendee.address.clone())
+        .filter(|address| !address.email.eq_ignore_ascii_case(&account.email))
+        .collect();
+    queue_calendar_mail(
+        state,
+        account,
+        to,
+        format!("Canceled: {}", event.title),
+        format!("{} has canceled this meeting.", account.name),
+        (
+            "cancel.ics".into(),
+            "text/calendar; method=CANCEL; charset=utf-8".into(),
+            ics::export(&[(event.clone(), details.clone())], Some(Method::Cancel)),
+        ),
+        cx,
+    )
 }
 
 /// Applies an incoming REPLY or CANCEL to the calendar.

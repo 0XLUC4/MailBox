@@ -198,9 +198,10 @@ impl ContactCard {
             .unwrap_or('#')
     }
 
-    /// Case-insensitive match on names, emails, phones, company and job title.
+    /// Case- and accent-insensitive match on names, emails, phones, company, job title,
+    /// notes and addresses ("jose" finds "José").
     pub fn matches(&self, query: &str) -> bool {
-        let query = query.trim().to_lowercase();
+        let query = fold_text(query.trim());
         if query.is_empty() {
             return true;
         }
@@ -216,8 +217,20 @@ impl ContactCard {
             &details.nickname,
         ]
         .into_iter()
+        .chain([&contact.notes])
         .chain(&contact.emails)
-        .any(|field| field.to_lowercase().contains(&query))
+        .any(|field| fold_text(field).contains(&query))
+            || details.addresses.iter().any(|address| {
+                [
+                    &address.street,
+                    &address.city,
+                    &address.region,
+                    &address.postal_code,
+                    &address.country,
+                ]
+                .into_iter()
+                .any(|field| fold_text(field).contains(&query))
+            })
             || (digits.len() >= 3
                 && contact
                     .phones
@@ -228,8 +241,26 @@ impl ContactCard {
 
 /// `É` -> `E`, `ß` -> `S`, digits and others -> `#`.
 fn fold_letter(c: char) -> char {
-    let upper = c.to_uppercase().next().unwrap_or(c);
-    let folded = match upper {
+    let folded = fold_accent(c.to_uppercase().next().unwrap_or(c));
+    if folded.is_ascii_uppercase() {
+        folded
+    } else {
+        '#'
+    }
+}
+
+/// Lower case without the common Latin accents, for searching.
+fn fold_text(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_uppercase)
+        .map(fold_accent)
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Upper-case accented Latin letter -> its base letter.
+fn fold_accent(upper: char) -> char {
+    match upper {
         'À'..='Å' => 'A',
         'Ç' | 'Ć' | 'Č' => 'C',
         'È'..='Ë' => 'E',
@@ -241,11 +272,6 @@ fn fold_letter(c: char) -> char {
         'Š' | 'Ś' | 'ß' => 'S',
         'Ž' | 'Ź' | 'Ż' => 'Z',
         other => other,
-    };
-    if folded.is_ascii_uppercase() {
-        folded
-    } else {
-        '#'
     }
 }
 
@@ -1230,6 +1256,8 @@ mod tests {
         assert_eq!(card(&account, "42 Studio", "").section_letter(), '#');
         assert_eq!(card(&account, "", "zoe@example.com").section_letter(), 'Z');
         assert!(eric.matches("durand"));
+        assert!(eric.matches("eric"));
+        assert!(card(&account, "Eric Martin", "").matches("ÉRIC"));
         assert!(eric.matches("EXAMPLE.com"));
         assert!(eric.matches("612 345"));
         assert!(!eric.matches("bob"));

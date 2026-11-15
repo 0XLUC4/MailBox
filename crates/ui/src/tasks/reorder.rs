@@ -98,11 +98,21 @@ impl TasksView {
             loop {
                 cx.background_executor().timer(REMINDER_TICK).await;
                 let now = Utc::now();
-                let alive = this.update(cx, |this, cx| this.fire_reminders(since, now, cx));
-                if alive.is_err() {
-                    break;
+                let alive = this.update(cx, |this, cx| {
+                    // Past midnight: My Day, Overdue and the counts change.
+                    if since.with_timezone(&chrono::Local).date_naive()
+                        != now.with_timezone(&chrono::Local).date_naive()
+                    {
+                        cx.notify();
+                    }
+                    this.fire_reminders(since, now, cx)
+                });
+                match alive {
+                    Ok(true) => since = now,
+                    // A failed read is retried at the next tick (nothing is skipped).
+                    Ok(false) => {}
+                    Err(_) => break,
                 }
-                since = now;
             }
         })
     }
@@ -112,9 +122,11 @@ impl TasksView {
         since: chrono::DateTime<Utc>,
         now: chrono::DateTime<Utc>,
         cx: &mut Context<Self>,
-    ) {
-        let due: Vec<_> = todo::list_task_cards(self.state.read(cx).store())
-            .unwrap_or_default()
+    ) -> bool {
+        let Ok(cards) = todo::list_task_cards(self.state.read(cx).store()) else {
+            return false;
+        };
+        let due: Vec<_> = cards
             .into_iter()
             .filter(|card| !card.task.completed)
             .filter(|card| {
@@ -132,5 +144,6 @@ impl TasksView {
                 state.notify_info(format!("Reminder: {title}"), cx)
             });
         }
+        true
     }
 }

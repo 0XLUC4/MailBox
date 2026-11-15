@@ -90,6 +90,35 @@ pub fn status(cx: &App) -> Option<SharedString> {
     bridge.status_line().map(SharedString::from)
 }
 
+/// Local account of the first CardDAV account (where new contacts must go to be synced).
+pub fn contacts_account(cx: &App) -> Option<Id> {
+    let bridge = cx.try_global::<GlobalDavBridge>()?.0.read(cx);
+    bridge
+        .accounts
+        .iter()
+        .find(|account| account.config.contacts)
+        .map(|account| account.account_id)
+}
+
+/// Whether a local calendar mirrors a CalDAV collection.
+pub fn is_synced_calendar(calendar_id: Id, cx: &App) -> bool {
+    cx.try_global::<GlobalDavBridge>().is_some_and(|global| {
+        global
+            .0
+            .read(cx)
+            .accounts
+            .iter()
+            .any(|account| account.state.collection_of_calendar(calendar_id).is_some())
+    })
+}
+
+/// Whether the CalDAV server of a calendar delivers replies/cancellations itself (then a
+/// sync is enough and no email must be sent).
+pub fn server_schedules(calendar_id: Id, cx: &App) -> bool {
+    cx.try_global::<GlobalDavBridge>()
+        .is_some_and(|global| global.0.read(cx).server_schedules(calendar_id))
+}
+
 /// How an invitation leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvitationRoute {
@@ -224,7 +253,19 @@ impl DavBridge {
     }
 
     fn start(&mut self, index: usize, cx: &mut Context<Self>) {
-        let local = self.local_snapshot(&self.accounts[index], cx);
+        self.detach_missing_calendars(index, cx);
+        // An unreadable local store must not look like "everything was deleted locally".
+        let local = match self.local_snapshot(&self.accounts[index], cx) {
+            Ok(local) => local,
+            Err(err) => {
+                let account = &mut self.accounts[index];
+                let message = format!("{}: cannot read local data: {err}", account.config.email);
+                account.next_sync = Instant::now() + Duration::from_secs(60);
+                account.last_error = Some(message.clone());
+                self.report(&message, cx);
+                return;
+            }
+        };
         let account = &mut self.accounts[index];
         account.busy = true;
         let config = account.config.clone();
@@ -296,10 +337,31 @@ impl DavBridge {
         self.publish_status(cx);
     }
 
+    /// A synced calendar deleted locally (e.g. undo history, older versions) is re-downloaded
+    /// from scratch instead of being read as "every event deleted here" and wiped remotely.
+    fn detach_missing_calendars(&mut self, index: usize, cx: &App) {
+        let store = self.state.read(cx).store();
+        for collection in self.accounts[index].state.collections.values_mut() {
+            let Some(calendar_id) = collection.local_id else {
+                continue;
+            };
+            if matches!(store.get::<Calendar>(calendar_id), Ok(None)) {
+                collection.local_id = None;
+                collection.items.clear();
+                collection.sync_token = None;
+                collection.ctag = None;
+            }
+        }
+    }
+
     // ---------- local -> resources ----------
 
     /// Local items per collection URL.
-    fn local_snapshot(&self, account: &AccountSync, cx: &App) -> HashMap<String, Vec<LocalItem>> {
+    fn local_snapshot(
+        &self,
+        account: &AccountSync,
+        cx: &App,
+    ) -> Result<HashMap<String, Vec<LocalItem>>, String> {
         let store = self.state.read(cx).store();
         let mut snapshot = HashMap::new();
         let default_book = account
@@ -309,13 +371,13 @@ impl DavBridge {
             .find(|c| c.kind == Kind::AddressBook)
             .map(|c| c.url.clone());
         let cards: Vec<ContactCard> = people::list_contact_cards(store)
-            .unwrap_or_default()
+            .map_err(|err| err.to_string())?
             .into_iter()
             .filter(|card| card.contact.account_id == account.account_id)
             .collect();
         for collection in account.state.collections.values() {
             let items = match (collection.kind, collection.local_id) {
-                (Kind::Calendar, Some(calendar_id)) => calendar_items(store, calendar_id),
+                (Kind::Calendar, Some(calendar_id)) => calendar_items(store, calendar_id)?,
                 (Kind::AddressBook, _) => cards
                     .iter()
                     .filter(|card| {
@@ -338,7 +400,7 @@ impl DavBridge {
             };
             snapshot.insert(collection.url.clone(), items);
         }
-        snapshot
+        Ok(snapshot)
     }
 
     // ---------- resources -> local ----------
@@ -376,6 +438,14 @@ impl DavBridge {
         }
         for change in changes {
             let result = match change {
+                // Tasks/journals stored in an event calendar (Nextcloud "Personal"): not
+                // events, so not an error either.
+                RemoteChange::Upsert { text, .. }
+                    if calendar_id.is_some()
+                        && !text.to_ascii_uppercase().contains("BEGIN:VEVENT") =>
+                {
+                    Ok(())
+                }
                 RemoteChange::Upsert {
                     href,
                     etag,
@@ -430,14 +500,26 @@ impl DavBridge {
                 .ok()
                 .flatten()
         });
+        // A local rename/recolour sticks until the server's own value changes.
+        let previous = self
+            .accounts
+            .iter()
+            .find_map(|account| account.state.collections.get(&state.url));
+        let name_changed = previous.is_none_or(|p| p.name != state.name);
+        let color_changed = previous.is_none_or(|p| p.color != state.color);
         let wanted = Calendar {
             id: existing.as_ref().map_or(0, |c| c.id),
             account_id,
-            name: state.name.clone(),
-            color: state
-                .color
-                .or(existing.as_ref().map(|c| c.color))
-                .unwrap_or(DEFAULT_ACCENT),
+            name: match &existing {
+                Some(calendar) if !name_changed => calendar.name.clone(),
+                _ => state.name.clone(),
+            },
+            color: match (&existing, state.color) {
+                (Some(calendar), _) if !color_changed => calendar.color,
+                (_, Some(color)) => color,
+                (Some(calendar), None) => calendar.color,
+                (None, None) => DEFAULT_ACCENT,
+            },
         };
         if existing.as_ref() == Some(&wanted) {
             return Some(wanted.id);
@@ -527,11 +609,15 @@ impl DavBridge {
         }
         self.try_apply(Command::Batch(commands), cx)?;
         let store = self.state.read(cx).store();
-        rows_in_calendar(store, &uid, calendar_id)
+        let master = rows_in_calendar(store, &uid, calendar_id)
             .into_iter()
             .find(|row| row.master_id.is_none())
-            .and_then(|row| event_item(store, row.event_id))
-            .ok_or_else(|| format!("event {uid} was not stored"))
+            .ok_or_else(|| format!("event {uid} was not stored"))?;
+        let event = store
+            .get::<CalendarEvent>(master.event_id)
+            .map_err(|err| err.to_string())?
+            .ok_or_else(|| format!("event {uid} was not stored"))?;
+        event_item(store, event, master)
     }
 
     /// Stores a server vCard; returns the stored item.
@@ -624,19 +710,23 @@ impl DavBridge {
         let event = store.get::<CalendarEvent>(event_id).ok().flatten()?;
         let details = calendar::details(store, event_id).ok()?;
         let calendar = store.get::<Calendar>(event.calendar_id).ok().flatten()?;
-        let server_schedules = self.accounts.iter().any(|account| {
-            account.state.collection_of_calendar(calendar.id).is_some()
-                && account
-                    .state
-                    .home(Kind::Calendar)
-                    .is_some_and(|home| home.auto_schedule)
-        });
-        if server_schedules {
+        if self.server_schedules(calendar.id) {
             self.sync_all(true, cx);
             return Some(InvitationRoute::Server);
         }
         self.queue_imip(calendar.account_id, &event, &details, cx)
             .map(|()| InvitationRoute::Email)
+    }
+
+    /// Whether the CalDAV server of this calendar sends scheduling messages itself.
+    fn server_schedules(&self, calendar_id: Id) -> bool {
+        self.accounts.iter().any(|account| {
+            account.state.collection_of_calendar(calendar_id).is_some()
+                && account
+                    .state
+                    .home(Kind::Calendar)
+                    .is_some_and(|home| home.auto_schedule)
+        })
     }
 
     /// Puts an invitation email (iMIP) in the Outbox of the calendar's account (the first
@@ -753,36 +843,43 @@ fn rows_in_calendar(store: &mailbox_core::Store, uid: &str, calendar_id: Id) -> 
 }
 
 /// Every series/one-off of a calendar as a resource.
-fn calendar_items(store: &mailbox_core::Store, calendar_id: Id) -> Vec<LocalItem> {
+/// Read errors are returned (never an empty list), so a failed read cannot delete remotely.
+fn calendar_items(store: &mailbox_core::Store, calendar_id: Id) -> Result<Vec<LocalItem>, String> {
     let events: Vec<CalendarEvent> = store
         .query("WHERE calendar_id = ?1 ORDER BY id", [calendar_id])
-        .unwrap_or_default();
-    events
-        .iter()
-        .filter(|event| {
-            calendar::details(store, event.id).is_ok_and(|details| details.master_id.is_none())
-        })
-        .filter_map(|event| event_item(store, event.id))
-        .collect()
+        .map_err(|err| err.to_string())?;
+    let mut items = Vec::new();
+    for event in events {
+        let details = calendar::details(store, event.id).map_err(|err| err.to_string())?;
+        if details.master_id.is_none() {
+            items.push(event_item(store, event, details)?);
+        }
+    }
+    Ok(items)
 }
 
 /// A series (or one-off) with its modified occurrences.
-fn event_item(store: &mailbox_core::Store, event_id: Id) -> Option<LocalItem> {
-    let load = |id: Id| -> Option<(CalendarEvent, EventDetails)> {
-        Some((
-            store.get::<CalendarEvent>(id).ok().flatten()?,
-            calendar::details(store, id).ok()?,
-        ))
-    };
-    let master = load(event_id)?;
-    let exceptions: Vec<_> = calendar::exceptions_of(store, event_id)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|row| load(row.event_id))
-        .collect();
-    Some(LocalItem {
-        local_id: event_id,
-        uid: master.1.uid.clone(),
+fn event_item(
+    store: &mailbox_core::Store,
+    event: CalendarEvent,
+    details: EventDetails,
+) -> Result<LocalItem, String> {
+    let mut exceptions = Vec::new();
+    for row in calendar::exceptions_of(store, event.id).map_err(|err| err.to_string())? {
+        // An orphan details row (event already deleted) is skipped, not fatal.
+        if let Some(occurrence) = store
+            .get::<CalendarEvent>(row.event_id)
+            .map_err(|err| err.to_string())?
+        {
+            exceptions.push((occurrence, row));
+        }
+    }
+    let local_id = event.id;
+    let uid = details.uid.clone();
+    let master = (event, details);
+    Ok(LocalItem {
+        local_id,
+        uid,
         text: items::event_resource(&master, &exceptions),
     })
 }
@@ -1141,7 +1238,7 @@ mod tests {
             )
             .unwrap();
 
-        let items = calendar_items(&store, calendar.id);
+        let items = calendar_items(&store, calendar.id).unwrap();
         assert_eq!(items.len(), 2, "series + one-off, exception folded in");
         let standup = items.iter().find(|i| i.local_id == series.id).unwrap();
         assert_eq!(standup.text.matches("BEGIN:VEVENT").count(), 2);

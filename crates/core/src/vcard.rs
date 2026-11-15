@@ -12,10 +12,12 @@ use crate::people::{ContactCard, PostalAddress, trim_labels};
 /// Non-standard property carrying the favourite flag through export/import.
 const FAVORITE_PROPERTY: &str = "X-MAILBOX-FAVORITE";
 
-/// Parses every `BEGIN:VCARD`..`END:VCARD` block. Cards without a name or email are skipped.
+/// Parses every `BEGIN:VCARD`..`END:VCARD` block. Cards without a name or email, and group
+/// cards (`KIND:group`, Apple's `X-ADDRESSBOOKSERVER-KIND:group`), are skipped.
 pub fn parse_vcards(input: &str, account_id: Id) -> Vec<ContactCard> {
     let mut cards = Vec::new();
     let mut current: Option<ContactCard> = None;
+    let mut is_group = false;
     for line in unfold(input) {
         let Some(property) = Property::parse(&line) else {
             continue;
@@ -23,9 +25,13 @@ pub fn parse_vcards(input: &str, account_id: Id) -> Vec<ContactCard> {
         match property.name.as_str() {
             "BEGIN" if property.value.eq_ignore_ascii_case("VCARD") => {
                 current = Some(ContactCard::new(account_id));
+                is_group = false;
+            }
+            "KIND" | "X-ADDRESSBOOKSERVER-KIND" => {
+                is_group |= property.value.trim().eq_ignore_ascii_case("group");
             }
             "END" if property.value.eq_ignore_ascii_case("VCARD") => {
-                if let Some(mut card) = current.take() {
+                if let Some(mut card) = current.take().filter(|_| !is_group) {
                     trim_labels(&mut card.details.email_labels);
                     trim_labels(&mut card.details.phone_labels);
                     let name = card.name();
@@ -155,16 +161,24 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
         .ok()
 }
 
-/// Joins folded lines (a line starting with a space or tab continues the previous one).
+/// Joins folded lines (a line starting with a space or tab continues the previous one) and
+/// vCard 2.1 quoted-printable soft line breaks (a QP line ending with `=`). Drops a BOM.
 fn unfold(input: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
-    for raw in input.split('\n') {
+    let mut soft_break = false;
+    for raw in input.trim_start_matches('\u{FEFF}').split('\n') {
         let raw = raw.strip_suffix('\r').unwrap_or(raw);
-        if let (Some(rest), Some(last)) = (raw.strip_prefix([' ', '\t']), lines.last_mut()) {
+        if let (true, Some(last)) = (soft_break, lines.last_mut()) {
+            last.pop(); // the trailing `=`
+            last.push_str(raw.trim_start());
+        } else if let (Some(rest), Some(last)) = (raw.strip_prefix([' ', '\t']), lines.last_mut()) {
             last.push_str(rest);
         } else if !raw.trim().is_empty() {
             lines.push(raw.to_owned());
         }
+        soft_break = lines.last().is_some_and(|line| {
+            line.ends_with('=') && line.to_ascii_uppercase().contains("QUOTED-PRINTABLE")
+        });
     }
     lines
 }
@@ -630,6 +644,26 @@ TEL;WORK;VOICE:0102030405\r\nEND:VCARD\r\n";
         assert_eq!(cards[0].details.first_name, "Éric");
         assert_eq!(cards[0].contact.display_name, "Éric Durand");
         assert_eq!(cards[0].contact.phones, vec!["0102030405"]);
+    }
+
+    #[test]
+    fn joins_quoted_printable_soft_breaks_and_drops_bom() {
+        let input = "\u{FEFF}BEGIN:VCARD\r\nVERSION:2.1\r\nN:Durand;Eric\r\n\
+NOTE;ENCODING=QUOTED-PRINTABLE:first=20=\r\nsecond\r\nEND:VCARD\r\n";
+        let cards = parse_vcards(input, 1);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].contact.notes, "first second");
+    }
+
+    #[test]
+    fn skips_group_cards() {
+        let input = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Friends\r\n\
+X-ADDRESSBOOKSERVER-KIND:group\r\nEND:VCARD\r\n\
+BEGIN:VCARD\r\nVERSION:4.0\r\nKIND:group\r\nFN:Team\r\nEND:VCARD\r\n\
+BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ada\r\nEND:VCARD\r\n";
+        let cards = parse_vcards(input, 1);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].contact.display_name, "Ada");
     }
 
     #[test]

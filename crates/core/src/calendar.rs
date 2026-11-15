@@ -462,11 +462,20 @@ pub fn due_reminders(
         .into_iter()
         .filter(|occurrence| occurrence.event.end > now)
         .flat_map(|occurrence| {
+            // All-day events are stored at UTC midnight but start at local midnight.
+            let start = if occurrence.event.all_day {
+                Local
+                    .from_local_datetime(&occurrence.event.start.naive_utc())
+                    .earliest()
+                    .map_or(occurrence.event.start, |start| start.with_timezone(&Utc))
+            } else {
+                occurrence.event.start
+            };
             occurrence
                 .event
                 .reminders
                 .iter()
-                .map(|minutes| occurrence.event.start - Duration::minutes(*minutes))
+                .map(move |minutes| start - Duration::minutes(*minutes))
                 .filter(|at| *at > after && *at <= now)
                 .max()
                 .map(|at| DueReminder { at, occurrence })
@@ -669,6 +678,29 @@ impl CalendarCommand {
     }
 }
 
+/// Moves a series' EXDATEs and its exceptions' RECURRENCE-IDs by `delta` (the series start
+/// moved), so they keep matching the occurrences they skip or replace.
+fn shift_series(
+    tx: &mut Tx<'_>,
+    store: &Store,
+    series_id: Id,
+    details: &mut EventDetails,
+    delta: Duration,
+) -> Result<()> {
+    if delta == Duration::zero() {
+        return Ok(());
+    }
+    for exdate in &mut details.exdates {
+        *exdate += delta;
+    }
+    for exception in exceptions_of(store, series_id)? {
+        let (exception_event, mut exception_details) = tx.load(exception.event_id)?;
+        exception_details.recurrence_id = exception_details.recurrence_id.map(|at| at + delta);
+        tx.write(exception_event, Some(exception_details))?;
+    }
+    Ok(())
+}
+
 /// Applies a calendar command (inside the caller's transaction) and returns its inverse.
 pub fn apply(store: &Store, command: CalendarCommand) -> Result<Command> {
     let mut tx = Tx::new(store);
@@ -678,7 +710,14 @@ pub fn apply(store: &Store, command: CalendarCommand) -> Result<Command> {
             if event.id == 0 {
                 tx.create(*event, *details)?;
             } else {
-                tx.write(*event, Some(*details))?;
+                // A series whose start moved: skipped/modified occurrences move with it.
+                let (previous, _) = tx.load(event.id)?;
+                let mut details = *details;
+                if event.recurrence.is_some() {
+                    let delta = event.start - previous.start;
+                    shift_series(&mut tx, store, event.id, &mut details, delta)?;
+                }
+                tx.write(*event, Some(details))?;
             }
         }
         CalendarCommand::Move { id, start, end } => {
@@ -688,16 +727,8 @@ pub fn apply(store: &Store, command: CalendarCommand) -> Result<Command> {
             event.end = end;
             validate(&event)?;
             let mut details = details;
-            if event.recurrence.is_some() && delta != Duration::zero() {
-                for exdate in &mut details.exdates {
-                    *exdate += delta;
-                }
-                for exception in exceptions_of(store, id)? {
-                    let (exception_event, mut exception_details) = tx.load(exception.event_id)?;
-                    exception_details.recurrence_id =
-                        exception_details.recurrence_id.map(|at| at + delta);
-                    tx.write(exception_event, Some(exception_details))?;
-                }
+            if event.recurrence.is_some() {
+                shift_series(&mut tx, store, id, &mut details, delta)?;
             }
             tx.write(event, Some(details))?;
         }
@@ -814,6 +845,23 @@ fn validate(event: &CalendarEvent) -> Result<()> {
     Ok(())
 }
 
+/// Details rows with this UID, only those in `calendar_id` when given.
+fn uid_rows(store: &Store, uid: &str, calendar_id: Option<Id>) -> Result<Vec<EventDetails>> {
+    let mut rows = Vec::new();
+    for row in details_by_uid(store, uid)? {
+        let in_scope = match calendar_id {
+            Some(calendar_id) => store
+                .get::<CalendarEvent>(row.event_id)?
+                .is_some_and(|event| event.calendar_id == calendar_id),
+            None => true,
+        };
+        if in_scope {
+            rows.push(row);
+        }
+    }
+    Ok(rows)
+}
+
 fn import(
     tx: &mut Tx,
     calendar_id: Id,
@@ -821,6 +869,9 @@ fn import(
     events: Vec<EventSnapshot>,
 ) -> Result<()> {
     let store = tx.store;
+    // iTIP messages update the event wherever it is; a plain import (file, CalDAV sync) only
+    // matches inside its calendar, so the same UID in two calendars stays two events.
+    let scope = method.is_none().then_some(calendar_id);
     // Series first so exceptions can link to them.
     let (masters, exceptions): (Vec<_>, Vec<_>) = events.into_iter().partition(|snapshot| {
         snapshot
@@ -831,9 +882,11 @@ fn import(
     for snapshot in masters.into_iter().chain(exceptions) {
         let EventSnapshot { mut event, details } = snapshot;
         let mut details = details.unwrap_or_else(|| EventDetails::default_for(0));
-        let existing = details_by_uid(store, &details.uid)?
-            .into_iter()
-            .find(|row| row.recurrence_id == details.recurrence_id);
+        let rows = uid_rows(store, &details.uid, scope)?;
+        let existing = rows
+            .iter()
+            .find(|row| row.recurrence_id == details.recurrence_id)
+            .cloned();
         match method {
             Some(Method::Cancel) => {
                 if let Some(row) = existing {
@@ -874,9 +927,7 @@ fn import(
             _ => {}
         }
         if let Some(recurrence_id) = details.recurrence_id
-            && let Some(master) = details_by_uid(store, &details.uid)?
-                .into_iter()
-                .find(|row| row.recurrence_id.is_none())
+            && let Some(master) = rows.iter().find(|row| row.recurrence_id.is_none())
         {
             details.master_id = Some(master.event_id);
             let (master_event, mut master_details) = tx.load(master.event_id)?;
@@ -1159,6 +1210,44 @@ mod tests {
         assert!(dump(&store).is_empty());
         history.redo(&store).unwrap();
         assert_eq!(dump(&store), created);
+    }
+
+    #[test]
+    fn saving_a_series_at_a_new_time_keeps_skipped_occurrences_skipped() {
+        let store = store();
+        let cal = calendar(&store);
+        let mut history = History::new();
+        let start = utc(2026, 11, 16, 9, 0);
+        let id = create(
+            &store,
+            &mut history,
+            event(cal.id, start, Some("FREQ=DAILY;COUNT=5")),
+        );
+        run(
+            &store,
+            &mut history,
+            CalendarCommand::SkipOccurrence {
+                series_id: id,
+                occurrence: start + Duration::days(1),
+            },
+        );
+        let series = store.require::<CalendarEvent>(id).unwrap();
+        run(
+            &store,
+            &mut history,
+            CalendarCommand::Save {
+                event: Box::new(CalendarEvent {
+                    start: series.start + Duration::hours(1),
+                    end: series.end + Duration::hours(1),
+                    ..series
+                }),
+                details: Box::new(details(&store, id).unwrap()),
+            },
+        );
+        assert_eq!(
+            details(&store, id).unwrap().exdates,
+            vec![start + Duration::days(1) + Duration::hours(1)]
+        );
     }
 
     #[test]
