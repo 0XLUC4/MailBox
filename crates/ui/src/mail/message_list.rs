@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, Datelike as _, Local, NaiveDate, Utc};
 use gpui::component::button::{Button as KitButton, ButtonVariants as _};
 use gpui::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui::component::{Sizable as _, VirtualListScrollHandle, v_virtual_list};
@@ -14,7 +14,9 @@ use gpui::*;
 use mailbox_core::settings::Density;
 use mailbox_core::{FolderRole, Id, Importance, Message, mail_ops};
 
-use super::list_model::{BuildContext, Filter, Grouping, ListOptions, Row, SortKey, build_rows};
+use super::list_model::{
+    BuildContext, Filter, Grouping, ListOptions, Row, SortKey, build_rows, mentions,
+};
 use super::{
     ArchiveSelected, ClearSelection, CollapseThread, DeleteSelected, DraggedMessages, ExpandThread,
     ExtendNext, ExtendPrevious, MailPrefs, MarkRead, MarkUnread, OpenSelected, ReadingPanePosition,
@@ -47,7 +49,7 @@ pub fn short_date(date: DateTime<Utc>) -> String {
         local.format("%H:%M").to_string()
     } else if (now - local).num_days() < 7 {
         local.format("%a %H:%M").to_string()
-    } else if local.format("%Y").to_string() == now.format("%Y").to_string() {
+    } else if local.year() == now.year() {
         local.format("%d %b").to_string()
     } else {
         local.format("%d/%m/%Y").to_string()
@@ -78,15 +80,27 @@ pub struct MessageListView {
     anchor: Option<Id>,
     /// Compact density (from the settings).
     compact: bool,
-    // Cache, rebuilt on store/selection changes.
+    // Cache, reloaded only when the source or the store content changes.
     source: (Option<Id>, String),
+    /// `Store::revision` of the loaded data.
+    loaded_revision: Option<(u64, i64)>,
     title: String,
+    /// Folder messages carry no body (`list_message_headers`); search results do.
     messages: Vec<Message>,
+    /// Message id to index in `messages`.
+    positions: HashMap<Id, usize>,
+    /// Conversations of more than one message: thread id to member ids.
+    threads: HashMap<String, Vec<Id>>,
+    unread: usize,
     rows: Rc<Vec<Row>>,
     sizes: Rc<Vec<Size<Pixels>>>,
+    /// Top rows of collapsed or expanded conversations (they stand for the whole thread).
+    heads: HashSet<Id>,
     dues: HashMap<Id, NaiveDate>,
     category_colors: HashMap<String, u32>,
     mention_tokens: Vec<String>,
+    /// Messages mentioning the user, computed when the Mentions filter needs it.
+    mentioned: Option<HashSet<Id>>,
     /// Muted conversations (thread ids).
     muted: HashSet<String>,
     _subscriptions: Vec<Subscription>,
@@ -114,13 +128,19 @@ impl MessageListView {
             anchor: None,
             compact: false,
             source: (None, String::new()),
+            loaded_revision: None,
             title: String::new(),
             messages: Vec::new(),
+            positions: HashMap::new(),
+            threads: HashMap::new(),
+            unread: 0,
             rows: Rc::new(Vec::new()),
             sizes: Rc::new(Vec::new()),
+            heads: HashSet::new(),
             dues: HashMap::new(),
             category_colors: HashMap::new(),
             mention_tokens: Vec::new(),
+            mentioned: None,
             muted: HashSet::new(),
             _subscriptions: subscriptions,
         };
@@ -130,53 +150,61 @@ impl MessageListView {
 
     // ---------- data ----------
 
-    /// Re-reads the store and rebuilds rows (called when `AppState` changes).
+    /// Called when `AppState` changes. It notifies for every selection or sync-status change,
+    /// so the store is re-read only when the source or the store content changed.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let state = self.state.read(cx);
         let store = state.store();
         let query = state.search_query().trim().to_owned();
         let folder_id = state.selected_folder();
         let source = (folder_id, query.clone());
+        let source_changed = source != self.source;
+        let revision = store.revision().ok();
+        let reload = source_changed || revision.is_none() || revision != self.loaded_revision;
 
-        self.messages = if !query.is_empty() {
-            store
-                .search_messages(&query, SEARCH_LIMIT)
+        if reload {
+            self.loaded_revision = revision;
+            self.messages = if !query.is_empty() {
+                store
+                    .search_messages(&query, SEARCH_LIMIT)
+                    .unwrap_or_default()
+            } else if let Some(id) = folder_id {
+                store.list_message_headers(id).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            self.title = if query.is_empty() {
+                folder_id
+                    .and_then(|id| folder_label(store, id))
+                    .unwrap_or_default()
+            } else {
+                "Search results".into()
+            };
+            self.dues = mail_ops::flag_dues(store).unwrap_or_default();
+            self.category_colors = store
+                .list_categories()
                 .unwrap_or_default()
-        } else if let Some(id) = folder_id {
-            store.list_messages(id).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        self.title = if query.is_empty() {
-            folder_id
-                .and_then(|id| folder_label(store, id))
+                .into_iter()
+                .map(|category| (category.name, category.color))
+                .collect();
+            self.mention_tokens = store
+                .list_accounts()
                 .unwrap_or_default()
-        } else {
-            "Search results".into()
-        };
-        self.dues = mail_ops::flag_dues(store).unwrap_or_default();
-        self.category_colors = store
-            .list_categories()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|category| (category.name, category.color))
-            .collect();
-        self.mention_tokens = store
-            .list_accounts()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|account| {
-                let local = account.email.split('@').next()?;
-                let first = local.split(['.', '_', '-']).next()?;
-                (!first.is_empty()).then(|| first.to_lowercase())
-            })
-            .collect();
-        self.muted = mailbox_core::later::Later::load(store)
-            .map(|later| later.muted_threads.into_iter().collect())
-            .unwrap_or_default();
+                .iter()
+                .filter_map(|account| {
+                    let local = account.email.split('@').next()?;
+                    let first = local.split(['.', '_', '-']).next()?;
+                    (!first.is_empty()).then(|| first.to_lowercase())
+                })
+                .collect();
+            self.muted = mailbox_core::later::Later::load(store)
+                .map(|later| later.muted_threads.into_iter().collect())
+                .unwrap_or_default();
+            self.mentioned = None;
+            self.index_messages();
+        }
         let selected = state.selected_message();
 
-        let source_changed = source != self.source;
         if source_changed {
             self.source = source;
             self.selection.clear();
@@ -184,10 +212,10 @@ impl MessageListView {
             self.expanded.clear();
         }
         // Keep the selection in sync with what still exists and with the reading pane.
-        let present: HashSet<Id> = self.messages.iter().map(|m| m.id).collect();
-        self.selection.retain(|id| present.contains(id));
+        let positions = &self.positions;
+        self.selection.retain(|id| positions.contains_key(id));
         match selected {
-            Some(id) if present.contains(&id) && !self.selection.contains(&id) => {
+            Some(id) if self.positions.contains_key(&id) && !self.selection.contains(&id) => {
                 self.selection = vec![id];
                 self.anchor = Some(id);
             }
@@ -197,12 +225,64 @@ impl MessageListView {
         if self.anchor.is_some_and(|id| !self.selection.contains(&id)) {
             self.anchor = self.selection.last().copied();
         }
-        self.sync_settings(cx);
-        self.rebuild_rows();
-        if source_changed && !self.rows.is_empty() {
-            self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+        if reload {
+            self.sync_settings(cx);
+            self.rebuild_rows(cx);
+            if source_changed && !self.rows.is_empty() {
+                self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+            }
         }
         cx.notify();
+    }
+
+    /// Lookup tables over `messages`, built once per load instead of scanned per row.
+    fn index_messages(&mut self) {
+        self.positions = self
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| (message.id, index))
+            .collect();
+        let mut threads: HashMap<String, Vec<Id>> = HashMap::new();
+        for message in &self.messages {
+            threads
+                .entry(message.thread_id.clone())
+                .or_default()
+                .push(message.id);
+        }
+        threads.retain(|_, ids| ids.len() > 1);
+        self.threads = threads;
+        self.unread = self.messages.iter().filter(|m| !m.flags.read).count();
+    }
+
+    /// Messages whose body mentions the user. Folder bodies are streamed from the store (they
+    /// are not kept in memory); search results already carry theirs.
+    fn find_mentions(&self, cx: &App) -> HashSet<Id> {
+        let tokens = &self.mention_tokens;
+        if !self.source.1.is_empty() {
+            return self
+                .messages
+                .iter()
+                .filter(|message| mentions(&message.body_text, tokens))
+                .map(|message| message.id)
+                .collect();
+        }
+        let mut found = HashSet::new();
+        if let Some(folder_id) = self.source.0 {
+            let visited = self
+                .state
+                .read(cx)
+                .store()
+                .visit_bodies(folder_id, |id, body| {
+                    if mentions(body, tokens) {
+                        found.insert(id);
+                    }
+                });
+            if let Err(err) = visited {
+                crate::log::error(format_args!("mentions filter: {err}"));
+            }
+        }
+        found
     }
 
     /// Follows the stored "conversations" and density settings; true when they changed.
@@ -224,14 +304,30 @@ impl MessageListView {
         }
     }
 
-    fn rebuild_rows(&mut self) {
+    fn rebuild_rows(&mut self, cx: &App) {
+        if self.options.filter == Filter::Mentions && self.mentioned.is_none() {
+            self.mentioned = Some(self.find_mentions(cx));
+        }
+        let none = HashSet::new();
         let ctx = BuildContext {
             today: Local::now().date_naive(),
             offset: *Local::now().offset(),
-            mention_tokens: &self.mention_tokens,
+            mentioned: self.mentioned.as_ref().unwrap_or(&none),
             expanded: &self.expanded,
         };
         let rows = build_rows(&self.messages, &self.options, &ctx);
+        self.heads = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Message {
+                    index,
+                    child: false,
+                    thread_len,
+                    ..
+                } if *thread_len > 1 => self.messages.get(*index).map(|m| m.id),
+                _ => None,
+            })
+            .collect();
         let sizes = rows
             .iter()
             .map(|row| {
@@ -248,7 +344,7 @@ impl MessageListView {
 
     fn set_options(&mut self, options: ListOptions, cx: &mut Context<Self>) {
         self.options = options;
-        self.rebuild_rows();
+        self.rebuild_rows(cx);
         cx.notify();
     }
 
@@ -270,7 +366,9 @@ impl MessageListView {
     }
 
     fn message(&self, id: Id) -> Option<&Message> {
-        self.messages.iter().find(|m| m.id == id)
+        self.positions
+            .get(&id)
+            .and_then(|&index| self.messages.get(index))
     }
 
     // ---------- selection ----------
@@ -376,26 +474,18 @@ impl MessageListView {
     }
 
     /// `ids` plus, for each conversation top row among them, the rest of the conversation.
+    /// Called for every visible row on each frame: lookups only, no scan of the list.
     fn with_conversations(&self, ids: &[Id]) -> Vec<Id> {
-        let heads: HashSet<&str> = self
-            .rows
-            .iter()
-            .filter_map(|row| match row {
-                Row::Message {
-                    index,
-                    child: false,
-                    thread_len,
-                    ..
-                } if *thread_len > 1 => self.messages.get(*index),
-                _ => None,
-            })
-            .filter(|m| ids.contains(&m.id))
-            .map(|m| m.thread_id.as_str())
-            .collect();
         let mut targets = ids.to_vec();
-        for message in &self.messages {
-            if heads.contains(message.thread_id.as_str()) && !targets.contains(&message.id) {
-                targets.push(message.id);
+        let mut seen: HashSet<Id> = ids.iter().copied().collect();
+        for id in ids.iter().filter(|id| self.heads.contains(*id)) {
+            let members = self
+                .message(*id)
+                .and_then(|message| self.threads.get(&message.thread_id));
+            for &member in members.into_iter().flatten() {
+                if seen.insert(member) {
+                    targets.push(member);
+                }
             }
         }
         targets
@@ -485,7 +575,7 @@ impl MessageListView {
         } else {
             self.expanded.remove(thread_id);
         }
-        self.rebuild_rows();
+        self.rebuild_rows(cx);
         cx.notify();
     }
 
@@ -929,9 +1019,9 @@ impl MessageListView {
                     thread_len,
                     thread_unread,
                     expanded,
-                } => match self.messages.get(*index).cloned() {
+                } => match self.messages.get(*index) {
                     Some(message) => self.render_message_row(
-                        &message,
+                        message,
                         *child,
                         *thread_len,
                         *thread_unread,
@@ -1067,7 +1157,7 @@ impl MessageListView {
         let prefs = self.prefs.read(cx);
         let folders_collapsed = prefs.folders_collapsed;
         let pane_position = super::pane_position(cx);
-        let unread = self.messages.iter().filter(|m| !m.flags.read).count();
+        let unread = self.unread;
         let list = cx.entity();
         let layout_state = self.state.clone();
         let expand_prefs = self.prefs.clone();
@@ -1276,7 +1366,7 @@ impl Focusable for MessageListView {
 impl Render for MessageListView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.sync_settings(cx) {
-            self.rebuild_rows();
+            self.rebuild_rows(cx);
         }
         let t = theme(cx).clone();
         let toolbar = self.render_toolbar(&t, cx);

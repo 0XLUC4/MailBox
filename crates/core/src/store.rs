@@ -3,7 +3,9 @@
 //! Lists (addresses, categories, attendees...) are stored as JSON text columns,
 //! timestamps as RFC 3339 UTC text (`2026-11-14T09:30:00Z`, sorts lexicographically).
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use rusqlite::types::{Type, Value};
@@ -13,6 +15,7 @@ use serde::de::DeserializeOwned;
 
 use crate::error::{Error, Result};
 use crate::model::*;
+use crate::smart_folder::SmartFolder;
 
 /// Ordered schema migrations; index + 1 is the resulting `PRAGMA user_version`.
 /// Never edit a shipped migration: append a new one.
@@ -133,7 +136,30 @@ CREATE TABLE IF NOT EXISTS settings (
     crate::calendar::LOCAL_MIGRATION,
     crate::todo::POSITION_MIGRATION,
     crate::remote::MIGRATION,
+    // Indexes for the hot paths: folder badges (covering), account deletes, newest-first scans
+    // (search, smart folders) and folder lists.
+    r#"
+CREATE INDEX IF NOT EXISTS messages_folder_flags ON messages(folder_id, is_read, is_flagged);
+CREATE INDEX IF NOT EXISTS messages_account ON messages(account_id);
+CREATE INDEX IF NOT EXISTS messages_date ON messages(date DESC, id DESC);
+CREATE INDEX IF NOT EXISTS folders_account ON folders(account_id, position);
+"#,
 ];
+
+/// Message and unread counts of a folder, see [`Store::folder_counts`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FolderCounts {
+    pub total: i64,
+    pub unread: i64,
+}
+
+/// SQL condition on `messages` selecting a folder (or smart folder), with its parameters.
+fn folder_condition(folder_id: Id) -> (String, Vec<Id>) {
+    match SmartFolder::from_id(folder_id) {
+        Some(smart) => (smart.condition(), Vec::new()),
+        None => ("folder_id = ?1".to_owned(), vec![folder_id]),
+    }
+}
 
 /// A model type persisted in one table. Row layout: `id` then [`Record::COLUMNS`] in order.
 pub trait Record: Sized {
@@ -169,6 +195,10 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", true)?;
         // Returns the resulting mode ("wal", or "memory" for in-memory databases).
         let _mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+        // Safe with WAL (a crash can lose the last commits, never corrupt): commits no longer
+        // wait for an fsync, which dominates many small writes (sync, flag changes).
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.busy_timeout(Duration::from_secs(5))?;
         let store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -204,6 +234,15 @@ impl Store {
     /// The connection, for typed queries kept in their own module (e.g. [`crate::remote`]).
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Changes whenever the content may have changed (a write through this connection or a
+    /// commit by another one), so views can skip reloading unchanged data. Cheap.
+    pub fn revision(&self) -> Result<(u64, i64)> {
+        let external: i64 = self
+            .conn
+            .query_row("PRAGMA data_version", [], |row| row.get(0))?;
+        Ok((self.conn.total_changes(), external))
     }
 
     /// Current schema version.
@@ -292,14 +331,35 @@ impl Store {
     /// Selects records with a trailing SQL `clause` (e.g. `"WHERE folder_id = ?1 ORDER BY date"`).
     /// `clause` must be a constant: always pass user values through `params`.
     pub fn query<T: Record>(&self, clause: &str, params: impl Params) -> Result<Vec<T>> {
+        let mut records = Vec::new();
+        self.scan(clause, params, |record| {
+            records.push(record);
+            true
+        })?;
+        Ok(records)
+    }
+
+    /// Like [`Store::query`] but streams the records to `visit`, one at a time, until it returns
+    /// false: nothing is accumulated and the scan can stop early.
+    pub fn scan<T: Record>(
+        &self,
+        clause: &str,
+        params: impl Params,
+        mut visit: impl FnMut(T) -> bool,
+    ) -> Result<()> {
         let sql = format!(
             "SELECT id, {} FROM {} {clause}",
             T::COLUMNS.join(", "),
             T::TABLE
         );
-        let mut statement = self.conn.prepare(&sql)?;
-        let rows = statement.query_map(params, T::from_row)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<T>>>()?)
+        let mut statement = self.conn.prepare_cached(&sql)?;
+        let mut rows = statement.query(params)?;
+        while let Some(row) = rows.next()? {
+            if !visit(T::from_row(row)?) {
+                break;
+            }
+        }
+        Ok(())
     }
 
     // ---------- typed queries ----------
@@ -327,13 +387,48 @@ impl Store {
     /// Messages of a folder, newest first.
     /// A negative id is a smart folder (`smart_folder::SmartFolder::id`).
     pub fn list_messages(&self, folder_id: Id) -> Result<Vec<Message>> {
-        if let Some(smart) = crate::smart_folder::SmartFolder::from_id(folder_id) {
+        if let Some(smart) = SmartFolder::from_id(folder_id) {
             return smart.list_messages(self);
         }
         self.query(
             "WHERE folder_id = ?1 ORDER BY date DESC, id DESC",
             [folder_id],
         )
+    }
+
+    /// Like [`Store::list_messages`] without the bodies (`body_text` empty, `body_html` None):
+    /// what the message list shows, at a fraction of the memory.
+    pub fn list_message_headers(&self, folder_id: Id) -> Result<Vec<Message>> {
+        let columns = Message::COLUMNS
+            .iter()
+            .map(|column| match *column {
+                "body_text" => "'' AS body_text",
+                "body_html" => "NULL AS body_html",
+                column => column,
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let (condition, params) = folder_condition(folder_id);
+        let mut statement = self.conn.prepare_cached(&format!(
+            "SELECT id, {columns} FROM messages WHERE {condition} ORDER BY date DESC, id DESC"
+        ))?;
+        let rows = statement.query_map(rusqlite::params_from_iter(params), Message::from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Calls `visit(id, body_text)` for each message of a folder (or smart folder), one row at
+    /// a time, so bodies are never all in memory (e.g. the Mentions filter).
+    pub fn visit_bodies(&self, folder_id: Id, mut visit: impl FnMut(Id, &str)) -> Result<()> {
+        let (condition, params) = folder_condition(folder_id);
+        let mut statement = self.conn.prepare_cached(&format!(
+            "SELECT id, body_text FROM messages WHERE {condition}"
+        ))?;
+        let mut rows = statement.query(rusqlite::params_from_iter(params))?;
+        while let Some(row) = rows.next()? {
+            let body: String = row.get(1)?;
+            visit(row.get(0)?, &body);
+        }
+        Ok(())
     }
 
     /// `(id, folder_id, flags)` of every message in the account's folders: what sync compares,
@@ -372,21 +467,10 @@ impl Store {
 
     /// Ids of the unread messages of a folder (or smart folder), without loading the messages.
     pub fn unread_ids(&self, folder_id: Id) -> Result<Vec<Id>> {
-        let (sql, params): (String, Vec<Id>) =
-            match crate::smart_folder::SmartFolder::from_id(folder_id) {
-                Some(smart) => (
-                    format!(
-                        "SELECT id FROM messages WHERE {} AND is_read = 0",
-                        smart.condition()
-                    ),
-                    Vec::new(),
-                ),
-                None => (
-                    "SELECT id FROM messages WHERE folder_id = ?1 AND is_read = 0".to_owned(),
-                    vec![folder_id],
-                ),
-            };
-        let mut statement = self.conn.prepare(&sql)?;
+        let (condition, params) = folder_condition(folder_id);
+        let mut statement = self.conn.prepare_cached(&format!(
+            "SELECT id FROM messages WHERE {condition} AND is_read = 0"
+        ))?;
         let ids = statement.query_map(rusqlite::params_from_iter(params), |row| row.get(0))?;
         Ok(ids.collect::<rusqlite::Result<Vec<Id>>>()?)
     }
@@ -401,22 +485,61 @@ impl Store {
     }
 
     fn count_messages(&self, folder_id: Id, extra: &str) -> Result<i64> {
-        let count = |sql: String, params: &[&dyn rusqlite::ToSql]| {
-            self.conn.query_row(&sql, params, |row| row.get(0))
-        };
-        Ok(match crate::smart_folder::SmartFolder::from_id(folder_id) {
-            Some(smart) => count(
-                format!(
-                    "SELECT COUNT(*) FROM messages WHERE {} {extra}",
-                    smart.condition()
-                ),
-                &[],
-            )?,
-            None => count(
-                format!("SELECT COUNT(*) FROM messages WHERE folder_id = ?1 {extra}"),
-                &[&folder_id],
-            )?,
-        })
+        let (condition, params) = folder_condition(folder_id);
+        Ok(self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM messages WHERE {condition} {extra}"),
+            rusqlite::params_from_iter(params),
+            |row| row.get(0),
+        )?)
+    }
+
+    /// [`FolderCounts`] of every non-empty folder and smart folder (negative ids), in one pass
+    /// over a covering index instead of two queries per folder. Absent means empty.
+    pub fn folder_counts(&self) -> Result<HashMap<Id, FolderCounts>> {
+        let mut statement = self.conn.prepare_cached(
+            "SELECT c.folder_id, f.role, c.total, c.unread, c.flagged, c.flagged_unread \
+             FROM (SELECT folder_id, COUNT(*) AS total, SUM(is_read = 0) AS unread, \
+                   SUM(is_flagged) AS flagged, SUM(is_flagged AND is_read = 0) AS flagged_unread \
+                   FROM messages GROUP BY folder_id) AS c \
+             JOIN folders f ON f.id = c.folder_id",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut counts: HashMap<Id, FolderCounts> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let role: String = row.get(1)?;
+            let role = FolderRole::parse(&role).unwrap_or(FolderRole::Custom);
+            let (total, unread, flagged, flagged_unread): (i64, i64, i64, i64) =
+                (row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
+            counts.insert(row.get(0)?, FolderCounts { total, unread });
+            // Mirrors `SmartFolder::condition`.
+            for smart in SmartFolder::ALL {
+                let add = match smart {
+                    SmartFolder::AllInboxes => {
+                        (role == FolderRole::Inbox).then_some((total, unread))
+                    }
+                    SmartFolder::AllDrafts => {
+                        (role == FolderRole::Drafts).then_some((total, unread))
+                    }
+                    SmartFolder::AllSent => (role == FolderRole::Sent).then_some((total, unread)),
+                    SmartFolder::Unread => (!matches!(
+                        role,
+                        FolderRole::Trash
+                            | FolderRole::Junk
+                            | FolderRole::Drafts
+                            | FolderRole::Sent
+                    ))
+                    .then_some((unread, unread)),
+                    SmartFolder::Flagged => (!matches!(role, FolderRole::Trash | FolderRole::Junk))
+                        .then_some((flagged, flagged_unread)),
+                };
+                if let Some((total, unread)) = add {
+                    let entry = counts.entry(smart.id()).or_default();
+                    entry.total += total;
+                    entry.unread += unread;
+                }
+            }
+        }
+        Ok(counts)
     }
 
     pub fn list_calendars(&self) -> Result<Vec<Calendar>> {
@@ -1026,6 +1149,162 @@ pub(crate) mod tests {
         let mut all = store.unread_ids(unread_smart).unwrap();
         all.sort_unstable();
         assert_eq!(all, [unread.id, elsewhere.id]);
+    }
+
+    #[test]
+    fn folder_counts_match_the_count_queries() {
+        let store = store();
+        let account = account(&store);
+        let inbox = folder(&store, account.id, FolderRole::Inbox);
+        let drafts = folder(&store, account.id, FolderRole::Drafts);
+        let trash = folder(&store, account.id, FolderRole::Trash);
+        let empty = folder(&store, account.id, FolderRole::Archive);
+        for (folder_id, read, flagged) in [
+            (inbox.id, false, true),
+            (inbox.id, true, true),
+            (inbox.id, false, false),
+            (drafts.id, true, false),
+            (trash.id, false, true),
+        ] {
+            let mut saved = message(account.id, folder_id);
+            saved.flags.read = read;
+            saved.flags.flagged = flagged;
+            store.save(&mut saved).unwrap();
+        }
+        let counts = store.folder_counts().unwrap();
+        let ids = [inbox.id, drafts.id, trash.id, empty.id]
+            .into_iter()
+            .chain(SmartFolder::ALL.map(SmartFolder::id));
+        for id in ids {
+            let expected = FolderCounts {
+                total: store.message_count(id).unwrap(),
+                unread: store.unread_count(id).unwrap(),
+            };
+            assert_eq!(
+                counts.get(&id).copied().unwrap_or_default(),
+                expected,
+                "folder {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn headers_skip_bodies_and_revision_tracks_writes() {
+        let store = store();
+        let account = account(&store);
+        let inbox = folder(&store, account.id, FolderRole::Inbox);
+        let mut full = message(account.id, inbox.id);
+        full.body_html = Some("<p>Hi</p>".into());
+        store.save(&mut full).unwrap();
+
+        let before = store.revision().unwrap();
+        assert_eq!(store.revision().unwrap(), before, "reads keep the revision");
+        let headers = store.list_message_headers(inbox.id).unwrap();
+        let expected = Message {
+            body_text: String::new(),
+            body_html: None,
+            ..full.clone()
+        };
+        assert_eq!(headers, vec![expected]);
+        assert_eq!(
+            store
+                .list_message_headers(SmartFolder::AllInboxes.id())
+                .unwrap()
+                .len(),
+            1
+        );
+        let mut bodies = Vec::new();
+        store
+            .visit_bodies(inbox.id, |id, body| bodies.push((id, body.to_owned())))
+            .unwrap();
+        assert_eq!(bodies, vec![(full.id, full.body_text.clone())]);
+
+        full.flags.read = true;
+        store.save(&mut full).unwrap();
+        assert_ne!(store.revision().unwrap(), before);
+    }
+
+    /// Timings on a 50k-message mailbox. Run with
+    /// `cargo test -p mailbox-core --release -- --ignored --nocapture bench_large_mailbox`.
+    #[test]
+    #[ignore]
+    fn bench_large_mailbox() {
+        use std::time::Instant;
+        let store = store();
+        let account = account(&store);
+        let folders: Vec<Folder> = [
+            FolderRole::Inbox,
+            FolderRole::Archive,
+            FolderRole::Sent,
+            FolderRole::Trash,
+            FolderRole::Custom,
+        ]
+        .into_iter()
+        .map(|role| folder(&store, account.id, role))
+        .collect();
+        let start = Instant::now();
+        store
+            .transaction(|store| {
+                for index in 0..50_000_i64 {
+                    let mut saved = message(account.id, folders[index as usize % 5].id);
+                    saved.thread_id = format!("t{}", index / 3);
+                    saved.subject = format!("Subject {index}");
+                    saved.body_text = "Lorem ipsum dolor sit amet. ".repeat(80);
+                    saved.body_html = Some(format!("<p>{}</p>", saved.body_text));
+                    saved.flags.read = index % 4 != 0;
+                    saved.date += chrono::Duration::minutes(index);
+                    store.save(&mut saved)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        println!("insert 50k (one transaction): {:?}", start.elapsed());
+
+        let time = |label: &str, run: &mut dyn FnMut() -> usize| {
+            let start = Instant::now();
+            let count = run();
+            println!("{label}: {:?} ({count})", start.elapsed());
+        };
+        let inbox = folders[0].id;
+        time("list_messages inbox (10k, bodies)", &mut || {
+            store.list_messages(inbox).unwrap().len()
+        });
+        time("list_message_headers inbox (10k)", &mut || {
+            store.list_message_headers(inbox).unwrap().len()
+        });
+        time("per-folder count queries (old badges)", &mut || {
+            folders
+                .iter()
+                .map(|f| f.id)
+                .chain(SmartFolder::ALL.map(SmartFolder::id))
+                .map(|id| {
+                    store.message_count(id).unwrap() as usize
+                        + store.unread_count(id).unwrap() as usize
+                })
+                .sum()
+        });
+        time("folder_counts (new badges)", &mut || {
+            store.folder_counts().unwrap().len()
+        });
+        time("revision", &mut || store.revision().unwrap().0 as usize);
+        // What every search did before: load all messages, then filter in memory.
+        time("old search: load all 50k", &mut || {
+            store
+                .query::<Message>("ORDER BY date DESC, id DESC", [])
+                .unwrap()
+                .len()
+        });
+        for query in [
+            "subject 49990",
+            "is:unread",
+            "nomatch",
+            "-nomatch",
+            "after:2026-12-01",
+        ] {
+            time(format!("search `{query}` limit 500").as_str(), &mut || {
+                store.search_messages(query, 500).unwrap().len()
+            });
+        }
     }
 
     #[test]

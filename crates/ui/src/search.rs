@@ -21,6 +21,8 @@ use crate::theme::{
 const MAX_RECENT: usize = 8;
 /// Suggestions shown at once.
 const MAX_SUGGESTIONS: usize = 8;
+/// Pause in typing before the query runs: each run re-queries the store and rebuilds the list.
+const TYPING_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -46,6 +48,9 @@ pub struct SearchView {
     highlighted: usize,
     /// Last query written to `AppState`, to tell our writes from external ones.
     written: String,
+    /// Typed text not published yet (see [`SearchView::publish_soon`]).
+    typing: bool,
+    _debounce: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -61,7 +66,7 @@ impl SearchView {
                         InputEvent::Change => {
                             this.open = true;
                             this.highlighted = 0;
-                            this.publish(cx);
+                            this.publish_soon(cx);
                         }
                         InputEvent::PressEnter { .. } => this.accept(window, cx),
                         InputEvent::Focus => {
@@ -84,6 +89,8 @@ impl SearchView {
             open: false,
             highlighted: 0,
             written: String::new(),
+            typing: false,
+            _debounce: None,
             _subscriptions: subscriptions,
         }
     }
@@ -115,7 +122,22 @@ impl SearchView {
         }
     }
 
+    /// Publishes after [`TYPING_DEBOUNCE`] without typing (a new key restarts the wait).
+    fn publish_soon(&mut self, cx: &mut Context<Self>) {
+        self.typing = true;
+        self._debounce = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TYPING_DEBOUNCE).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.typing {
+                    this.publish(cx);
+                }
+            });
+        }));
+        cx.notify();
+    }
+
     fn publish(&mut self, cx: &mut Context<Self>) {
+        self.typing = false;
         let query = self.effective_query(cx);
         self.written = query.clone();
         self.state
@@ -132,7 +154,7 @@ impl SearchView {
             self.input
                 .update(cx, |input, cx| input.set_value(current, window, cx));
             cx.notify();
-        } else if !current.is_empty() && self.effective_query(cx) != current {
+        } else if !self.typing && !current.is_empty() && self.effective_query(cx) != current {
             self.publish(cx);
         }
     }
