@@ -1055,6 +1055,9 @@ impl CalendarView {
 
     fn import_ics(&mut self, cx: &mut Context<Self>) {
         let Some(calendar_id) = self.default_calendar(cx) else {
+            self.state.update(cx, |state, cx| {
+                state.report_error("Create a calendar first to import events", cx)
+            });
             return;
         };
         let paths = cx.prompt_for_paths(PathPromptOptions {
@@ -1064,8 +1067,18 @@ impl CalendarView {
             prompt: Some("Import".into()),
         });
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = paths.await else {
-                return;
+            let paths = match paths.await {
+                Ok(Ok(Some(paths))) => paths,
+                Ok(Ok(None)) => return,
+                Ok(Err(err)) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.state.update(cx, |state, cx| {
+                            state.report_error(format!("Cannot open the file picker: {err}"), cx)
+                        })
+                    });
+                    return;
+                }
+                Err(_) => return,
             };
             let Some(path) = paths.into_iter().next() else {
                 return;

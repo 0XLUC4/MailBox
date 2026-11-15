@@ -66,8 +66,10 @@ impl ReminderService {
 
     fn tick(&mut self, cx: &mut Context<Self>) {
         let now = Utc::now();
-        let due = cal::due_reminders(self.state.read(cx).store(), self.last_check, now)
-            .unwrap_or_default();
+        // On a read error, keep `last_check` so the next tick catches up.
+        let Ok(due) = cal::due_reminders(self.state.read(cx).store(), self.last_check, now) else {
+            return;
+        };
         self.last_check = now;
         let mut changed = false;
         for reminder in due {
