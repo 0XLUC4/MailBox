@@ -4059,6 +4059,7 @@ dependencies = [
  "async-channel",
  "chrono",
  "gpui-kit",
+ "gpui-pre-windows",
  "mailbox-core",
  "mailbox-sync",
  "mailbox-updater",

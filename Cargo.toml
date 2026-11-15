@@ -24,6 +24,8 @@ thiserror = "2.0.21"
 chrono-tz = "0.10"
 # GPUI + gpui-component + Lucide icons. Renamed to `gpui` so GPUI derive macros resolve.
 gpui = { package = "gpui-kit", version = "=0.9.0" }
+# GPUI's Windows backend (vendored, see vendor/README.md): the frame clear color.
+gpui-pre-windows = "=0.3.11"
 # Sync (IMAP/SMTP/OAuth/credentials, MIME parsing).
 imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
 keyring = "4.2"

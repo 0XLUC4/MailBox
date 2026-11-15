@@ -300,6 +300,12 @@ fn apply(appearance: Appearance, accent: u32, window: &Window, cx: &mut App) {
     } else {
         Theme::light(accent)
     };
+    // Each frame starts from the theme background, never white (see vendor/README.md).
+    #[cfg(windows)]
+    {
+        let (r, g, b) = rgb_bytes(theme.background);
+        gpui_windows::set_opaque_background(u32::from_be_bytes([0, r, g, b]));
+    }
     cx.set_global(GlobalTheme {
         theme,
         appearance,

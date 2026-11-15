@@ -16,6 +16,7 @@ ureq.workspace = true
 mailbox-updater.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+gpui-pre-windows.workspace = true
 tauri-winrt-notification.workspace = true
 windows-registry.workspace = true
 

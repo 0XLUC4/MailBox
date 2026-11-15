@@ -23,6 +23,22 @@ use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, Sh
 use crate::*;
 use gpui::*;
 
+/// Mailbox patch: what an opaque window is cleared to before each frame is drawn, `0xRRGGBB`
+/// (GPUI clears to white). The app sets its theme background: a buffer shown before its scene is
+/// drawn (NVIDIA RTX 50 multi-plane overlay) then shows that color instead of a white flash.
+static OPAQUE_BACKGROUND: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0xffffff);
+
+/// Sets the color opaque windows are cleared to before each frame, `0xRRGGBB`.
+pub fn set_opaque_background(rgb: u32) {
+    OPAQUE_BACKGROUND.store(rgb, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn opaque_background() -> [f32; 4] {
+    let rgb = OPAQUE_BACKGROUND.load(std::sync::atomic::Ordering::Relaxed);
+    let channel = |shift: u32| ((rgb >> shift) & 0xff) as f32 / 255.0;
+    [channel(16), channel(8), channel(0), 1.0]
+}
+
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
 const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
@@ -352,7 +368,7 @@ impl DirectXRenderer {
         background_appearance: WindowBackgroundAppearance,
     ) -> Result<()> {
         self.pre_draw(&match background_appearance {
-            WindowBackgroundAppearance::Opaque => [1.0f32; 4],
+            WindowBackgroundAppearance::Opaque => opaque_background(),
             _ => [0.0f32; 4],
         })?;
         self.upload_scene_buffers(scene)?;
