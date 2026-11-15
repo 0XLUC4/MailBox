@@ -194,27 +194,54 @@ pub fn save_accounts(path: &Path, accounts: &[AccountConfig]) -> SyncResult<()> 
     Ok(())
 }
 
-/// Secrets in the OS credential store.
+/// Secrets in the OS credential store, read once per run: on macOS each Keychain read can ask
+/// the user for permission, and sync reads them every few minutes.
 pub mod credentials {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock, PoisonError};
+
     use super::*;
+
+    type Cache = Mutex<HashMap<(String, String), String>>;
+
+    fn cache() -> std::sync::MutexGuard<'static, HashMap<(String, String), String>> {
+        static CACHE: OnceLock<Cache> = OnceLock::new();
+        CACHE
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn key(service: &str, user: &str) -> (String, String) {
+        (service.to_owned(), user.to_owned())
+    }
 
     fn entry(service: &str, user: &str) -> SyncResult<keyring::Entry> {
         keyring::Entry::new(service, user).map_err(|err| SyncError::Credentials(err.to_string()))
     }
 
     pub fn get(service: &str, user: &str) -> SyncResult<String> {
-        entry(service, user)?
+        if let Some(secret) = cache().get(&key(service, user)) {
+            return Ok(secret.clone());
+        }
+        let secret = entry(service, user)?
             .get_password()
-            .map_err(|err| SyncError::Credentials(err.to_string()))
+            .map_err(|err| SyncError::Credentials(err.to_string()))?;
+        cache().insert(key(service, user), secret.clone());
+        Ok(secret)
     }
 
     pub fn set(service: &str, user: &str, secret: &str) -> SyncResult<()> {
+        cache().remove(&key(service, user));
         entry(service, user)?
             .set_password(secret)
-            .map_err(|err| SyncError::Credentials(err.to_string()))
+            .map_err(|err| SyncError::Credentials(err.to_string()))?;
+        cache().insert(key(service, user), secret.to_owned());
+        Ok(())
     }
 
     pub fn delete(service: &str, user: &str) -> SyncResult<()> {
+        cache().remove(&key(service, user));
         entry(service, user)?
             .delete_credential()
             .map_err(|err| SyncError::Credentials(err.to_string()))
