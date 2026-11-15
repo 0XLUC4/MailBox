@@ -78,13 +78,17 @@ every 6 hours (a plain download, not the rate-limited GitHub API). "Update and r
 exe next to the running one, checks its size and SHA-256, swaps it in (the previous exe is kept as
 `<name>.old.exe` until the next start), relaunches, and rolls back if anything fails.
 
-The same workflow builds `Mailbox-X.Y.Z-macos-arm64.dmg` for Apple Silicon (M1 to M5) on a macOS
-runner (`scripts/package-macos.sh`) and adds it to the release. It is ad-hoc signed, not notarized:
-the first launch needs right-click > Open. On macOS the update popover's "Download" button opens the
-release page (no in-place install). It also builds `Mailbox-X.Y.Z-linux-x64.tar.gz`
-(`scripts/package-linux.sh`: the binary, a `.desktop` entry and the icon), same "Download" button.
-Run the workflow by hand (Actions > release > Run workflow) to build all three packages as workflow
-artifacts without publishing anything.
+The same workflow builds macOS Apple Silicon (M1 to M5) on a macOS runner
+(`scripts/package-macos.sh`): `Mailbox-X.Y.Z-macos-arm64.dmg` to install and
+`Mailbox-X.Y.Z-macos-arm64.app.tar.gz`, listed under `platforms.darwin-aarch64` in `latest.json`:
+"Update and restart" swaps the running `Mailbox.app` (kept as `Mailbox.old.app` until the next
+start). Not notarized: the first launch needs right-click > Open. It is signed with the
+self-signed certificate in the `MACOS_CERT_P12` / `MACOS_CERT_PASSWORD` secrets (ad hoc without
+them): the same signature on every release keeps the Keychain's "Always Allow" across updates.
+Linux: `Mailbox-X.Y.Z-linux-x64.tar.gz` (`scripts/package-linux.sh`: the binary, a `.desktop`
+entry and the icon); the update popover's "Download" opens the release page. A final job publishes
+all packages and `latest.json` together. Run the workflow by hand (Actions > release > Run
+workflow) to build everything as workflow artifacts without publishing anything.
 
 ## Project layout
 

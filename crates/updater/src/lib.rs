@@ -3,8 +3,12 @@
 //! not the rate-limited GitHub API), then the exe it points to.
 //!
 //! Release convention (README, "Releasing"): tag `vX.Y.Z`, assets
-//! `Mailbox-X.Y.Z-windows-x64.exe` and `latest.json`:
-//! `{ "version", "pub_date", "notes", "platforms": { "windows-x86_64": { "url", "sha256", "size" } } }`.
+//! `Mailbox-X.Y.Z-windows-x64.exe`, `Mailbox-X.Y.Z-macos-arm64.app.tar.gz` and `latest.json`:
+//! `{ "version", "pub_date", "notes", "platforms": { "<platform>": { "url", "sha256", "size" } } }`
+//! with `windows-x86_64` (the exe) and `darwin-aarch64` (Mailbox.app as a tar.gz).
+//!
+//! Windows swaps the running exe; macOS swaps the running `Mailbox.app` bundle. Elsewhere
+//! (Linux) a newer release is only announced.
 //!
 //! Test hook: `MAILBOX_UPDATE_FEED=<path or URL of a latest.json>` replaces the GitHub manifest;
 //! its asset URL may then be a local file path.
@@ -24,8 +28,16 @@ use sha2::{Digest as _, Sha256};
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Points the check at another `latest.json` (local path or URL) instead of GitHub.
 pub const FEED_ENV: &str = "MAILBOX_UPDATE_FEED";
-/// The `platforms` key this build installs.
-pub const PLATFORM: &str = "windows-x86_64";
+/// The `platforms` key this build installs; `None`: no in-place install (only announced).
+pub const PLATFORM: Option<&str> = if cfg!(windows) {
+    Some("windows-x86_64")
+} else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    Some("darwin-aarch64")
+} else {
+    None
+};
+/// Whether this build installs updates itself.
+pub const SUPPORTED: bool = PLATFORM.is_some();
 
 const MANIFEST_URL: &str = "https://github.com/0XLUC4/MailBox/releases/latest/download/latest.json";
 const RELEASE_PAGE_URL: &str = "https://github.com/0XLUC4/MailBox/releases/tag/v";
@@ -53,10 +65,10 @@ impl Error {
             Error::Offline => "Offline: could not reach GitHub",
             Error::NoRelease => "No release published yet",
             Error::BadResponse => "Unexpected answer from GitHub",
-            Error::MissingAsset => "This release has no Windows package",
+            Error::MissingAsset => "This release has no package for this system",
             Error::Checksum => "The download is damaged (checksum mismatch)",
             Error::DevBuild => "Development build: updates are installed only in a release build",
-            Error::Unsupported => "Updates are installed automatically only on Windows",
+            Error::Unsupported => "Updates are installed automatically only on Windows and macOS",
             Error::Install(_) => "Could not install the update",
         }
     }
@@ -180,6 +192,15 @@ pub fn check() -> Result<Option<Release>, Error> {
 
 /// Reads a `latest.json`: `None` when its version is not newer than `current`.
 pub fn parse_manifest(json: &str, current: Version) -> Result<Option<Release>, Error> {
+    parse_manifest_for(json, current, PLATFORM)
+}
+
+/// [`parse_manifest`] for the `platform` key; `None` only reads the version and notes.
+pub fn parse_manifest_for(
+    json: &str,
+    current: Version,
+    platform: Option<&str>,
+) -> Result<Option<Release>, Error> {
     // Windows PowerShell may write a BOM, which serde_json rejects.
     let json = json.trim_start_matches('\u{feff}');
     let manifest: Manifest = serde_json::from_str(json).map_err(|_| Error::BadResponse)?;
@@ -187,8 +208,20 @@ pub fn parse_manifest(json: &str, current: Version) -> Result<Option<Release>, E
     if version <= current {
         return Ok(None);
     }
+    let notes = manifest.notes.unwrap_or_default();
+    let page_url = format!("{RELEASE_PAGE_URL}{version}");
+    let Some(platform) = platform else {
+        return Ok(Some(Release {
+            version,
+            notes,
+            page_url,
+            package_url: String::new(),
+            sha256: String::new(),
+            size: 0,
+        }));
+    };
     let mut platforms = manifest.platforms;
-    let asset = platforms.remove(PLATFORM).ok_or(Error::MissingAsset)?;
+    let asset = platforms.remove(platform).ok_or(Error::MissingAsset)?;
     let sha256 = asset.sha256.trim().to_ascii_lowercase();
     let valid_hash = sha256.len() == 64 && sha256.chars().all(|c| c.is_ascii_hexdigit());
     if asset.url.trim().is_empty() || !valid_hash || asset.size == 0 {
@@ -196,8 +229,8 @@ pub fn parse_manifest(json: &str, current: Version) -> Result<Option<Release>, E
     }
     Ok(Some(Release {
         version,
-        notes: manifest.notes.unwrap_or_default(),
-        page_url: format!("{RELEASE_PAGE_URL}{version}"),
+        notes,
+        page_url,
         package_url: asset.url,
         sha256,
         size: asset.size,
@@ -236,7 +269,7 @@ pub fn is_dev_build(exe: &Path) -> bool {
 
 /// The running exe, when it may be updated (release / portable install).
 pub fn installed_exe() -> Result<PathBuf, Error> {
-    if !cfg!(windows) {
+    if !SUPPORTED {
         return Err(Error::Unsupported);
     }
     let exe = std::env::current_exe()?;
@@ -246,23 +279,36 @@ pub fn installed_exe() -> Result<PathBuf, Error> {
     Ok(exe)
 }
 
-/// Downloads the exe of `release`, checks its size and SHA-256, writes it next to the running
-/// exe, swaps the two and starts the new one with the same arguments. `on_progress` receives the
-/// bytes downloaded so far (out of `release.size`). On `Ok` the caller must quit right away; on
-/// any error the installed exe is left (or put back) as it was.
+/// Downloads the package of `release`, checks its size and SHA-256, puts it in place of the
+/// running app (the exe on Windows, `Mailbox.app` on macOS) and starts the new one with the
+/// same arguments. `on_progress` receives the bytes downloaded so far (out of `release.size`).
+/// On `Ok` the caller must quit right away; on any error the installed app is left (or put
+/// back) as it was.
 pub fn install(release: &Release, on_progress: impl Fn(u64)) -> Result<(), Error> {
     let exe = installed_exe()?;
+    #[cfg(target_os = "macos")]
+    let bundle = macos::bundle_of(&exe)
+        .ok_or_else(|| Error::Install("not running from Mailbox.app".into()))?;
     let bytes = fetch(&release.package_url, release.size, on_progress)?;
     verify(&bytes, release)?;
+    #[cfg(target_os = "macos")]
+    return macos::install(&exe, &bundle, &bytes);
+    #[cfg(not(target_os = "macos"))]
+    install_exe(&exe, &bytes)
+}
+
+/// Windows: the downloaded exe replaces the running one.
+#[cfg(not(target_os = "macos"))]
+fn install_exe(exe: &Path, bytes: &[u8]) -> Result<(), Error> {
     // Staged next to the exe so the final rename never crosses volumes.
-    let staged = staged_exe_path(&exe);
-    if let Err(err) = fs::write(&staged, &bytes) {
+    let staged = staged_exe_path(exe);
+    if let Err(err) = fs::write(&staged, bytes) {
         let _ = fs::remove_file(&staged);
         return Err(err.into());
     }
-    swap_exe(&exe, &staged)?;
-    if let Err(err) = relaunch(&exe) {
-        let _ = rollback(&exe);
+    swap_exe(exe, &staged)?;
+    if let Err(err) = relaunch(exe) {
+        let _ = rollback(exe);
         return Err(err);
     }
     Ok(())
@@ -323,10 +369,22 @@ pub fn finish_pending_update() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
+    #[cfg(target_os = "macos")]
+    let Some(old) = macos::bundle_of(&exe).map(|bundle| macos::old_bundle_path(&bundle)) else {
+        return;
+    };
+    #[cfg(not(target_os = "macos"))]
     let old = old_exe_path(&exe);
     let after_update = std::env::var_os(AFTER_UPDATE_ENV).is_some();
+    let remove = |path: &Path| {
+        if path.is_dir() {
+            fs::remove_dir_all(path)
+        } else {
+            fs::remove_file(path)
+        }
+    };
     for _ in 0..75 {
-        if !old.exists() || fs::remove_file(&old).is_ok() || !after_update {
+        if !old.exists() || remove(&old).is_ok() || !after_update {
             return;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -339,6 +397,88 @@ fn relaunch(exe: &Path) -> Result<(), Error> {
         .env(AFTER_UPDATE_ENV, "1")
         .spawn()?;
     Ok(())
+}
+
+/// macOS: the app is a bundle (`Mailbox.app/Contents/MacOS/mailbox`); the release ships it as
+/// a tar.gz, unpacked next to the installed bundle, then the two bundles are swapped.
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+
+    /// `…/Mailbox.app` for an exe at `…/Mailbox.app/Contents/MacOS/<name>`.
+    pub fn bundle_of(exe: &Path) -> Option<PathBuf> {
+        let bundle = exe.parent()?.parent()?.parent()?;
+        (bundle.extension()? == "app").then(|| bundle.to_path_buf())
+    }
+
+    /// Where the running bundle goes during an update: `<name>.old.app` next to it.
+    pub fn old_bundle_path(bundle: &Path) -> PathBuf {
+        let stem = bundle
+            .file_stem()
+            .map_or_else(|| "Mailbox".into(), |stem| stem.to_string_lossy());
+        bundle.with_file_name(format!("{stem}.old.app"))
+    }
+
+    pub fn install(exe: &Path, bundle: &Path, archive: &[u8]) -> Result<(), Error> {
+        let dir = bundle
+            .parent()
+            .ok_or_else(|| Error::Install("no folder around Mailbox.app".into()))?;
+        // Unpacked next to the bundle so the final rename never crosses volumes.
+        let staging = dir.join(".mailbox-update");
+        let _ = fs::remove_dir_all(&staging);
+        let result = unpack_and_swap(exe, bundle, &staging, archive);
+        let _ = fs::remove_dir_all(&staging);
+        result
+    }
+
+    fn unpack_and_swap(
+        exe: &Path,
+        bundle: &Path,
+        staging: &Path,
+        archive: &[u8],
+    ) -> Result<(), Error> {
+        fs::create_dir_all(staging)?;
+        let archive_path = staging.join("update.tar.gz");
+        fs::write(&archive_path, archive)?;
+        let status = Command::new("/usr/bin/tar")
+            .arg("-xzf")
+            .arg(&archive_path)
+            .arg("-C")
+            .arg(staging)
+            .status()?;
+        if !status.success() {
+            return Err(Error::Install(format!("tar failed ({status})")));
+        }
+        let staged = fs::read_dir(staging)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "app"))
+            .ok_or_else(|| Error::Install("no .app in the update".into()))?;
+        // The exe inside the new bundle, at the same place as the running one.
+        let relative = exe
+            .strip_prefix(bundle)
+            .map_err(|_| Error::Install("exe outside its bundle".into()))?
+            .to_path_buf();
+        if !staged.join(&relative).is_file() {
+            return Err(Error::Install(
+                "the update has no Mailbox executable".into(),
+            ));
+        }
+
+        let old = old_bundle_path(bundle);
+        let _ = fs::remove_dir_all(&old);
+        fs::rename(bundle, &old)?;
+        if let Err(err) = fs::rename(&staged, bundle) {
+            let _ = fs::rename(&old, bundle);
+            return Err(err.into());
+        }
+        if let Err(err) = relaunch(&bundle.join(&relative)) {
+            let _ = fs::remove_dir_all(bundle);
+            let _ = fs::rename(&old, bundle);
+            return Err(err);
+        }
+        Ok(())
+    }
 }
 
 fn is_url(text: &str) -> bool {
@@ -409,6 +549,23 @@ mod tests {
     }
 
     const HASH: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    const WINDOWS: &str = "windows-x86_64";
+
+    /// The tests read manifests as the Windows build does.
+    fn parse_manifest(json: &str, current: Version) -> Result<Option<Release>, Error> {
+        parse_manifest_for(json, current, Some(WINDOWS))
+    }
+
+    #[test]
+    fn announces_without_a_package_where_updates_are_not_installed() {
+        let json = manifest("0.2.0", serde_json::json!({}));
+        let release = parse_manifest_for(&json, v("0.1.0"), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(release.version, v("0.2.0"));
+        assert!(release.package_url.is_empty());
+        assert_eq!(parse_manifest_for(&json, v("0.2.0"), None), Ok(None));
+    }
 
     fn manifest(version: &str, platforms: serde_json::Value) -> String {
         serde_json::json!({
@@ -419,7 +576,7 @@ mod tests {
     }
 
     fn windows_asset(url: &str, sha256: &str, size: u64) -> serde_json::Value {
-        serde_json::json!({ PLATFORM: { "url": url, "sha256": sha256, "size": size } })
+        serde_json::json!({ WINDOWS: { "url": url, "sha256": sha256, "size": size } })
     }
 
     fn release(sha256: &str, size: u64) -> Release {

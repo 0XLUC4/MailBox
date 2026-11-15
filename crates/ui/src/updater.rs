@@ -239,7 +239,7 @@ fn available_card(updater: &Entity<Updater>, release: &Release, cx: &App) -> Any
         .map(|err| tr(cx, err.message()));
     let notes = release.highlights(NOTES_LINES);
 
-    let action = if cfg!(windows) {
+    let action = if mailbox_updater::SUPPORTED {
         let install_updater = updater.clone();
         let label = if installing {
             tr(cx, "Updating…")
@@ -250,13 +250,13 @@ fn available_card(updater: &Entity<Updater>, release: &Release, cx: &App) -> Any
             install_updater.update(cx, |updater, cx| updater.install(cx))
         })
     } else {
-        // No in-place install outside Windows: the release page has the download.
+        // No in-place install here (Linux): the release page has the download.
         let page_url = release.page_url.clone();
         big_button("download-update", tr(cx, "Download"), false, move |cx| {
             cx.open_url(&page_url)
         })
     };
-    let footer = if cfg!(windows) {
+    let footer = if mailbox_updater::SUPPORTED {
         tr(cx, "Mailbox restarts to finish the update.")
     } else {
         tr(cx, "Opens the release page to download it.")

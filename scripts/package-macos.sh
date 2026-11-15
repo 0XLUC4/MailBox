@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Builds Mailbox for Apple Silicon (M1 to M5, aarch64-apple-darwin) and writes
-#   dist/Mailbox-<version>-macos-arm64.dmg   Mailbox.app (ad-hoc signed) + a link to /Applications
+#   dist/Mailbox-<version>-macos-arm64.dmg          Mailbox.app + a link to /Applications
+#   dist/Mailbox-<version>-macos-arm64.app.tar.gz   Mailbox.app alone (the in-app updater's package)
+#
+# Signed with MACOS_SIGN_IDENTITY (a code-signing identity in a keychain) when set, else ad hoc.
+# A stable identity keeps the Keychain's "Always Allow" across updates (an ad-hoc signature
+# changes with every build, so macOS asks again for the saved passwords).
 #
 #   scripts/package-macos.sh [--skip-build]
 #
@@ -57,8 +62,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Apple Silicon refuses unsigned code: ad-hoc signature (no Apple Developer account needed).
-codesign --force --deep --sign - "$app"
+# Apple Silicon refuses unsigned code. No Apple Developer account needed for either identity.
+codesign --force --deep --sign "${MACOS_SIGN_IDENTITY:--}" "$app"
+codesign --display --requirements - "$app" 2>&1 | tail -1
 
 mkdir -p dist
 dmg="dist/Mailbox-$version-macos-arm64.dmg"
@@ -66,3 +72,7 @@ ln -s /Applications "$work/dmg/Applications"
 rm -f "$dmg"
 hdiutil create -volname "Mailbox $version" -srcfolder "$work/dmg" -fs HFS+ -format UDZO -ov "$dmg" >/dev/null
 echo "Wrote $dmg ($(du -h "$dmg" | cut -f1))"
+update="dist/Mailbox-$version-macos-arm64.app.tar.gz"
+# COPYFILE_DISABLE: no AppleDouble ._ files in the archive.
+COPYFILE_DISABLE=1 tar -czf "$update" -C "$work/dmg" Mailbox.app
+echo "Wrote $update ($(du -h "$update" | cut -f1))"

@@ -54,8 +54,8 @@ const FR: &[(&str, &str)] = &[
         "Réponse inattendue de GitHub",
     ),
     (
-        "This release has no Windows package",
-        "Cette version n'a pas de paquet Windows",
+        "This release has no package for this system",
+        "Cette version n'a pas de paquet pour ce système",
     ),
     (
         "The download is damaged (checksum mismatch)",
@@ -66,8 +66,8 @@ const FR: &[(&str, &str)] = &[
         "Version de développement : les mises à jour s'installent seulement dans une version publiée",
     ),
     (
-        "Updates are installed automatically only on Windows",
-        "Les mises à jour automatiques ne sont disponibles que sous Windows",
+        "Updates are installed automatically only on Windows and macOS",
+        "Les mises à jour automatiques ne sont disponibles que sous Windows et macOS",
     ),
     (
         "Could not install the update",

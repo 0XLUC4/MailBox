@@ -1,8 +1,16 @@
-# Pushing a tag vX.Y.Z builds Windows x64, macOS Apple Silicon and Linux x64 and publishes the
-# GitHub release: Mailbox-X.Y.Z-windows-x64.exe + latest.json (read by the in-app updater),
-# Mailbox-X.Y.Z-macos-arm64.dmg and Mailbox-X.Y.Z-linux-x64.tar.gz (see README, "Releasing").
-# Run manually (Actions > release > Run workflow) to build all three without publishing: the
+# Pushing a tag vX.Y.Z builds Windows x64, macOS Apple Silicon and Linux x64, then publishes the
+# GitHub release in one go (see README, "Releasing"):
+#   Mailbox-X.Y.Z-windows-x64.exe          Windows (also the in-app update package)
+#   Mailbox-X.Y.Z-macos-arm64.dmg          macOS install
+#   Mailbox-X.Y.Z-macos-arm64.app.tar.gz   macOS in-app update package
+#   Mailbox-X.Y.Z-linux-x64.tar.gz         Linux
+#   latest.json                            read by the in-app updater (windows-x86_64, darwin-aarch64)
+# Run manually (Actions > release > Run workflow) to build everything without publishing: the
 # packages are kept as workflow artifacts.
+#
+# macOS signing: the MACOS_CERT_P12 (base64 .p12) and MACOS_CERT_PASSWORD secrets hold a
+# self-signed code-signing certificate. The same certificate on every release keeps the
+# Keychain's "Always Allow" across updates; without the secrets the app is signed ad hoc.
 name: release
 
 on:
@@ -35,10 +43,12 @@ jobs:
         shell: pwsh
         run: |
           # latest.json notes: the message of an annotated tag (checkout drops the tag object).
-          git fetch --force origin "refs/tags/$($env:GITHUB_REF_NAME):refs/tags/$($env:GITHUB_REF_NAME)"
           $notes = ''
-          if ((git cat-file -t $env:GITHUB_REF_NAME) -eq 'tag') {
-            $notes = (git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' $env:GITHUB_REF_NAME) -join "`n"
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            git fetch --force origin "refs/tags/$($env:GITHUB_REF_NAME):refs/tags/$($env:GITHUB_REF_NAME)"
+            if ((git cat-file -t $env:GITHUB_REF_NAME) -eq 'tag') {
+              $notes = (git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' $env:GITHUB_REF_NAME) -join "`n"
+            }
           }
           ./scripts/package.ps1 -SkipBuild -Notes $notes
 
@@ -47,30 +57,35 @@ jobs:
           name: windows
           path: dist/*
 
-      - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          $assets = "dist/Mailbox-$version-windows-x64.exe", 'dist/latest.json'
-          gh release view $env:GITHUB_REF_NAME *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME @assets --clobber
-          } else {
-            gh release create $env:GITHUB_REF_NAME @assets --title "Mailbox $env:GITHUB_REF_NAME" --generate-notes
-          }
-          if ($LASTEXITCODE -ne 0) { throw "gh failed ($LASTEXITCODE)" }
-
   macos:
     # Apple Silicon runner: builds aarch64-apple-darwin (M1 to M5).
     runs-on: macos-15
-    # The Windows job creates the release; this one adds the dmg to it.
-    needs: windows
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Import the signing certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ]; then
+            echo "No MACOS_CERT_P12 secret: signing ad hoc"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # Self-signed: trust it for code signing so codesign accepts the identity.
+          security find-certificate -c "Mailbox Self-Signed" -p "$keychain" > "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "MACOS_SIGN_IDENTITY=Mailbox Self-Signed" >> "$GITHUB_ENV"
 
       - name: Build and package
         run: |
@@ -80,18 +95,12 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos
-          path: dist/*.dmg
-
-      - name: Add the dmg to the release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/Mailbox-*-macos-arm64.dmg --clobber
+          path: |
+            dist/*.dmg
+            dist/*.app.tar.gz
 
   linux:
     runs-on: ubuntu-22.04
-    # The Windows job creates the release; this one adds the archive to it.
-    needs: windows
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -99,7 +108,9 @@ jobs:
       - name: Install the GPUI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libxkbcommon-dev libxkbcommon-x11-dev             libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev             libvulkan-dev libssl-dev
+          sudo apt-get install -y pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev \
+            libvulkan-dev libssl-dev
 
       - name: Build and package
         run: bash scripts/package-linux.sh
@@ -109,8 +120,35 @@ jobs:
           name: linux
           path: dist/*.tar.gz
 
-      - name: Add the archive to the release
-        if: startsWith(github.ref, 'refs/tags/')
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Add the macOS update package to latest.json
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="Mailbox-$version-macos-arm64.app.tar.gz"
+          jq --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$name" \
+             --arg sha256 "$(sha256sum "dist/$name" | cut -d' ' -f1)" \
+             --argjson size "$(stat -c %s "dist/$name")" \
+             '.platforms["darwin-aarch64"] = {url: $url, sha256: $sha256, size: $size}' \
+             dist/latest.json > dist/latest.tmp
+          mv dist/latest.tmp dist/latest.json
+          cat dist/latest.json
+
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/Mailbox-*-linux-x64.tar.gz --clobber
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "Mailbox $GITHUB_REF_NAME" \
+              --generate-notes --repo "$GITHUB_REPOSITORY"
+          fi
