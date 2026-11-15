@@ -3,7 +3,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::{ClickHandler, Icon, IconName};
-use crate::theme::{ICON_SIZE, RADIUS_MD, theme};
+use crate::theme::{ICON_SIZE, RADIUS_MD, SPACE_2, TEXT_XS, theme};
 
 /// Square icon-only button (rail, toolbars). `active` shows the selected state.
 #[derive(IntoElement)]
@@ -15,6 +15,7 @@ pub struct IconButton {
     active: bool,
     disabled: bool,
     tooltip: Option<SharedString>,
+    tooltip_above: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -28,6 +29,7 @@ impl IconButton {
             active: false,
             disabled: false,
             tooltip: None,
+            tooltip_above: false,
             on_click: None,
         }
     }
@@ -55,6 +57,13 @@ impl IconButton {
 
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    /// Shows the tooltip above the pointer instead of below it: for buttons right above a
+    /// native child window (the compose editor), which would cover a tooltip drawn below.
+    pub fn tooltip_above(mut self) -> Self {
+        self.tooltip_above = true;
         self
     }
 
@@ -93,10 +102,48 @@ impl RenderOnce for IconButton {
             })
             .when(interactive && self.active, |el| el.cursor_pointer())
             .when_some(self.tooltip, |el, tooltip| {
-                el.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                let above = self.tooltip_above;
+                el.tooltip(move |window, cx| {
+                    if above {
+                        let text = tooltip.clone();
+                        cx.new(|_| AboveTooltip { text }).into()
+                    } else {
+                        Tooltip::new(tooltip.clone()).build(window, cx)
+                    }
+                })
             })
             .when_some(self.on_click.filter(|_| interactive), |el, handler| {
                 el.on_click(move |event, window, cx| handler(event, window, cx))
             })
+    }
+}
+
+/// A tooltip drawn above the pointer. GPUI lays a tooltip out at the pointer: this one has no
+/// size there and paints its label upward from it.
+struct AboveTooltip {
+    text: SharedString,
+}
+
+impl Render for AboveTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx).clone();
+        div().relative().child(
+            div()
+                .absolute()
+                // Clear of the button under the pointer.
+                .bottom(px(22.))
+                .left(px(-12.))
+                .whitespace_nowrap()
+                .px(SPACE_2)
+                .py(px(3.))
+                .rounded(RADIUS_MD)
+                .bg(t.elevated)
+                .border_1()
+                .border_color(t.border)
+                .shadow_sm()
+                .text_size(TEXT_XS)
+                .text_color(t.text)
+                .child(self.text.clone()),
+        )
     }
 }

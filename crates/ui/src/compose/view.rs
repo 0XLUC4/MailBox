@@ -1261,8 +1261,9 @@ impl ComposeView {
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let panel = self.panel;
+        // The editor below this row is a native window: tooltips go above the buttons.
         let tool = |id: &'static str, icon: IconName, tooltip: &'static str| {
-            IconButton::new(id, icon).tooltip(tooltip)
+            IconButton::new(id, icon).tooltip(tooltip).tooltip_above()
         };
         Toolbar::new()
             .child(tool("fmt-bold", IconName::Bold, "Bold (Ctrl+B)").on_click(
