@@ -30,9 +30,11 @@ use mailbox_core::{Account, Calendar, CalendarEvent, Id, ResponseStatus};
 use crate::actions;
 use crate::app_state::{AppState, Module};
 use crate::components::{Button, Icon, IconButton, IconName, toolbar_separator};
+use crate::settings::tr;
 use crate::theme::{
-    ICON_SIZE_SM, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_LG,
-    TEXT_MD, TEXT_SM, Theme, hex, theme,
+    DEFAULT_ACCENT, ICON_SIZE, ICON_SIZE_SM, PANE_HEADER_HEIGHT, RADIUS_LG, RADIUS_MD, RADIUS_SM,
+    RADIUS_XL, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_LG, TEXT_MD, TEXT_SM,
+    Theme, hex, text_on, theme,
 };
 
 pub use editor::{EditorTarget, EventEditor, open_event_editor, open_meeting_editor};
@@ -67,6 +69,9 @@ pub(crate) fn module_action<A: Action, V: 'static>(
 
 /// Height of one hour in the time grid.
 pub(crate) const HOUR_HEIGHT: f32 = 52.;
+
+/// Opacity of an event while it is being dragged (month, all-day and timed views).
+pub(crate) const DRAG_OPACITY: f32 = 0.4;
 
 /// What the mouse is over: a day column (time grid) or a day cell (month).
 #[derive(Debug, Clone, Copy)]
@@ -209,7 +214,7 @@ impl ViewData {
         self.calendars
             .iter()
             .find(|calendar| calendar.id == calendar_id)
-            .map_or(hex(0x3b82f6), |calendar| hex(calendar.color))
+            .map_or(hex(DEFAULT_ACCENT), |calendar| hex(calendar.color))
     }
 
     /// The user's answer to an occurrence (accepted when they organize it).
@@ -264,8 +269,8 @@ pub(crate) fn chip_style(
     if selected {
         return ChipStyle {
             bg: color,
-            fg: t.on_accent,
-            muted: t.on_accent.alpha(0.8),
+            fg: text_on(color),
+            muted: text_on(color).alpha(0.8),
             bar: Hsla {
                 l: (color.l - 0.12).max(0.),
                 ..color
@@ -738,11 +743,11 @@ impl CalendarView {
     ) {
         let Some(calendar_id) = calendar.or_else(|| self.default_calendar(cx)) else {
             self.state.update(cx, |state, cx| {
-                state.report_error("Create a calendar first", cx)
+                state.report_error(tr(cx, "Create a calendar first"), cx)
             });
             return;
         };
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("New event"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr(cx, "New event")));
         let subscription = cx.subscribe_in(
             &input,
             window,
@@ -1056,7 +1061,7 @@ impl CalendarView {
     fn import_ics(&mut self, cx: &mut Context<Self>) {
         let Some(calendar_id) = self.default_calendar(cx) else {
             self.state.update(cx, |state, cx| {
-                state.report_error("Create a calendar first to import events", cx)
+                state.report_error(tr(cx, "Create a calendar first to import events"), cx)
             });
             return;
         };
@@ -1064,7 +1069,7 @@ impl CalendarView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import".into()),
+            prompt: Some(tr(cx, "Import").into()),
         });
         cx.spawn(async move |this, cx| {
             let paths = match paths.await {
@@ -1073,7 +1078,11 @@ impl CalendarView {
                 Ok(Err(err)) => {
                     let _ = this.update(cx, |this, cx| {
                         this.state.update(cx, |state, cx| {
-                            state.report_error(format!("Cannot open the file picker: {err}"), cx)
+                            state.report_error(
+                                tr(cx, "Cannot open the file picker: {}")
+                                    .replace("{}", &err.to_string()),
+                                cx,
+                            )
                         })
                     });
                     return;
@@ -1089,7 +1098,7 @@ impl CalendarView {
             let _ = this.update(cx, |this, cx| match parsed {
                 Ok(calendar) if calendar.events.is_empty() => {
                     this.state.update(cx, |state, cx| {
-                        state.notify_info("No events in this file", cx)
+                        state.notify_info(tr(cx, "No events in this file"), cx)
                     });
                 }
                 Ok(calendar) => {
@@ -1104,18 +1113,17 @@ impl CalendarView {
                     );
                     if ok {
                         this.state.update(cx, |state, cx| {
-                            state.notify_info(
-                                format!(
-                                    "Imported {count} event{}",
-                                    if count == 1 { "" } else { "s" }
-                                ),
-                                cx,
-                            )
+                            let message = if count == 1 {
+                                tr(cx, "Imported 1 event").to_owned()
+                            } else {
+                                tr(cx, "Imported {} events").replace("{}", &count.to_string())
+                            };
+                            state.notify_info(message, cx)
                         });
                     }
                 }
                 Err(err) => this.state.update(cx, |state, cx| {
-                    state.report_error(format!("Import failed: {err}"), cx)
+                    state.report_error(tr(cx, "Import failed: {}").replace("{}", &err), cx)
                 }),
             });
         })
@@ -1159,8 +1167,14 @@ impl CalendarView {
             let result = std::fs::write(&path, text);
             let _ = this.update(cx, |this, cx| {
                 this.state.update(cx, |state, cx| match result {
-                    Ok(()) => state.notify_info(format!("Exported to {}", path.display()), cx),
-                    Err(err) => state.report_error(format!("Export failed: {err}"), cx),
+                    Ok(()) => state.notify_info(
+                        tr(cx, "Exported to {}").replace("{}", &path.display().to_string()),
+                        cx,
+                    ),
+                    Err(err) => state.report_error(
+                        tr(cx, "Export failed: {}").replace("{}", &err.to_string()),
+                        cx,
+                    ),
                 })
             });
         })
@@ -1176,19 +1190,20 @@ impl CalendarView {
             .flex()
             .flex_row()
             .items_center()
-            .p(px(2.))
-            .gap(px(2.))
+            .p(SPACE_0_5)
+            .gap(SPACE_0_5)
             .rounded(RADIUS_MD)
             .bg(t.hover)
             .children(ViewKind::ALL.map(|kind| {
                 let active = kind == self.kind;
+                let label = tr(cx, kind.label());
                 div()
                     .id(("view-kind", kind as u64))
                     .flex()
                     .items_center()
                     .h(px(24.))
                     .px(SPACE_3)
-                    .rounded(px(5.))
+                    .rounded(RADIUS_SM)
                     .text_size(TEXT_SM)
                     .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
@@ -1201,14 +1216,13 @@ impl CalendarView {
                     })
                     .tooltip(move |window, cx| {
                         gpui::component::tooltip::Tooltip::new(format!(
-                            "{} ({})",
-                            kind.label(),
+                            "{label} ({})",
                             kind.shortcut()
                         ))
                         .build(window, cx)
                     })
                     .on_click(cx.listener(move |this, _, _, cx| this.set_kind(kind, cx)))
-                    .child(kind.label())
+                    .child(label)
             }));
 
         div()
@@ -1217,13 +1231,13 @@ impl CalendarView {
             .flex_shrink_0()
             .items_center()
             .gap(SPACE_2)
-            .h(px(52.))
+            .h(PANE_HEADER_HEIGHT)
             .px(SPACE_4)
             .border_b_1()
             .border_color(t.border_subtle)
             .child(
                 Button::new("cal-today")
-                    .label("Today")
+                    .label(tr(cx, "Today"))
                     .on_click(cx.listener(|this, _, _, cx| this.today(cx))),
             )
             .child(
@@ -1232,12 +1246,12 @@ impl CalendarView {
                     .flex_row()
                     .child(
                         IconButton::new("cal-prev", IconName::ChevronLeft)
-                            .tooltip("Previous (Page Up)")
+                            .tooltip(tr(cx, "Previous (Page Up)"))
                             .on_click(cx.listener(|this, _, _, cx| this.step(false, cx))),
                     )
                     .child(
                         IconButton::new("cal-next", IconName::ChevronRight)
-                            .tooltip("Next (Page Down)")
+                            .tooltip(tr(cx, "Next (Page Down)"))
                             .on_click(cx.listener(|this, _, _, cx| this.step(true, cx))),
                     ),
             )
@@ -1280,12 +1294,12 @@ impl CalendarView {
             .child(toolbar_separator(cx))
             .child(
                 IconButton::new("cal-import", IconName::Download)
-                    .tooltip("Import .ics")
+                    .tooltip(tr(cx, "Import .ics"))
                     .on_click(cx.listener(|this, _, _, cx| this.import_ics(cx))),
             )
             .child(
                 IconButton::new("cal-export", IconName::Upload)
-                    .tooltip("Export visible calendars to .ics")
+                    .tooltip(tr(cx, "Export visible calendars to .ics"))
                     .on_click(cx.listener(|this, _, _, cx| this.export_ics(cx))),
             )
     }
@@ -1313,7 +1327,7 @@ impl CalendarView {
                 div()
                     .id("cal-date-picker")
                     .absolute()
-                    .top(px(48.))
+                    .top(PANE_HEADER_HEIGHT)
                     .left(px(sidebar::SIDEBAR_WIDTH + 140.))
                     .w(px(260.))
                     .p(SPACE_3)
@@ -1353,6 +1367,12 @@ impl CalendarView {
                 "Entire series",
             ),
         };
+        let (title, body, this_label, all_label) = (
+            tr(cx, title),
+            tr(cx, body),
+            tr(cx, this_label),
+            tr(cx, all_label),
+        );
         let destructive = matches!(prompt.action, SeriesAction::Delete);
         div()
             .id("cal-series-prompt")
@@ -1361,7 +1381,7 @@ impl CalendarView {
             .flex()
             .items_center()
             .justify_center()
-            .bg(hsla(0., 0., 0., if t.is_dark { 0.45 } else { 0.25 }))
+            .bg(t.scrim)
             .occlude()
             .on_mouse_down(
                 MouseButton::Left,
@@ -1378,7 +1398,7 @@ impl CalendarView {
                     .flex()
                     .flex_col()
                     .gap(SPACE_3)
-                    .rounded(px(12.))
+                    .rounded(RADIUS_XL)
                     .border_1()
                     .border_color(t.border)
                     .bg(t.elevated)
@@ -1392,7 +1412,7 @@ impl CalendarView {
                             .gap(SPACE_2)
                             .child(
                                 Icon::new(IconName::Repeat)
-                                    .size(px(16.))
+                                    .size(ICON_SIZE)
                                     .text_color(t.accent),
                             )
                             .child(
@@ -1418,7 +1438,7 @@ impl CalendarView {
                             .child(
                                 Button::new("prompt-cancel")
                                     .ghost()
-                                    .label("Cancel")
+                                    .label(tr(cx, "Cancel"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.prompt = None;
                                         cx.notify();

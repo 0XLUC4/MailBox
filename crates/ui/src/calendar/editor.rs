@@ -21,9 +21,11 @@ use mailbox_core::{Address, Attendee, Calendar, CalendarEvent, Id, ResponseStatu
 use super::sidebar::switch;
 use crate::app_state::AppState;
 use crate::components::{Avatar, Badge, Banner, Button, Icon, IconButton, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_LG,
-    TEXT_MD, TEXT_SM, TEXT_XL, TEXT_XS, Theme, hex, theme,
+    ICON_SIZE, ICON_SIZE_SM, ICON_SIZE_XS, PANE_HEADER_HEIGHT, RADIUS_FULL, RADIUS_LG, RADIUS_MD,
+    RADIUS_SM, RADIUS_XL, SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_6, TEXT_2XS, TEXT_LG, TEXT_MD,
+    TEXT_SM, TEXT_XL, TEXT_XS, Theme, hex, theme,
 };
 
 /// What the editor edits.
@@ -56,6 +58,7 @@ pub fn open_event_editor(state: Entity<AppState>, target: EditorTarget, cx: &mut
         EditorTarget::Event { .. } => "Edit event",
         EditorTarget::Occurrence { .. } => "Edit occurrence",
     };
+    let title = tr(cx, title);
     cx.defer(move |cx| {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(820.), px(780.)), cx)),
@@ -69,7 +72,10 @@ pub fn open_event_editor(state: Entity<AppState>, target: EditorTarget, cx: &mut
         });
         if let Err(err) = opened {
             state.update(cx, |state, cx| {
-                state.report_error(format!("Could not open the event editor: {err}"), cx)
+                state.report_error(
+                    tr(cx, "Could not open the event editor: {}").replace("{}", &err.to_string()),
+                    cx,
+                )
             });
         }
     });
@@ -229,16 +235,24 @@ fn parse_address(text: &str) -> Option<Address> {
     valid.then(|| Address::new(name, email))
 }
 
-/// Recurrence presets offered as chips for a start date.
-fn presets(start: NaiveDate) -> Vec<(String, Option<RRule>)> {
+/// Recurrence presets offered as chips for a start date (labels translated by `tr`).
+fn presets(
+    start: NaiveDate,
+    tr: impl Fn(&'static str) -> &'static str,
+) -> Vec<(String, Option<RRule>)> {
     let weekday = start.weekday();
     let (nth, _) = weekday_position(start);
     let ordinal = if nth >= 5 { -1 } else { nth };
+    let fill = |template: &'static str, values: &[&str]| {
+        values.iter().fold(tr(template).to_owned(), |text, value| {
+            text.replacen("{}", value, 1)
+        })
+    };
     vec![
-        ("Never".to_owned(), None),
-        ("Daily".to_owned(), Some(RRule::new(Frequency::Daily))),
+        (tr("Never").to_owned(), None),
+        (tr("Daily").to_owned(), Some(RRule::new(Frequency::Daily))),
         (
-            "Weekdays".to_owned(),
+            tr("Weekdays").to_owned(),
             Some(
                 RRule::new(Frequency::Weekly).by_day(
                     [
@@ -253,30 +267,36 @@ fn presets(start: NaiveDate) -> Vec<(String, Option<RRule>)> {
             ),
         ),
         (
-            format!("Weekly on {}", weekday_short(weekday)),
+            fill("Weekly on {}", &[tr(weekday_short(weekday))]),
             Some(RRule::new(Frequency::Weekly).by_day([WeekdayNum::every(weekday)])),
         ),
         (
-            format!("Monthly on day {}", start.day()),
+            fill("Monthly on day {}", &[start.day().to_string().as_str()]),
             Some(RRule::new(Frequency::Monthly).by_month_day([start.day() as i8])),
         ),
         (
-            format!(
+            fill(
                 "Monthly on the {} {}",
-                ordinal_name(ordinal),
-                weekday_short(weekday)
+                &[tr(ordinal_name(ordinal)), tr(weekday_short(weekday))],
             ),
             Some(RRule::new(Frequency::Monthly).by_day([WeekdayNum::nth(ordinal, weekday)])),
         ),
         (
-            format!(
+            fill(
                 "Yearly on {} {}",
-                start.day(),
-                &month_name(start.month())[..3]
+                &[
+                    start.day().to_string().as_str(),
+                    month_short(start.month(), &tr).as_str(),
+                ],
             ),
             Some(RRule::new(Frequency::Yearly)),
         ),
     ]
+}
+
+/// First three letters of the (translated) month name: "Nov", "nov".
+fn month_short(month: u32, tr: &impl Fn(&'static str) -> &'static str) -> String {
+    tr(month_name(month)).chars().take(3).collect()
 }
 
 impl EventEditor {
@@ -406,7 +426,7 @@ impl EventEditor {
         let mut text_input = |value: String, placeholder: &'static str| {
             cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder(placeholder)
+                    .placeholder(tr(cx, placeholder))
                     .default_value(value)
             })
         };
@@ -421,7 +441,7 @@ impl EventEditor {
         let description = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .rows(6)
-                .placeholder("Add a description")
+                .placeholder(tr(cx, "Add a description"))
                 .default_value(event.description.clone())
         });
 
@@ -454,7 +474,7 @@ impl EventEditor {
                                     input.update(cx, |input, cx| input.set_value("", window, cx));
                                     this.attendee_query.clear();
                                 } else {
-                                    this.error = Some("Enter a valid email address".into());
+                                    this.error = Some(tr(cx, "Enter a valid email address").into());
                                     cx.notify();
                                 }
                             }
@@ -575,7 +595,7 @@ impl EventEditor {
             .is_ok_and(|accounts| accounts.is_empty());
         if no_account {
             self.state.update(cx, |state, cx| {
-                state.report_error("Saved. Add a mail account to send invitations", cx)
+                state.report_error(tr(cx, "Saved. Add a mail account to send invitations"), cx)
             });
             return;
         }
@@ -584,7 +604,7 @@ impl EventEditor {
         };
         if crate::dav_bridge::send_invitation(id, cx).is_some() {
             self.state.update(cx, |state, cx| {
-                state.notify_info("Invitation sent to the Outbox", cx)
+                state.notify_info(tr(cx, "Invitation sent to the Outbox"), cx)
             });
         }
     }
@@ -653,19 +673,19 @@ impl EventEditor {
     fn times(&self, cx: &App) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
         let start_date = self
             .start_date_value(cx)
-            .ok_or("Start date: use YYYY-MM-DD")?;
-        let end_date =
-            parse_date(&self.value(&self.end_date, cx)).ok_or("End date: use YYYY-MM-DD")?;
+            .ok_or(tr(cx, "Start date: use YYYY-MM-DD"))?;
+        let end_date = parse_date(&self.value(&self.end_date, cx))
+            .ok_or(tr(cx, "End date: use YYYY-MM-DD"))?;
         let (start, end) = if self.all_day {
             (
                 cal::all_day_start(start_date),
                 cal::all_day_start(end_date + Duration::days(1)),
             )
         } else {
-            let start_time =
-                parse_time(&self.value(&self.start_time, cx)).ok_or("Start time: use HH:MM")?;
+            let start_time = parse_time(&self.value(&self.start_time, cx))
+                .ok_or(tr(cx, "Start time: use HH:MM"))?;
             let end_time =
-                parse_time(&self.value(&self.end_time, cx)).ok_or("End time: use HH:MM")?;
+                parse_time(&self.value(&self.end_time, cx)).ok_or(tr(cx, "End time: use HH:MM"))?;
             let zone = self.time_zone.as_deref();
             (
                 zone_to_utc(start_date.and_time(start_time), zone),
@@ -673,7 +693,7 @@ impl EventEditor {
             )
         };
         if end < start {
-            return Err("The event ends before it starts".into());
+            return Err(tr(cx, "The event ends before it starts").into());
         }
         Ok((start, end))
     }
@@ -849,7 +869,10 @@ impl EventEditor {
             .or_else(|| super::invitations::sending_account(store, account_id));
         let Some(account) = account else {
             self.state.update(cx, |state, cx| {
-                state.report_error("Saved. Add a mail account to notify the other people", cx)
+                state.report_error(
+                    tr(cx, "Saved. Add a mail account to notify the other people"),
+                    cx,
+                )
             });
             return;
         };
@@ -861,9 +884,13 @@ impl EventEditor {
             None => super::invitations::queue_cancel(&state, &account, event, details, cx),
         };
         state.update(cx, |state, cx| match queued {
-            Ok(()) if reply.is_some() => state.notify_info("Reply queued in the Outbox", cx),
-            Ok(()) => state.notify_info("Cancellation queued in the Outbox", cx),
-            Err(err) => state.report_error(format!("Saved, but not sent: {err}"), cx),
+            Ok(()) if reply.is_some() => {
+                state.notify_info(tr(cx, "Reply queued in the Outbox"), cx)
+            }
+            Ok(()) => state.notify_info(tr(cx, "Cancellation queued in the Outbox"), cx),
+            Err(err) => {
+                state.report_error(tr(cx, "Saved, but not sent: {}").replace("{}", &err), cx)
+            }
         });
     }
 
@@ -992,13 +1019,13 @@ impl EventEditor {
     fn draft_rule(&self, draft: &RecurrenceDraft, cx: &App) -> Result<RRule, String> {
         let start = self
             .start_date_value(cx)
-            .ok_or("Set a valid start date first")?;
+            .ok_or(tr(cx, "Set a valid start date first"))?;
         let interval: u32 = self
             .value(&draft.interval, cx)
             .parse()
             .ok()
             .filter(|n| *n >= 1)
-            .ok_or("Repeat every: enter a number")?;
+            .ok_or(tr(cx, "Repeat every: enter a number"))?;
         let (nth, _) = weekday_position(start);
         let ordinal = if nth >= 5 { -1 } else { nth };
         let mut rule = RRule::new(draft.freq).interval(interval);
@@ -1036,12 +1063,12 @@ impl EventEditor {
                     .parse()
                     .ok()
                     .filter(|n| *n >= 1)
-                    .ok_or("End after: enter a number of occurrences")?;
+                    .ok_or(tr(cx, "End after: enter a number of occurrences"))?;
                 rule = rule.count(count);
             }
             RecurrenceEnd::Until => {
-                let date =
-                    parse_date(&self.value(&draft.until, cx)).ok_or("End by: use YYYY-MM-DD")?;
+                let date = parse_date(&self.value(&draft.until, cx))
+                    .ok_or(tr(cx, "End by: use YYYY-MM-DD"))?;
                 let last = date.and_hms_opt(23, 59, 59).unwrap_or_default();
                 rule = rule.until(zone_to_utc(last, self.time_zone.as_deref()));
             }
@@ -1115,7 +1142,13 @@ fn chip_base(id: impl Into<ElementId>, active: bool, t: &Theme) -> Stateful<Div>
         })
 }
 
-fn field_row(label: &'static str, icon: IconName, t: &Theme, content: impl IntoElement) -> Div {
+fn field_row(
+    label: &'static str,
+    icon: IconName,
+    t: &Theme,
+    cx: &App,
+    content: impl IntoElement,
+) -> Div {
     div()
         .flex()
         .flex_row()
@@ -1132,8 +1165,8 @@ fn field_row(label: &'static str, icon: IconName, t: &Theme, content: impl IntoE
                 .h(px(30.))
                 .text_size(TEXT_SM)
                 .text_color(t.text_muted)
-                .child(Icon::new(icon).size(px(14.)))
-                .child(label),
+                .child(Icon::new(icon).size(ICON_SIZE_SM))
+                .child(tr(cx, label)),
         )
         .child(div().flex_1().min_w(px(0.)).child(content))
 }
@@ -1144,11 +1177,6 @@ fn small_input(input: &Entity<InputState>, width: f32) -> Div {
 
 impl EventEditor {
     fn render_header(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let color = self
-            .calendars
-            .iter()
-            .find(|calendar| calendar.id == self.calendar_id)
-            .map_or(t.accent, |calendar| hex(calendar.color));
         let heading = match &self.target {
             EditorTarget::New { .. } => "New event",
             EditorTarget::Meeting { .. } => "New meeting",
@@ -1156,6 +1184,7 @@ impl EventEditor {
             EditorTarget::Event { .. } => "Edit event",
             EditorTarget::Occurrence { .. } => "Edit occurrence",
         };
+        let heading = tr(cx, heading);
         let is_new = matches!(
             self.target,
             EditorTarget::New { .. } | EditorTarget::Meeting { .. }
@@ -1167,14 +1196,15 @@ impl EventEditor {
             .flex_shrink_0()
             .items_center()
             .gap(SPACE_2)
-            .h(px(56.))
+            .h(PANE_HEADER_HEIGHT)
             .px(SPACE_6)
             .border_b_1()
             .border_color(t.border_subtle)
-            .child(div().size(px(10.)).rounded(RADIUS_FULL).bg(color))
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.))
+                    .truncate()
                     .text_size(TEXT_LG)
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(heading),
@@ -1184,17 +1214,20 @@ impl EventEditor {
                     Button::new("editor-delete")
                         .ghost()
                         .icon(IconName::Trash)
-                        .label(if self.is_occurrence() {
-                            "Delete occurrence"
-                        } else {
-                            "Delete"
-                        })
+                        .label(tr(
+                            cx,
+                            if self.is_occurrence() {
+                                "Delete occurrence"
+                            } else {
+                                "Delete"
+                            },
+                        ))
                         .on_click(cx.listener(|this, _, window, cx| this.delete(window, cx))),
                 )
             })
             .child(
                 Button::new("editor-cancel")
-                    .label("Cancel")
+                    .label(tr(cx, "Cancel"))
                     .on_click(cx.listener(|_, _, window, _| window.remove_window())),
             )
             .child(
@@ -1205,7 +1238,7 @@ impl EventEditor {
                     } else {
                         IconName::Check
                     })
-                    .label(if sends { "Send" } else { "Save" })
+                    .label(tr(cx, if sends { "Send" } else { "Save" }))
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
             )
     }
@@ -1218,8 +1251,8 @@ impl EventEditor {
         let (organizer, me) = self.invitation()?;
         let answer = |status: ResponseStatus, label: &'static str, icon: IconName| {
             let active = me.status == status;
-            chip(("respond", status as u64), label, active, t)
-                .child(Icon::new(icon).size(px(12.)))
+            chip(("respond", status as u64), tr(cx, label), active, t)
+                .child(Icon::new(icon).size(ICON_SIZE_XS))
                 .on_click(cx.listener(move |this, _, _, cx| this.respond(status, cx)))
         };
         Some(
@@ -1239,20 +1272,23 @@ impl EventEditor {
                         .flex()
                         .flex_col()
                         .flex_1()
+                        .min_w(px(0.))
                         .child(
                             div()
+                                .truncate()
                                 .text_size(TEXT_MD)
                                 .font_weight(FontWeight::MEDIUM)
-                                .child(format!("{} invited you", organizer.display())),
+                                .child(tr(cx, "{} invited you").replace("{}", organizer.display())),
                         )
-                        .child(div().text_size(TEXT_XS).text_color(t.text_muted).child(
+                        .child(div().text_size(TEXT_XS).text_color(t.text_muted).child(tr(
+                            cx,
                             match me.status {
                                 ResponseStatus::NeedsAction => "You have not answered yet",
                                 ResponseStatus::Accepted => "You accepted",
                                 ResponseStatus::Tentative => "You tentatively accepted",
                                 ResponseStatus::Declined => "You declined",
                             },
-                        )),
+                        ))),
                 )
                 .child(answer(ResponseStatus::Accepted, "Accept", IconName::Check))
                 .child(answer(
@@ -1267,7 +1303,11 @@ impl EventEditor {
     fn render_when(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let zone_label = match &self.time_zone {
             Some(zone) => format!("{zone} ({})", cal::utc_offset_label(zone, Utc::now())),
-            None => format!("System time ({})", Local::now().format("UTC%:z")),
+            None => format!(
+                "{} ({})",
+                tr(cx, "System time"),
+                Local::now().format("UTC%:z")
+            ),
         };
         let all_day = self.all_day;
         let zones: Vec<&'static str> = if self.tz_open {
@@ -1286,20 +1326,21 @@ impl EventEditor {
             Vec::new()
         };
         let current_zone = self.time_zone.clone();
+        let system_time = tr(cx, "System time");
         let zone_rows: Vec<AnyElement> = std::iter::once(None)
             .chain(zones.into_iter().map(Some))
             .enumerate()
             .map(|(index, zone)| {
                 let active = current_zone.as_deref() == zone;
                 let label = zone.map_or_else(
-                    || "System time".to_owned(),
+                    || system_time.to_owned(),
                     |name| format!("{name}  -  {}", cal::utc_offset_label(name, Utc::now())),
                 );
                 let value = zone.map(str::to_owned);
                 div()
                     .id(("tz", index as u64))
                     .px(SPACE_2)
-                    .py(px(5.))
+                    .py(SPACE_1)
                     .rounded(RADIUS_MD)
                     .text_size(TEXT_SM)
                     .cursor_pointer()
@@ -1330,7 +1371,7 @@ impl EventEditor {
                     .when(!all_day, |el| el.child(small_input(&self.start_time, 76.)))
                     .child(
                         Icon::new(IconName::ArrowRight)
-                            .size(px(14.))
+                            .size(ICON_SIZE_SM)
                             .text_color(t.text_subtle),
                     )
                     .child(small_input(&self.end_date, 120.))
@@ -1353,7 +1394,7 @@ impl EventEditor {
                                 cx.notify();
                             }))
                             .child(switch(all_day, t))
-                            .child(div().text_size(TEXT_SM).child("All day")),
+                            .child(div().text_size(TEXT_SM).child(tr(cx, "All day"))),
                     ),
             )
             .when(!all_day, |el| {
@@ -1373,9 +1414,9 @@ impl EventEditor {
                             this.tz_open = !this.tz_open;
                             cx.notify();
                         }))
-                        .child(Icon::new(IconName::Globe).size(px(12.)))
+                        .child(Icon::new(IconName::Globe).size(ICON_SIZE_XS))
                         .child(zone_label)
-                        .child(Icon::new(IconName::ChevronDown).size(px(12.))),
+                        .child(Icon::new(IconName::ChevronDown).size(ICON_SIZE_XS)),
                 )
             })
             .when(self.tz_open && !all_day, |el| {
@@ -1407,7 +1448,7 @@ impl EventEditor {
         let start = self
             .start_date_value(cx)
             .unwrap_or_else(|| Local::now().date_naive());
-        let options = presets(start);
+        let options = presets(start, |text| tr(cx, text));
         let matched = options.iter().any(|(_, rule)| *rule == self.recurrence);
         let chips: Vec<AnyElement> = options
             .into_iter()
@@ -1433,9 +1474,13 @@ impl EventEditor {
                     .flex_wrap()
                     .gap(SPACE_1)
                     .children(chips)
-                    .child(chip("repeat-custom", "Custom…", !matched, t).on_click(
-                        cx.listener(|this, _, window, cx| this.open_recurrence_dialog(window, cx)),
-                    )),
+                    .child(
+                        chip("repeat-custom", tr(cx, "Custom…"), !matched, t).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.open_recurrence_dialog(window, cx)
+                            }),
+                        ),
+                    ),
             )
             .when_some(self.recurrence.as_ref(), |el, rule| {
                 el.child(
@@ -1446,7 +1491,7 @@ impl EventEditor {
                         .gap(SPACE_1)
                         .text_size(TEXT_XS)
                         .text_color(t.text_muted)
-                        .child(Icon::new(IconName::Repeat).size(px(12.)))
+                        .child(Icon::new(IconName::Repeat).size(ICON_SIZE_XS))
                         .child(rule.describe()),
                 )
             })
@@ -1466,12 +1511,18 @@ impl EventEditor {
                     .items_center()
                     .gap(SPACE_2)
                     .px(SPACE_2)
-                    .py(px(4.))
+                    .py(SPACE_1)
                     .rounded(RADIUS_MD)
                     .cursor_pointer()
                     .hover(|style| style.bg(t.hover))
                     .child(Avatar::new(address.display().to_owned()).size(px(20.)))
-                    .child(div().text_size(TEXT_SM).child(label))
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .truncate()
+                            .text_size(TEXT_SM)
+                            .child(label),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.add_attendee(address.clone(), cx);
                         this.attendee_query.clear();
@@ -1494,12 +1545,13 @@ impl EventEditor {
                     ResponseStatus::Declined => ("Declined", t.danger),
                     ResponseStatus::NeedsAction => ("Awaiting", t.text_muted),
                 };
+                let status_label = tr(cx, status_label);
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(SPACE_2)
-                    .py(px(3.))
+                    .py(SPACE_1)
                     .child(Avatar::new(attendee.address.display().to_owned()).size(px(24.)))
                     .child(
                         div()
@@ -1527,11 +1579,14 @@ impl EventEditor {
                     .child(
                         chip(
                             ("optional", index as u64),
-                            if attendee.optional {
-                                "Optional"
-                            } else {
-                                "Required"
-                            },
+                            tr(
+                                cx,
+                                if attendee.optional {
+                                    "Optional"
+                                } else {
+                                    "Required"
+                                },
+                            ),
                             attendee.optional,
                             t,
                         )
@@ -1549,8 +1604,8 @@ impl EventEditor {
                     .child(
                         IconButton::new(("remove-attendee", index as u64), IconName::X)
                             .size(px(24.))
-                            .icon_size(px(12.))
-                            .tooltip("Remove")
+                            .icon_size(ICON_SIZE_XS)
+                            .tooltip(tr(cx, "Remove"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.attendees.retain(|a| a.address.email != email);
                                 cx.notify();
@@ -1575,7 +1630,7 @@ impl EventEditor {
                     .child(
                         Button::new("find-time")
                             .icon(IconName::CalendarClock)
-                            .label("Find a time")
+                            .label(tr(cx, "Find a time"))
                             .variant(if find_open {
                                 crate::components::ButtonVariant::Primary
                             } else {
@@ -1626,10 +1681,11 @@ impl EventEditor {
                 .collect()
         };
         let day_list = others(cal::occurrences(store, from, to).unwrap_or_default());
+        let you = tr(cx, "You");
         let me = self.my_address(cx).unwrap_or_else(|| {
-            Address::new("You", self.my_emails.first().cloned().unwrap_or_default())
+            Address::new(you, self.my_emails.first().cloned().unwrap_or_default())
         });
-        let mut people: Vec<Address> = vec![Address::new("You", me.email.clone())];
+        let mut people: Vec<Address> = vec![Address::new(you, me.email.clone())];
         people.extend(
             self.attendees
                 .iter()
@@ -1692,7 +1748,7 @@ impl EventEditor {
                 .children((FIND_FROM_HOUR..FIND_TO_HOUR).map(|hour| {
                     div()
                         .flex_1()
-                        .text_size(px(10.))
+                        .text_size(TEXT_2XS)
                         .text_color(t.text_subtle)
                         .child(format!("{hour:02}"))
                 }));
@@ -1726,7 +1782,7 @@ impl EventEditor {
                                 let right = position(slot.end);
                                 let color = match slot.show_as {
                                     ShowAs::Tentative => t.warning,
-                                    ShowAs::OutOfOffice => hsla(0.8, 0.5, 0.5, 1.),
+                                    ShowAs::OutOfOffice => t.danger,
                                     _ => t.accent,
                                 };
                                 div()
@@ -1735,7 +1791,7 @@ impl EventEditor {
                                     .h_full()
                                     .left(relative(left))
                                     .w(relative((right - left).max(0.)))
-                                    .rounded(px(3.))
+                                    .rounded(RADIUS_SM)
                                     .bg(color.alpha(0.7))
                             })),
                     )
@@ -1789,6 +1845,7 @@ impl EventEditor {
                     .child(
                         IconButton::new("find-prev", IconName::ChevronLeft)
                             .size(px(24.))
+                            .tooltip(tr(cx, "Previous day"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.find_time = Some(day - Duration::days(1));
                                 cx.notify();
@@ -1803,6 +1860,7 @@ impl EventEditor {
                     .child(
                         IconButton::new("find-next", IconName::ChevronRight)
                             .size(px(24.))
+                            .tooltip(tr(cx, "Next day"))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.find_time = Some(day + Duration::days(1));
                                 cx.notify();
@@ -1817,9 +1875,10 @@ impl EventEditor {
                             .gap(SPACE_3)
                             .text_size(TEXT_XS)
                             .text_color(t.text_muted)
-                            .child(legend(t.accent, "Busy"))
-                            .child(legend(t.warning, "Tentative"))
-                            .child(legend(t.success, "This event")),
+                            .child(legend(t.accent, tr(cx, "Busy")))
+                            .child(legend(t.warning, tr(cx, "Tentative")))
+                            .child(legend(t.danger, tr(cx, "Out of office")))
+                            .child(legend(t.success, tr(cx, "This event"))),
                     ),
             )
             .child(hour_labels)
@@ -1839,12 +1898,10 @@ impl EventEditor {
                         )
                     }),
             )
-            .child(
-                div()
-                    .text_size(TEXT_XS)
-                    .text_color(t.text_muted)
-                    .child("Suggested times when everyone is free (working hours):"),
-            )
+            .child(div().text_size(TEXT_XS).text_color(t.text_muted).child(tr(
+                cx,
+                "Suggested times when everyone is free (working hours):",
+            )))
             .child(
                 div()
                     .flex()
@@ -1856,7 +1913,7 @@ impl EventEditor {
                             div()
                                 .text_size(TEXT_SM)
                                 .text_color(t.text_subtle)
-                                .child("No common free slot in the next 5 days."),
+                                .child(tr(cx, "No common free slot in the next 5 days.")),
                         )
                     })
                     .children(slot_chips),
@@ -1890,7 +1947,7 @@ impl EventEditor {
                 let minutes = *minutes;
                 chip(
                     ("reminder", index as u64),
-                    *label,
+                    tr(cx, label),
                     self.reminder == minutes,
                     t,
                 )
@@ -1908,7 +1965,7 @@ impl EventEditor {
                 let value = *value;
                 chip(
                     ("show-as", index as u64),
-                    value.label(),
+                    tr(cx, value.label()),
                     self.show_as == value,
                     t,
                 )
@@ -1955,13 +2012,14 @@ impl EventEditor {
         let private = self.private;
 
         vec![
-            field_row("Calendar", IconName::Calendar, t, wrap(calendars)).into_any_element(),
-            field_row("Reminder", IconName::Bell, t, wrap(reminders)).into_any_element(),
-            field_row("Show as", IconName::Clock, t, wrap(show_as)).into_any_element(),
+            field_row("Calendar", IconName::Calendar, t, cx, wrap(calendars)).into_any_element(),
+            field_row("Reminder", IconName::Bell, t, cx, wrap(reminders)).into_any_element(),
+            field_row("Show as", IconName::Clock, t, cx, wrap(show_as)).into_any_element(),
             field_row(
                 "Private",
                 IconName::Lock,
                 t,
+                cx,
                 div()
                     .id("private-toggle")
                     .flex()
@@ -1979,11 +2037,11 @@ impl EventEditor {
                         div()
                             .text_size(TEXT_SM)
                             .text_color(t.text_muted)
-                            .child("Others only see that you are busy"),
+                            .child(tr(cx, "Others only see that you are busy")),
                     ),
             )
             .into_any_element(),
-            field_row("Categories", IconName::Tag, t, wrap(categories)).into_any_element(),
+            field_row("Categories", IconName::Tag, t, cx, wrap(categories)).into_any_element(),
         ]
     }
 
@@ -2014,7 +2072,7 @@ impl EventEditor {
                     Frequency::Monthly => "Month",
                     Frequency::Yearly => "Year",
                 };
-                chip(("freq", index as u64), label, draft.freq == freq, t)
+                chip(("freq", index as u64), tr(cx, label), draft.freq == freq, t)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(draft) = this.recurrence_dialog.as_mut() {
                             draft.freq = freq;
@@ -2062,7 +2120,12 @@ impl EventEditor {
                     }
                     cx.notify();
                 }))
-                .child(weekday_short(day)[..2].to_owned())
+                .child(
+                    tr(cx, weekday_short(day))
+                        .chars()
+                        .take(2)
+                        .collect::<String>(),
+                )
                 .into_any_element()
         })
         .collect();
@@ -2077,12 +2140,14 @@ impl EventEditor {
             ))
         };
         let end_option = |id: &'static str, end: RecurrenceEnd, label: &'static str| {
-            chip(id, label, draft.end == end, t).on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(draft) = this.recurrence_dialog.as_mut() {
-                    draft.end = end;
-                }
-                cx.notify();
-            }))
+            chip(id, tr(cx, label), draft.end == end, t).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    if let Some(draft) = this.recurrence_dialog.as_mut() {
+                        draft.end = end;
+                    }
+                    cx.notify();
+                },
+            ))
         };
         let row = |label: &'static str| {
             div().flex().flex_row().items_center().gap(SPACE_2).child(
@@ -2090,10 +2155,11 @@ impl EventEditor {
                     .w(px(90.))
                     .text_size(TEXT_SM)
                     .text_color(t.text_muted)
-                    .child(label),
+                    .child(tr(cx, label)),
             )
         };
-        let month_label = &month_name(start.month())[..3];
+        let month_label = month_short(start.month(), &|text| tr(cx, text));
+        let ordinal_label = tr(cx, ordinal_name(ordinal));
 
         div()
             .id("recurrence-backdrop")
@@ -2102,7 +2168,7 @@ impl EventEditor {
             .flex()
             .items_center()
             .justify_center()
-            .bg(hsla(0., 0., 0., if t.is_dark { 0.45 } else { 0.25 }))
+            .bg(t.scrim)
             .occlude()
             .child(
                 div()
@@ -2112,7 +2178,7 @@ impl EventEditor {
                     .flex_col()
                     .gap(SPACE_3)
                     .p(SPACE_6)
-                    .rounded(px(12.))
+                    .rounded(RADIUS_XL)
                     .border_1()
                     .border_color(t.border)
                     .bg(t.elevated)
@@ -2125,14 +2191,14 @@ impl EventEditor {
                             .gap(SPACE_2)
                             .child(
                                 Icon::new(IconName::Repeat)
-                                    .size(px(16.))
+                                    .size(ICON_SIZE)
                                     .text_color(t.accent),
                             )
                             .child(
                                 div()
                                     .text_size(TEXT_LG)
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Custom recurrence"),
+                                    .child(tr(cx, "Custom recurrence")),
                             ),
                     )
                     .child(
@@ -2146,15 +2212,17 @@ impl EventEditor {
                     .when(draft.freq == Frequency::Monthly, |el| {
                         el.child(
                             row("On")
-                                .child(by_option("by-date", false, format!("Day {}", start.day())))
+                                .child(by_option(
+                                    "by-date",
+                                    false,
+                                    tr(cx, "Day {}").replace("{}", &start.day().to_string()),
+                                ))
                                 .child(by_option(
                                     "by-weekday",
                                     true,
-                                    format!(
-                                        "The {} {}",
-                                        ordinal_name(ordinal),
-                                        weekday_long(start.weekday())
-                                    ),
+                                    tr(cx, "The {} {}")
+                                        .replacen("{}", ordinal_label, 1)
+                                        .replacen("{}", tr(cx, weekday_long(start.weekday())), 1),
                                 )),
                         )
                     })
@@ -2169,11 +2237,10 @@ impl EventEditor {
                                 .child(by_option(
                                     "by-weekday",
                                     true,
-                                    format!(
-                                        "The {} {} of {month_label}",
-                                        ordinal_name(ordinal),
-                                        weekday_short(start.weekday())
-                                    ),
+                                    tr(cx, "The {} {} of {}")
+                                        .replacen("{}", ordinal_label, 1)
+                                        .replacen("{}", tr(cx, weekday_short(start.weekday())), 1)
+                                        .replacen("{}", &month_label, 1),
                                 )),
                         )
                     })
@@ -2186,7 +2253,7 @@ impl EventEditor {
                                     div()
                                         .text_size(TEXT_SM)
                                         .text_color(t.text_muted)
-                                        .child("times"),
+                                        .child(tr(cx, "times")),
                                 )
                             })
                             .child(end_option("end-until", RecurrenceEnd::Until, "On"))
@@ -2206,7 +2273,7 @@ impl EventEditor {
                             .text_size(TEXT_SM)
                             .child(
                                 Icon::new(IconName::Info)
-                                    .size(px(14.))
+                                    .size(ICON_SIZE_SM)
                                     .text_color(t.text_muted),
                             )
                             .child(preview),
@@ -2221,7 +2288,7 @@ impl EventEditor {
                                 el.child(
                                     Button::new("recurrence-remove")
                                         .ghost()
-                                        .label("Don't repeat")
+                                        .label(tr(cx, "Don't repeat"))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.recurrence = None;
                                             this.recurrence_dialog = None;
@@ -2230,16 +2297,18 @@ impl EventEditor {
                                 )
                             })
                             .child(div().flex_1())
-                            .child(Button::new("recurrence-cancel").label("Cancel").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.recurrence_dialog = None;
-                                    cx.notify();
-                                }),
-                            ))
+                            .child(
+                                Button::new("recurrence-cancel")
+                                    .label(tr(cx, "Cancel"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.recurrence_dialog = None;
+                                        cx.notify();
+                                    })),
+                            )
                             .child(
                                 Button::new("recurrence-done")
                                     .primary()
-                                    .label("Done")
+                                    .label(tr(cx, "Done"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.apply_recurrence_dialog(cx)
                                     })),
@@ -2255,7 +2324,7 @@ fn legend(color: Hsla, label: &'static str) -> Div {
         .flex_row()
         .items_center()
         .gap(SPACE_1)
-        .child(div().size(px(8.)).rounded(px(2.)).bg(color.alpha(0.7)))
+        .child(div().size(px(8.)).rounded(RADIUS_SM).bg(color.alpha(0.7)))
         .child(label)
 }
 
@@ -2330,23 +2399,25 @@ impl Render for EventEditor {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(Input::new(&self.title)),
                     )
-                    .child(field_row("When", IconName::Clock, &t, when))
+                    .child(field_row("When", IconName::Clock, &t, cx, when))
                     .when_some(repeat, |el, repeat| {
-                        el.child(field_row("Repeat", IconName::Repeat, &t, repeat))
+                        el.child(field_row("Repeat", IconName::Repeat, &t, cx, repeat))
                     })
                     .child(field_row(
                         "Location",
                         IconName::MapPin,
                         &t,
+                        cx,
                         Input::new(&self.location),
                     ))
-                    .child(field_row("People", IconName::Users, &t, attendees))
+                    .child(field_row("People", IconName::Users, &t, cx, attendees))
                     .when_some(find_time, |el, find_time| el.child(find_time))
                     .children(options)
                     .child(field_row(
                         "Description",
                         IconName::TextAlignStart,
                         &t,
+                        cx,
                         Textarea::new(&self.description),
                     )),
             )
@@ -2391,12 +2462,15 @@ mod tests {
     fn presets_follow_the_start_date() {
         // Tuesday 10 November 2026 = second Tuesday.
         let start = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
-        let labels: Vec<String> = presets(start).into_iter().map(|(label, _)| label).collect();
+        let labels: Vec<String> = presets(start, |s| s)
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
         assert!(labels.contains(&"Weekly on Tue".to_owned()));
         assert!(labels.contains(&"Monthly on day 10".to_owned()));
         assert!(labels.contains(&"Monthly on the second Tue".to_owned()));
         assert!(labels.contains(&"Yearly on 10 Nov".to_owned()));
-        let monthly = presets(start)
+        let monthly = presets(start, |s| s)
             .into_iter()
             .find(|(label, _)| label.starts_with("Monthly on the"))
             .and_then(|(_, rule)| rule)

@@ -7,11 +7,14 @@ use mailbox_core::calendar::Occurrence;
 use mailbox_core::{Calendar, Id};
 
 use super::layout::{self, Placement, ViewKind};
-use super::{CalendarView, ChipStyle, DragKind, HOUR_HEIGHT, HitArea, ViewData, chip_style};
+use super::{
+    CalendarView, ChipStyle, DRAG_OPACITY, DragKind, HOUR_HEIGHT, HitArea, ViewData, chip_style,
+};
 use crate::components::{Icon, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    RADIUS_FULL, RADIUS_MD, RADIUS_SM, SPACE_0_5, SPACE_1, SPACE_2, TEXT_SM, TEXT_XL, TEXT_XS,
-    Theme, hex,
+    ICON_SIZE_XS, RADIUS_FULL, RADIUS_MD, RADIUS_SM, SPACE_0_5, SPACE_1, SPACE_1_5, SPACE_2,
+    TEXT_2XS, TEXT_SM, TEXT_XL, TEXT_XS, Theme, hex, text_on,
 };
 
 const GUTTER: f32 = 56.;
@@ -96,7 +99,7 @@ impl CalendarView {
                         .px(SPACE_1)
                         .rounded(RADIUS_SM)
                         .bg(t.danger)
-                        .text_color(t.on_accent)
+                        .text_color(text_on(t.danger))
                         .text_size(TEXT_XS)
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(layout::format_minutes(now_minutes)),
@@ -249,7 +252,7 @@ impl CalendarView {
                     .w(px(GUTTER))
                     .pr(SPACE_2)
                     .pb(SPACE_1)
-                    .text_size(px(10.))
+                    .text_size(TEXT_2XS)
                     .text_color(t.text_subtle)
                     .child(offset),
             )
@@ -377,9 +380,9 @@ impl CalendarView {
                     .justify_end()
                     .w(px(GUTTER))
                     .pr(SPACE_2)
-                    .text_size(px(10.))
+                    .text_size(TEXT_2XS)
                     .text_color(t.text_subtle)
-                    .child("all-day"),
+                    .child(tr(cx, "All day")),
             )
             .child(
                 div()
@@ -426,7 +429,7 @@ impl CalendarView {
             .h(px(ALL_DAY_LANE - 2.))
             .px(px(2.))
             .cursor_pointer()
-            .when(dragging, |el| el.opacity(0.4))
+            .when(dragging, |el| el.opacity(DRAG_OPACITY))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -438,7 +441,7 @@ impl CalendarView {
                     }
                 }),
             )
-            .child(chip_body(occurrence, &style, true))
+            .child(chip_body(occurrence, &style, true, cx))
     }
 
     fn render_day_column(
@@ -603,7 +606,7 @@ impl CalendarView {
                         .border_color(color)
                         .bg(color.alpha(0.85))
                         .shadow_lg()
-                        .text_color(t.on_accent)
+                        .text_color(text_on(color))
                         .text_size(TEXT_XS)
                         .child(
                             div()
@@ -613,11 +616,11 @@ impl CalendarView {
                         )
                         .child(div().child(format!(
                             "{}{}",
-                            layout::time_range_label(&ghost),
+                            layout::time_range_label(&ghost, |text| tr(cx, text)),
                             if self.drag.as_ref().is_some_and(|drag| drag.copy) {
-                                "  (copy)"
+                                format!("  {}", tr(cx, "(copy)"))
                             } else {
-                                ""
+                                String::new()
                             }
                         ))),
                 )
@@ -647,9 +650,10 @@ impl CalendarView {
                                 .text_color(t.accent)
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(format!(
-                                    "{} – {}  -  Enter to save, Esc to cancel",
+                                    "{} – {}  -  {}",
                                     layout::format_minutes(quick.start),
-                                    layout::format_minutes(quick.end)
+                                    layout::format_minutes(quick.end),
+                                    tr(cx, "Enter to save, Esc to cancel")
                                 )),
                         )
                         .child(self.render_quick_input(quick, t, cx)),
@@ -719,7 +723,7 @@ impl CalendarView {
             .pr(px(3.))
             .pb(px(1.))
             .cursor_pointer()
-            .when(dragging, |el| el.opacity(0.35))
+            .when(dragging, |el| el.opacity(DRAG_OPACITY))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -731,7 +735,7 @@ impl CalendarView {
                 div()
                     .size_full()
                     .when(selected, |el| el.shadow_md())
-                    .child(chip_body(occurrence, &style, compact)),
+                    .child(chip_body(occurrence, &style, compact, cx)),
             )
             .child(
                 div()
@@ -794,14 +798,15 @@ pub(super) fn chip_body(
     occurrence: &Occurrence,
     style: &ChipStyle,
     compact: bool,
+    cx: &App,
 ) -> impl IntoElement + use<> {
     let event = &occurrence.event;
     let title = if event.title.trim().is_empty() {
-        "(No title)".to_owned()
+        tr(cx, "(No title)").to_owned()
     } else {
         event.title.clone()
     };
-    let time = layout::time_range_label(occurrence);
+    let time = layout::time_range_label(occurrence, |text| tr(cx, text));
     let icons = [
         (occurrence.is_part_of_series(), IconName::Repeat),
         (occurrence.details.private, IconName::Lock),
@@ -812,12 +817,12 @@ pub(super) fn chip_body(
             .flex()
             .flex_row()
             .flex_shrink_0()
-            .gap(px(3.))
+            .gap(SPACE_0_5)
             .children(
                 icons
                     .into_iter()
                     .filter(|(on, _)| *on)
-                    .map(|(_, icon)| Icon::new(icon).size(px(10.)).text_color(style.muted)),
+                    .map(|(_, icon)| Icon::new(icon).size(ICON_SIZE_XS).text_color(style.muted)),
             )
     };
 
@@ -838,8 +843,8 @@ pub(super) fn chip_body(
                 .flex_col()
                 .flex_1()
                 .min_w(px(0.))
-                .px(px(6.))
-                .py(px(2.))
+                .px(SPACE_1_5)
+                .py(SPACE_0_5)
                 .text_size(TEXT_XS)
                 .line_height(px(15.))
                 .text_color(style.fg)
@@ -895,9 +900,9 @@ pub(super) fn chip_body(
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap(px(3.))
+                                .gap(SPACE_1)
                                 .text_color(style.muted)
-                                .child(Icon::new(IconName::MapPin).size(px(10.)))
+                                .child(Icon::new(IconName::MapPin).size(ICON_SIZE_XS))
                                 .child(div().truncate().child(event.location.clone())),
                         )
                     })

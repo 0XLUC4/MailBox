@@ -14,9 +14,10 @@ use super::editor::{EditorTarget, open_event_editor};
 use super::layout;
 use crate::app_state::AppState;
 use crate::components::{Button, Icon, IconName};
+use crate::settings::tr;
 use crate::theme::{
-    RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_2, SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS,
-    hex, theme,
+    ICON_SIZE, ICON_SIZE_XS, PANE_HEADER_HEIGHT, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2,
+    SPACE_3, SPACE_4, TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, hex, theme,
 };
 
 /// Reminders already due when the app starts are shown if they fired this recently.
@@ -117,7 +118,7 @@ impl ReminderService {
                 window_bounds: Some(WindowBounds::centered(size(px(440.), px(360.)), cx)),
                 window_min_size: Some(size(px(360.), px(220.))),
                 focus: true,
-                ..crate::titlebar::window_options("Reminders")
+                ..crate::titlebar::window_options(tr(cx, "Reminders"))
             };
             let for_window = service.clone();
             let opened = crate::titlebar::open_window(options, cx, move |window, cx| {
@@ -126,7 +127,10 @@ impl ReminderService {
             service.update(cx, |service, cx| match opened {
                 Ok(handle) => service.window = Some(handle),
                 Err(err) => service.state.update(cx, |state, cx| {
-                    state.report_error(format!("Could not open reminders: {err}"), cx)
+                    state.report_error(
+                        tr(cx, "Could not open reminders: {}").replace("{}", &err.to_string()),
+                        cx,
+                    )
                 }),
             });
         });
@@ -152,22 +156,28 @@ impl ReminderService {
     }
 }
 
-/// "in 10 min", "now", "started 5 min ago".
-fn when_label(start: DateTime<Utc>, now: DateTime<Utc>) -> String {
+/// "in 10 min", "now", "started 5 min ago" (labels translated by `tr`).
+fn when_label(
+    start: DateTime<Utc>,
+    now: DateTime<Utc>,
+    tr: impl Fn(&'static str) -> &'static str,
+) -> String {
     let minutes = (start - now).num_minutes();
     let span = |m: i64| {
         if m >= 24 * 60 {
-            format!("{} d", m / (24 * 60))
+            tr("{} d").replace("{}", &(m / (24 * 60)).to_string())
         } else if m >= 60 {
-            format!("{} h {:02} min", m / 60, m % 60)
+            tr("{} h {} min")
+                .replacen("{}", &(m / 60).to_string(), 1)
+                .replacen("{}", &format!("{:02}", m % 60), 1)
         } else {
-            format!("{m} min")
+            tr("{} min").replace("{}", &m.to_string())
         }
     };
     match minutes {
-        m if m > 0 => format!("in {}", span(m)),
-        0 => "now".into(),
-        m => format!("started {} ago", span(-m)),
+        m if m > 0 => tr("in {}").replace("{}", &span(m)),
+        0 => tr("now").into(),
+        m => tr("started {} ago").replace("{}", &span(-m)),
     }
 }
 
@@ -231,7 +241,7 @@ impl Render for ReminderWindow {
                     ))
                     .ghost()
                     .compact()
-                    .label(format!("{minutes} min"))
+                    .label(tr(cx, "{} min").replace("{}", &minutes.to_string()))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.act(window, cx, |service, cx| service.snooze(key, minutes, cx))
                     }))
@@ -262,7 +272,7 @@ impl Render for ReminderWindow {
                                     .bg(color.alpha(0.15))
                                     .child(
                                         Icon::new(IconName::BellRing)
-                                            .size(px(16.))
+                                            .size(ICON_SIZE)
                                             .text_color(color),
                                     ),
                             )
@@ -272,7 +282,7 @@ impl Render for ReminderWindow {
                                     .flex_col()
                                     .flex_1()
                                     .min_w(px(0.))
-                                    .gap(px(2.))
+                                    .gap(SPACE_0_5)
                                     .child(
                                         div()
                                             .truncate()
@@ -290,7 +300,7 @@ impl Render for ReminderWindow {
                                             })
                                             .child(format!(
                                                 "{} - {}",
-                                                when_label(event.start, now),
+                                                when_label(event.start, now, |text| tr(cx, text)),
                                                 if event.all_day {
                                                     local_start.format("%a %-d %b").to_string()
                                                 } else {
@@ -298,7 +308,8 @@ impl Render for ReminderWindow {
                                                         "{} {}",
                                                         local_start.format("%a"),
                                                         layout::time_range_label(
-                                                            &reminder.occurrence
+                                                            &reminder.occurrence,
+                                                            |text| tr(cx, text)
                                                         )
                                                     )
                                                 }
@@ -313,8 +324,15 @@ impl Render for ReminderWindow {
                                                 .gap(SPACE_1)
                                                 .text_size(TEXT_XS)
                                                 .text_color(t.text_muted)
-                                                .child(Icon::new(IconName::MapPin).size(px(11.)))
-                                                .child(event.location.clone()),
+                                                .child(
+                                                    Icon::new(IconName::MapPin).size(ICON_SIZE_XS),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .min_w(px(0.))
+                                                        .truncate()
+                                                        .child(event.location.clone()),
+                                                ),
                                         )
                                     }),
                             ),
@@ -329,7 +347,7 @@ impl Render for ReminderWindow {
                                 div()
                                     .text_size(TEXT_XS)
                                     .text_color(t.text_subtle)
-                                    .child("Snooze"),
+                                    .child(tr(cx, "Snooze")),
                             )
                             .child(snooze_button(5))
                             .child(snooze_button(10))
@@ -340,7 +358,7 @@ impl Render for ReminderWindow {
                                     format!("open-{}-{}", key.0, key.1).into(),
                                 ))
                                 .compact()
-                                .label("Open")
+                                .label(tr(cx, "Open"))
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
                                         let target = if occurrence.is_recurring_instance() {
@@ -365,7 +383,7 @@ impl Render for ReminderWindow {
                                 ))
                                 .primary()
                                 .compact()
-                                .label("Dismiss")
+                                .label(tr(cx, "Dismiss"))
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
                                         this.act(window, cx, |service, cx| service.dismiss(key, cx))
@@ -392,19 +410,23 @@ impl Render for ReminderWindow {
                     .items_center()
                     .gap(SPACE_2)
                     .px(SPACE_4)
-                    .h(px(48.))
+                    .h(PANE_HEADER_HEIGHT)
                     .border_b_1()
                     .border_color(t.border_subtle)
-                    .child(Icon::new(IconName::Bell).size(px(16.)).text_color(t.accent))
+                    .child(
+                        Icon::new(IconName::Bell)
+                            .size(ICON_SIZE)
+                            .text_color(t.accent),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .text_size(TEXT_LG)
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(if count == 1 {
-                                "1 reminder".to_owned()
+                                tr(cx, "1 reminder").to_owned()
                             } else {
-                                format!("{count} reminders")
+                                tr(cx, "{} reminders").replace("{}", &count.to_string())
                             }),
                     )
                     .when(count > 1, |el| {
@@ -412,7 +434,7 @@ impl Render for ReminderWindow {
                             Button::new("dismiss-all")
                                 .ghost()
                                 .compact()
-                                .label("Dismiss all")
+                                .label(tr(cx, "Dismiss all"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.act(window, cx, |service, cx| service.dismiss_all(cx))
                                 })),
@@ -442,16 +464,19 @@ mod tests {
     #[test]
     fn when_labels() {
         let now = Utc.with_ymd_and_hms(2026, 11, 16, 9, 0, 0).unwrap();
-        assert_eq!(when_label(now + Duration::minutes(10), now), "in 10 min");
-        assert_eq!(when_label(now, now), "now");
         assert_eq!(
-            when_label(now - Duration::minutes(5), now),
+            when_label(now + Duration::minutes(10), now, |s| s),
+            "in 10 min"
+        );
+        assert_eq!(when_label(now, now, |s| s), "now");
+        assert_eq!(
+            when_label(now - Duration::minutes(5), now, |s| s),
             "started 5 min ago"
         );
         assert_eq!(
-            when_label(now + Duration::minutes(90), now),
+            when_label(now + Duration::minutes(90), now, |s| s),
             "in 1 h 30 min"
         );
-        assert_eq!(when_label(now + Duration::days(2), now), "in 2 d");
+        assert_eq!(when_label(now + Duration::days(2), now, |s| s), "in 2 d");
     }
 }
