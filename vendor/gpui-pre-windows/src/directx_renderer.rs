@@ -1702,10 +1702,10 @@ pub(crate) mod shader_resources {
     #[cfg(debug_assertions)]
     use windows::{
         Win32::Graphics::Direct3D::{
-            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompileFromFile},
+            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompile},
             ID3DBlob,
         },
-        core::{HSTRING, PCSTR},
+        core::PCSTR,
     };
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1801,18 +1801,25 @@ pub(crate) mod shader_resources {
         }
     }
 
+    /// Shader sources embedded at compile time. Compiling from `CARGO_MANIFEST_DIR` at runtime broke
+    /// debug binaries whose build directory no longer exists (cargo reuses this crate's artifact
+    /// across git worktrees that share a target directory).
+    #[cfg(debug_assertions)]
+    fn shader_source(entry: ShaderModule) -> (&'static str, String) {
+        const INCLUDE: &str = "#include \"alpha_correction.hlsl\"";
+        const ALPHA_CORRECTION: &str = include_str!("alpha_correction.hlsl");
+        let (name, source) = if matches!(entry, ShaderModule::EmojiRasterization) {
+            ("color_text_raster.hlsl\0", include_str!("color_text_raster.hlsl"))
+        } else {
+            ("shaders.hlsl\0", include_str!("shaders.hlsl"))
+        };
+        (name, source.replacen(INCLUDE, ALPHA_CORRECTION, 1))
+    }
+
     #[cfg(debug_assertions)]
     pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
         unsafe {
-            use windows::Win32::Graphics::{
-                Direct3D::ID3DInclude, Hlsl::D3D_COMPILE_STANDARD_FILE_INCLUDE,
-            };
-
-            let shader_name = if matches!(entry, ShaderModule::EmojiRasterization) {
-                "color_text_raster.hlsl"
-            } else {
-                "shaders.hlsl"
-            };
+            let (shader_name, source) = shader_source(entry);
 
             let entry = format!(
                 "{}_{}\0",
@@ -1829,22 +1836,15 @@ pub(crate) mod shader_resources {
 
             let mut compile_blob = None;
             let mut error_blob = None;
-            let shader_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(&format!("src/{}", shader_name))
-                .canonicalize()?;
-
             let entry_point = PCSTR::from_raw(entry.as_ptr());
             let target_cstr = PCSTR::from_raw(target.as_ptr());
 
-            // really dirty trick because winapi bindings are unhappy otherwise
-            let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
-                D3D_COMPILE_STANDARD_FILE_INCLUDE as usize,
-            );
-
-            let ret = D3DCompileFromFile(
-                &HSTRING::from(shader_path.to_str().unwrap()),
+            let ret = D3DCompile(
+                source.as_ptr().cast(),
+                source.len(),
+                PCSTR::from_raw(shader_name.as_ptr()),
                 None,
-                include_handler,
+                None,
                 entry_point,
                 target_cstr,
                 D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION,
