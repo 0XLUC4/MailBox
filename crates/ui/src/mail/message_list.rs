@@ -719,26 +719,36 @@ impl MessageListView {
             .items_center()
             .gap(SPACE_1_5)
             .text_size(TEXT_MD)
+            // The conversation's size right after the sender: the hover quick actions cover the
+            // right end of this line.
             .child(
                 div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(SPACE_1_5)
                     .flex_1()
                     .min_w(px(0.))
-                    .truncate()
-                    .when(unread, |el| el.font_weight(FontWeight::SEMIBOLD))
-                    .child(sender.clone()),
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .truncate()
+                            .when(unread, |el| el.font_weight(FontWeight::SEMIBOLD))
+                            .child(sender.clone()),
+                    )
+                    .when(thread_len > 1, |el| {
+                        el.child(
+                            div()
+                                .flex_shrink_0()
+                                .px(px(5.))
+                                .rounded(RADIUS_FULL)
+                                .bg(t.active)
+                                .text_size(TEXT_XS)
+                                .text_color(t.text_muted)
+                                .child(thread_len.to_string()),
+                        )
+                    }),
             )
-            .when(thread_len > 1, |el| {
-                el.child(
-                    div()
-                        .flex_shrink_0()
-                        .px(px(5.))
-                        .rounded(RADIUS_FULL)
-                        .bg(t.active)
-                        .text_size(TEXT_XS)
-                        .text_color(t.text_muted)
-                        .child(thread_len.to_string()),
-                )
-            })
             .child(icons)
             .child(time);
 
