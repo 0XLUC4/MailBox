@@ -81,8 +81,10 @@ exe next to the running one, checks its size and SHA-256, swaps it in (the previ
 The same workflow builds `Mailbox-X.Y.Z-macos-arm64.dmg` for Apple Silicon (M1 to M5) on a macOS
 runner (`scripts/package-macos.sh`) and adds it to the release. It is ad-hoc signed, not notarized:
 the first launch needs right-click > Open. On macOS the update popover's "Download" button opens the
-release page (no in-place install). Run the workflow by hand (Actions > release > Run workflow) to
-build both packages as workflow artifacts without publishing anything.
+release page (no in-place install). It also builds `Mailbox-X.Y.Z-linux-x64.tar.gz`
+(`scripts/package-linux.sh`: the binary, a `.desktop` entry and the icon), same "Download" button.
+Run the workflow by hand (Actions > release > Run workflow) to build all three packages as workflow
+artifacts without publishing anything.
 
 ## Project layout
 
