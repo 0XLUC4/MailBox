@@ -130,20 +130,24 @@ pub struct Release {
 }
 
 impl Release {
-    /// First lines of the release notes as one plain line, at most `max_chars` long.
-    pub fn notes_excerpt(&self, max_chars: usize) -> String {
-        let text = self
-            .notes
-            .lines()
-            .map(|line| line.trim().trim_start_matches(['#', '*', '-', '>']).trim())
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-        if text.chars().count() <= max_chars {
-            return text;
+    /// The bullet lines of the release notes (`- …` or `* …`) as `- …`, at most `max`;
+    /// without bullets, the first line of the notes (headings unmarked).
+    pub fn highlights(&self, max: usize) -> Vec<String> {
+        let lines = self.notes.lines().map(str::trim);
+        let bullets: Vec<String> = lines
+            .clone()
+            .filter_map(|line| line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")))
+            .map(|item| format!("- {}", item.trim()))
+            .take(max)
+            .collect();
+        if !bullets.is_empty() {
+            return bullets;
         }
-        let cut: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-        format!("{}…", cut.trim_end())
+        lines
+            .map(|line| line.trim_start_matches('#').trim())
+            .find(|line| !line.is_empty())
+            .map(|line| vec![line.to_owned()])
+            .unwrap_or_default()
     }
 }
 
@@ -458,8 +462,7 @@ mod tests {
             release.page_url,
             "https://github.com/0XLUC4/MailBox/releases/tag/v0.2.0"
         );
-        assert_eq!(release.notes_excerpt(100), "Fixes faster sync");
-        assert_eq!(release.notes_excerpt(8), "Fixes f…");
+        assert_eq!(release.highlights(5), ["- faster sync"]);
     }
 
     #[test]
@@ -519,6 +522,24 @@ mod tests {
         assert_eq!(verify(b"abc", &release(HASH, 4)), Err(Error::Checksum));
         assert_eq!(verify(b"abd", &release(HASH, 3)), Err(Error::Checksum));
         assert_eq!(verify(b"abcd", &release(HASH, 3)), Err(Error::Checksum));
+    }
+
+    #[test]
+    fn highlights_fall_back_to_the_first_line() {
+        let mut release = release(HASH, 1);
+        release.notes = "Styled mail on macOS
+
+More details."
+            .into();
+        assert_eq!(release.highlights(3), ["Styled mail on macOS"]);
+        release.notes = "## Fixes
+* one
+- two
+- three"
+            .into();
+        assert_eq!(release.highlights(2), ["- one", "- two"]);
+        release.notes = String::new();
+        assert!(release.highlights(3).is_empty());
     }
 
     #[test]

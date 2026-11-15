@@ -31,6 +31,16 @@ const FR: &[(&str, &str)] = &[
     ("Update and restart", "Mettre à jour et redémarrer"),
     ("Updating…", "Mise à jour…"),
     ("Download", "Télécharger"),
+    ("Mailbox {} is available", "Mailbox {} est disponible"),
+    ("You have {}.", "Vous avez la {}."),
+    (
+        "Mailbox restarts to finish the update.",
+        "Mailbox redémarre pour terminer la mise à jour.",
+    ),
+    (
+        "Opens the release page to download it.",
+        "Ouvre la page de la version pour la télécharger.",
+    ),
     (
         "Offline: could not reach GitHub",
         "Hors connexion : GitHub est injoignable",

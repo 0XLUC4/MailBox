@@ -14,15 +14,17 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use mailbox_updater::{Error, Release, Version};
 
-use crate::components::{Button, Icon, IconButton, IconName};
+use crate::components::{Icon, IconButton, IconName};
 use crate::settings::tr;
 use crate::theme::{
-    DEFAULT_ACCENT, RADIUS_FULL, RADIUS_MD, SPACE_0_5, SPACE_2, SPACE_3, TEXT_MD, TEXT_SM, theme,
+    DEFAULT_ACCENT, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_0_5, SPACE_1, SPACE_2, SPACE_3,
+    TEXT_LG, TEXT_MD, TEXT_SM, theme,
 };
 
 const FIRST_CHECK: Duration = Duration::from_secs(10);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-const NOTES_CHARS: usize = 160;
+/// Release-note lines shown in the popover.
+const NOTES_LINES: usize = 6;
 /// How often the popover redraws the progress bar during a download.
 const PROGRESS_REDRAW: Duration = Duration::from_millis(100);
 
@@ -159,32 +161,32 @@ pub fn rail_button(updater: &Entity<Updater>, cx: &App) -> impl IntoElement {
 }
 
 fn card(updater: &Entity<Updater>, cx: &App) -> AnyElement {
+    match &updater.read(cx).status {
+        Status::Available(release) => available_card(updater, release, cx),
+        _ => status_card(updater, cx),
+    }
+}
+
+/// No release waiting: status line and the refresh button.
+fn status_card(updater: &Entity<Updater>, cx: &App) -> AnyElement {
     let t = theme(cx).clone();
     let state = updater.read(cx);
-    let current = Version::current();
-    let available = match &state.status {
-        Status::Available(release) => Some(release.clone()),
-        _ => None,
-    };
     let title = match &state.status {
-        Status::Available(_) => tr(cx, "Update available"),
         Status::UpToDate => tr(cx, "You're up to date"),
         Status::NotChecked if state.checking => tr(cx, "Checking for updates…"),
-        Status::NotChecked => tr(cx, "Updates"),
         Status::Failed(_) => tr(cx, "Could not check for updates"),
+        _ => tr(cx, "Updates"),
     };
-    let error = match (&state.install_error, &state.status) {
-        (Some(err), _) | (None, Status::Failed(err)) => Some(tr(cx, err.message())),
+    let error = match &state.status {
+        Status::Failed(err) => Some(tr(cx, err.message())),
         _ => None,
     };
-    let subtitle: SharedString = match (&error, &available) {
-        (Some(message), _) => (*message).into(),
-        (None, Some(release)) => format!("Mailbox {current} → {}", release.version).into(),
-        (None, None) => format!("Mailbox {current}").into(),
+    let subtitle: SharedString = match error {
+        Some(message) => message.into(),
+        None => format!("Mailbox {}", Version::current()).into(),
     };
-
     let refresh_updater = updater.clone();
-    let header = div()
+    div()
         .flex()
         .flex_row()
         .items_start()
@@ -219,63 +221,126 @@ fn card(updater: &Entity<Updater>, cx: &App) -> AnyElement {
             tr(cx, "Check for updates"),
             move |cx| refresh_updater.update(cx, |updater, cx| updater.check(cx)),
             cx,
-        ));
+        ))
+        .into_any_element()
+}
 
+/// A release waits: "Mailbox X is available", its highlights and one large button.
+fn available_card(updater: &Entity<Updater>, release: &Release, cx: &App) -> AnyElement {
+    let t = theme(cx).clone();
+    let state = updater.read(cx);
     let installing = state.installing;
     let downloaded = state.downloaded.load(Ordering::Relaxed);
+    let title = tr(cx, "Mailbox {} is available").replace("{}", &release.version.to_string());
+    let current = tr(cx, "You have {}.").replace("{}", &Version::current().to_string());
+    let error = state
+        .install_error
+        .as_ref()
+        .map(|err| tr(cx, err.message()));
+    let notes = release.highlights(NOTES_LINES);
+
+    let action = if cfg!(windows) {
+        let install_updater = updater.clone();
+        let label = if installing {
+            tr(cx, "Updating…")
+        } else {
+            tr(cx, "Update and restart")
+        };
+        big_button("update-and-restart", label, installing, move |cx| {
+            install_updater.update(cx, |updater, cx| updater.install(cx))
+        })
+    } else {
+        // No in-place install outside Windows: the release page has the download.
+        let page_url = release.page_url.clone();
+        big_button("download-update", tr(cx, "Download"), false, move |cx| {
+            cx.open_url(&page_url)
+        })
+    };
+    let footer = if cfg!(windows) {
+        tr(cx, "Mailbox restarts to finish the update.")
+    } else {
+        tr(cx, "Opens the release page to download it.")
+    };
+
     div()
         .flex()
         .flex_col()
         .gap(SPACE_3)
-        .child(header)
-        .when_some(available, |el, release| {
-            let notes = release.notes_excerpt(NOTES_CHARS);
-            let page_url = release.page_url.clone();
-            let install_updater = updater.clone();
-            el.when(!notes.is_empty(), |el| {
-                el.child(
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(SPACE_1)
+                .child(
+                    div()
+                        .text_size(TEXT_LG)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(t.text)
+                        .child(title),
+                )
+                .child(
                     div()
                         .text_size(TEXT_SM)
                         .text_color(t.text_muted)
-                        .child(notes),
-                )
-            })
-            .when(!page_url.is_empty(), |el| {
-                el.child(
-                    div()
-                        .id("whats-new")
-                        .text_size(TEXT_SM)
-                        .text_color(t.accent)
-                        .cursor_pointer()
-                        .hover(|style| style.underline())
-                        .child(tr(cx, "What's new"))
-                        .on_click(move |_, _, cx| cx.open_url(&page_url)),
-                )
-            })
-            .child(if cfg!(windows) {
-                Button::new("update-and-restart")
-                    .primary()
-                    .label(if installing {
-                        tr(cx, "Updating…")
-                    } else {
-                        tr(cx, "Update and restart")
-                    })
-                    .disabled(installing)
-                    .on_click(move |_, _, cx| {
-                        install_updater.update(cx, |updater, cx| updater.install(cx));
-                    })
-            } else {
-                // No in-place install outside Windows: the release page has the download.
-                let page_url = release.page_url.clone();
-                Button::new("download-update")
-                    .primary()
-                    .label(tr(cx, "Download"))
-                    .on_click(move |_, _, cx| cx.open_url(&page_url))
-            })
-            .when(installing, |el| {
-                el.child(progress_bar(downloaded, release.size, t.border))
-            })
+                        .child(current),
+                ),
+        )
+        .when(!notes.is_empty(), |el| {
+            el.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(SPACE_1)
+                    .text_size(TEXT_SM)
+                    .text_color(t.text)
+                    .children(notes.into_iter().map(|line| div().child(line))),
+            )
         })
+        .when_some(error, |el, message| {
+            el.child(div().text_size(TEXT_SM).text_color(t.danger).child(message))
+        })
+        .child(action)
+        .when(installing, |el| {
+            el.child(progress_bar(downloaded, release.size, t.border))
+        })
+        .child(
+            div()
+                .text_size(TEXT_SM)
+                .text_color(t.text_muted)
+                .child(footer),
+        )
+        .into_any_element()
+}
+
+/// Full-width blue button (the popover's one action).
+fn big_button(
+    id: &'static str,
+    label: &'static str,
+    disabled: bool,
+    on_click: impl Fn(&mut App) + 'static,
+) -> AnyElement {
+    div()
+        .id(id)
+        .flex()
+        .w_full()
+        .h(px(40.))
+        .items_center()
+        .justify_center()
+        .rounded(RADIUS_LG)
+        .bg(rgb(DEFAULT_ACCENT))
+        .text_size(TEXT_LG)
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(white())
+        .map(|el| {
+            if disabled {
+                el.opacity(0.6)
+            } else {
+                el.cursor_pointer()
+                    .hover(|style| style.opacity(0.9))
+                    .on_click(move |_, _, cx| on_click(cx))
+            }
+        })
+        .child(label)
         .into_any_element()
 }
 
