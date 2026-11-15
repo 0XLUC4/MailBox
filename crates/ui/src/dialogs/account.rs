@@ -333,9 +333,8 @@ impl AccountDialog {
         let Some(guess) = suggest_servers(&email) else {
             return self.fail(tr(cx, "Enter a valid email address"), cx);
         };
-        if !self.use_oauth && self.password_value(cx).is_none() {
-            return self.fail(tr(cx, "Enter your password (or an app password)"), cx);
-        }
+        // No password check here: a custom domain hosted by Google or Microsoft only shows
+        // its browser sign-in once its servers are known (next step).
         self.error = None;
         self.provider = detect_provider(&email);
         if self.name.read(cx).value().trim().is_empty() {
@@ -400,9 +399,20 @@ impl AccountDialog {
         });
         self.source = Some(source.into());
         self.step = Step::Servers;
+        // No password typed for a Google / Microsoft server: sign in with the browser.
+        if !self.use_oauth
+            && self.password_value(cx).is_none()
+            && OAuthProvider::for_host(&servers.imap.host)
+                .and_then(|provider| configured_client_id(self.state.read(cx), provider))
+                .is_some()
+        {
+            self.use_oauth = true;
+        }
         cx.notify();
         // Test right away: most users never need to touch the servers.
-        self.run_test(false, window, cx);
+        if self.use_oauth || self.password_value(cx).is_some() {
+            self.run_test(false, window, cx);
+        }
     }
 
     // ---------- test / save ----------
