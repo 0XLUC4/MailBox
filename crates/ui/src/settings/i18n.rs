@@ -31,6 +31,11 @@ const FR: &[(&str, &str)] = &[
     ("Update and restart", "Mettre à jour et redémarrer"),
     ("Updating…", "Mise à jour…"),
     ("Download", "Télécharger"),
+    // contact card (mail/sender_card.rs)
+    ("New email", "Écrire"),
+    ("Add to contacts", "Ajouter aux contacts"),
+    ("In your contacts", "Dans vos contacts"),
+    ("Copy address", "Copier l'adresse"),
     ("Mailbox {} is available", "Mailbox {} est disponible"),
     ("You have {}.", "Vous avez la {}."),
     (

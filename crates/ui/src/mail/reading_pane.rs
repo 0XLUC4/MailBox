@@ -19,7 +19,7 @@ use mailbox_core::{
 use super::html::{self, Block, RenderContext};
 #[cfg(any(windows, target_os = "macos"))]
 use super::webview::{self, MailWebView, WebEvent};
-use super::{ComposeKind, message_menu, message_window, ops};
+use super::{ComposeKind, message_menu, message_window, ops, sender_card};
 use crate::app_state::AppState;
 use crate::components::{
     Avatar, Badge, Button, EmptyState, Icon, IconButton, IconName, avatar_color, toolbar_separator,
@@ -86,13 +86,6 @@ fn attachment_icon(attachment: &Attachment) -> IconName {
     } else {
         IconName::File
     }
-}
-
-fn addresses(list: &[Address]) -> String {
-    list.iter()
-        .map(|a| a.display().to_owned())
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 impl ReadingPaneView {
@@ -618,6 +611,38 @@ impl ReadingPaneView {
             .child(chips)
     }
 
+    /// `label` then each address as a name opening its contact card, comma-separated.
+    fn recipients(
+        &self,
+        label: &'static str,
+        list: &[Address],
+        message: &Message,
+        key: &'static str,
+        t: &Theme,
+    ) -> Div {
+        div()
+            .flex()
+            .flex_row()
+            .flex_shrink_0()
+            .gap(SPACE_1)
+            .child(label)
+            .children(list.iter().enumerate().map(|(index, address)| {
+                let separator = if index + 1 < list.len() { "," } else { "" };
+                div()
+                    .flex()
+                    .flex_row()
+                    .child(sender_card::name(
+                        &self.state,
+                        address,
+                        message.account_id,
+                        false,
+                        SharedString::from(format!("{key}-card-{}-{index}", message.id)),
+                        t.elevated,
+                    ))
+                    .child(separator)
+            }))
+    }
+
     /// Sender, recipients (or the preview when `compact`) and date of a message.
     fn message_header(&self, message: &Message, compact: bool, t: &Theme) -> Div {
         let date = message
@@ -625,14 +650,42 @@ impl ReadingPaneView {
             .with_timezone(&Local)
             .format("%a %d %b %Y, %H:%M")
             .to_string();
+        // Expanded: every name opens its contact card. Collapsed rows expand on click instead.
         let details = if compact {
-            message.preview.clone()
+            div().truncate().child(message.preview.clone())
         } else {
-            let mut line = format!("To: {}", addresses(&message.to));
-            if !message.cc.is_empty() {
-                line.push_str(&format!("   Cc: {}", addresses(&message.cc)));
-            }
-            line
+            div()
+                .flex()
+                .flex_row()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .gap(SPACE_1)
+                .child(self.recipients("To:", &message.to, message, "to", t))
+                .when(!message.cc.is_empty(), |el| {
+                    el.child(div().w(SPACE_2)).child(self.recipients(
+                        "Cc:",
+                        &message.cc,
+                        message,
+                        "cc",
+                        t,
+                    ))
+                })
+        };
+        let sender = if compact {
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(message.from.display().to_owned())
+                .into_any_element()
+        } else {
+            sender_card::name(
+                &self.state,
+                &message.from,
+                message.account_id,
+                true,
+                ("sender-card", message.id as u64),
+                t.elevated,
+            )
+            .into_any_element()
         };
         div()
             .flex()
@@ -654,11 +707,7 @@ impl ReadingPaneView {
                             .items_center()
                             .gap(SPACE_2)
                             .text_size(TEXT_MD)
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(message.from.display().to_owned()),
-                            )
+                            .child(sender)
                             .when(!message.from.name.is_empty(), |el| {
                                 el.child(
                                     div()
@@ -672,7 +721,6 @@ impl ReadingPaneView {
                     )
                     .child(
                         div()
-                            .truncate()
                             .text_size(TEXT_SM)
                             .text_color(t.text_muted)
                             .child(details),

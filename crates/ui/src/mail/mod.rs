@@ -14,6 +14,7 @@ mod message_window;
 mod ops;
 mod reading_pane;
 mod remote_images;
+mod sender_card;
 #[cfg(any(windows, target_os = "macos"))]
 mod webview;
 
