@@ -845,6 +845,23 @@ fn validate(event: &CalendarEvent) -> Result<()> {
     Ok(())
 }
 
+/// Details rows with this UID, only those in `calendar_id` when given.
+fn uid_rows(store: &Store, uid: &str, calendar_id: Option<Id>) -> Result<Vec<EventDetails>> {
+    let mut rows = Vec::new();
+    for row in details_by_uid(store, uid)? {
+        let in_scope = match calendar_id {
+            Some(calendar_id) => store
+                .get::<CalendarEvent>(row.event_id)?
+                .is_some_and(|event| event.calendar_id == calendar_id),
+            None => true,
+        };
+        if in_scope {
+            rows.push(row);
+        }
+    }
+    Ok(rows)
+}
+
 fn import(
     tx: &mut Tx,
     calendar_id: Id,
@@ -852,6 +869,9 @@ fn import(
     events: Vec<EventSnapshot>,
 ) -> Result<()> {
     let store = tx.store;
+    // iTIP messages update the event wherever it is; a plain import (file, CalDAV sync) only
+    // matches inside its calendar, so the same UID in two calendars stays two events.
+    let scope = method.is_none().then_some(calendar_id);
     // Series first so exceptions can link to them.
     let (masters, exceptions): (Vec<_>, Vec<_>) = events.into_iter().partition(|snapshot| {
         snapshot
@@ -862,9 +882,11 @@ fn import(
     for snapshot in masters.into_iter().chain(exceptions) {
         let EventSnapshot { mut event, details } = snapshot;
         let mut details = details.unwrap_or_else(|| EventDetails::default_for(0));
-        let existing = details_by_uid(store, &details.uid)?
-            .into_iter()
-            .find(|row| row.recurrence_id == details.recurrence_id);
+        let rows = uid_rows(store, &details.uid, scope)?;
+        let existing = rows
+            .iter()
+            .find(|row| row.recurrence_id == details.recurrence_id)
+            .cloned();
         match method {
             Some(Method::Cancel) => {
                 if let Some(row) = existing {
@@ -905,9 +927,7 @@ fn import(
             _ => {}
         }
         if let Some(recurrence_id) = details.recurrence_id
-            && let Some(master) = details_by_uid(store, &details.uid)?
-                .into_iter()
-                .find(|row| row.recurrence_id.is_none())
+            && let Some(master) = rows.iter().find(|row| row.recurrence_id.is_none())
         {
             details.master_id = Some(master.event_id);
             let (master_event, mut master_details) = tx.load(master.event_id)?;
