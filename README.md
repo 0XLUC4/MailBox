@@ -78,6 +78,12 @@ every 6 hours (a plain download, not the rate-limited GitHub API). "Update and r
 exe next to the running one, checks its size and SHA-256, swaps it in (the previous exe is kept as
 `<name>.old.exe` until the next start), relaunches, and rolls back if anything fails.
 
+The same workflow builds `Mailbox-X.Y.Z-macos-arm64.dmg` for Apple Silicon (M1 to M5) on a macOS
+runner (`scripts/package-macos.sh`) and adds it to the release. It is ad-hoc signed, not notarized:
+the first launch needs right-click > Open. On macOS the update popover's "Download" button opens the
+release page (no in-place install). Run the workflow by hand (Actions > release > Run workflow) to
+build both packages as workflow artifacts without publishing anything.
+
 ## Project layout
 
 | Folder | Purpose |

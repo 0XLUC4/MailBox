@@ -1,10 +1,13 @@
-# Pushing a tag vX.Y.Z builds Windows x64 and publishes the GitHub release the in-app updater
-# reads: Mailbox-X.Y.Z-windows-x64.exe + latest.json (see README, "Releasing").
+# Pushing a tag vX.Y.Z builds Windows x64 and macOS Apple Silicon and publishes the GitHub
+# release: Mailbox-X.Y.Z-windows-x64.exe + latest.json (read by the in-app updater) and
+# Mailbox-X.Y.Z-macos-arm64.dmg (see README, "Releasing"). Run manually (Actions > release >
+# Run workflow) to build both without publishing: the packages are kept as workflow artifacts.
 name: release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,6 +20,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Check the tag matches the workspace version
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $manifest = Get-Content Cargo.toml -Raw
@@ -37,7 +41,13 @@ jobs:
           }
           ./scripts/package.ps1 -SkipBuild -Notes $notes
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows
+          path: dist/*
+
       - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,3 +61,28 @@ jobs:
             gh release create $env:GITHUB_REF_NAME @assets --title "Mailbox $env:GITHUB_REF_NAME" --generate-notes
           }
           if ($LASTEXITCODE -ne 0) { throw "gh failed ($LASTEXITCODE)" }
+
+  macos:
+    # Apple Silicon runner: builds aarch64-apple-darwin (M1 to M5).
+    runs-on: macos-15
+    # The Windows job creates the release; this one adds the dmg to it.
+    needs: windows
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build and package
+        run: |
+          rustup target add aarch64-apple-darwin
+          bash scripts/package-macos.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos
+          path: dist/*.dmg
+
+      - name: Add the dmg to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/Mailbox-*-macos-arm64.dmg --clobber
