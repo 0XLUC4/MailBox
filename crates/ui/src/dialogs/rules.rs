@@ -705,6 +705,7 @@ impl Render for RulesDialog {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.account_id = Some(account_id);
                             this.editing = None;
+                            this.error = None;
                             cx.notify();
                         }))
                 }))
