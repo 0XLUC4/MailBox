@@ -31,6 +31,17 @@ const FR: &[(&str, &str)] = &[
     ("Update and restart", "Mettre à jour et redémarrer"),
     ("Updating…", "Mise à jour…"),
     ("Download", "Télécharger"),
+    // send checks (compose/view.rs)
+    ("Send anyway?", "Envoyer quand même ?"),
+    ("Send", "Envoyer"),
+    (
+        "This message has no subject.",
+        "Ce message n'a pas d'objet.",
+    ),
+    (
+        "The message mentions an attachment, but nothing is attached.",
+        "Le message parle d'une pièce jointe, mais aucune n'est jointe.",
+    ),
     // contact card (mail/sender_card.rs)
     ("New email", "Écrire"),
     ("Add to contacts", "Ajouter aux contacts"),

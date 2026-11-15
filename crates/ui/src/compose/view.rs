@@ -19,6 +19,7 @@ use super::{
 };
 use crate::app_state::AppState;
 use crate::components::{Avatar, Button, Icon, IconButton, IconName, Toolbar, toolbar_separator};
+use crate::settings::tr;
 use crate::theme::{
     ICON_SIZE_SM, RADIUS_FULL, RADIUS_LG, RADIUS_MD, SPACE_1, SPACE_1_5, SPACE_2, SPACE_3, SPACE_4,
     TEXT_LG, TEXT_MD, TEXT_SM, TEXT_XS, Theme, hex, theme,
@@ -396,6 +397,18 @@ impl ComposeView {
 
     /// Sends now (with the undo delay) or, with `at`, keeps the draft and sends it then.
     fn send_at(&mut self, at: Option<DateTime<Utc>>, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_checked(at, false, window, cx);
+    }
+
+    /// [`Self::send_at`]; unless `confirmed`, first asks about an empty subject or an attachment
+    /// the text mentions but that is missing.
+    fn send_checked(
+        &mut self,
+        at: Option<DateTime<Utc>>,
+        confirmed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.closed {
             return;
         }
@@ -426,6 +439,9 @@ impl ComposeView {
             self.to.update(cx, |field, cx| field.focus(window, cx));
             return;
         }
+        if !confirmed && self.confirm_send(at, window, cx) {
+            return;
+        }
         self.status = SaveStatus::Unsaved;
         if !self.save(cx) || self.message_id() == 0 {
             return;
@@ -437,6 +453,53 @@ impl ComposeView {
             Some(at) => crate::later::schedule_send(&self.state, id, at, cx),
             None => send::schedule(self.state.clone(), id, subject, cx),
         }
+    }
+
+    /// Opens "Send anyway?" when the draft has no subject or misses an attachment it mentions;
+    /// true when it did (sending then waits for the answer).
+    fn confirm_send(
+        &mut self,
+        at: Option<DateTime<Utc>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let draft = self.collect(cx);
+        let attachments = draft.meta.attachments.len() + draft.message.attachments.len();
+        let warnings = compose::send_warnings(
+            &draft.message.subject,
+            &draft.message.body_text,
+            attachments,
+        );
+        if warnings.is_empty() {
+            return false;
+        }
+        let description = warnings
+            .iter()
+            .map(|warning| match warning {
+                compose::SendWarning::NoSubject => tr(cx, "This message has no subject."),
+                compose::SendWarning::MissingAttachment => tr(
+                    cx,
+                    "The message mentions an attachment, but nothing is attached.",
+                ),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let this = cx.entity().downgrade();
+        crate::dialogs::confirm(
+            crate::dialogs::Confirm {
+                title: tr(cx, "Send anyway?").into(),
+                description: description.into(),
+                ok: tr(cx, "Send").into(),
+                danger: false,
+            },
+            move |window, cx| {
+                this.update(cx, |this, cx| this.send_checked(at, true, window, cx))
+                    .ok();
+            },
+            window,
+            cx,
+        );
+        true
     }
 
     fn pick_send_time(&mut self, window: &mut Window, cx: &mut Context<Self>) {

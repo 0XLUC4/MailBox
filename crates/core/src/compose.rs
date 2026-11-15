@@ -315,6 +315,73 @@ fn local_date(date: &DateTime<Utc>) -> String {
         .to_string()
 }
 
+/// Why to ask before sending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendWarning {
+    NoSubject,
+    /// The new text mentions an attachment but nothing is attached.
+    MissingAttachment,
+}
+
+/// Words that announce an attachment (English and French), matched on whole words.
+const ATTACHMENT_WORDS: &[&str] = &[
+    "attached",
+    "attachment",
+    "attachments",
+    "attaching",
+    "enclosed",
+    "ci-joint",
+    "ci-jointe",
+    "ci-joints",
+    "ci-jointes",
+    "pj",
+    "pièce jointe",
+    "pièces jointes",
+    "piece jointe",
+    "pieces jointes",
+];
+
+/// What to confirm before sending `body_text` (the plain text of the draft) with this subject
+/// and number of attachments. Only the new text counts: the quoted reply (`> ` lines and its
+/// "… wrote:" header) and a forwarded message below are ignored.
+pub fn send_warnings(subject: &str, body_text: &str, attachments: usize) -> Vec<SendWarning> {
+    let mut warnings = Vec::new();
+    if subject.trim().is_empty() {
+        warnings.push(SendWarning::NoSubject);
+    }
+    if attachments == 0 && mentions_attachment(&own_text(body_text)) {
+        warnings.push(SendWarning::MissingAttachment);
+    }
+    warnings
+}
+
+/// The text above the quoted or forwarded original.
+fn own_text(body_text: &str) -> String {
+    body_text
+        .lines()
+        .take_while(|line| {
+            let line = line.trim();
+            !(line.starts_with('>')
+                || line.ends_with("wrote:")
+                || line.starts_with("---------- Forwarded message")
+                || line.starts_with("-----Original Message"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn mentions_attachment(text: &str) -> bool {
+    let text = text.to_lowercase();
+    ATTACHMENT_WORDS.iter().any(|word| {
+        text.match_indices(word).any(|(start, found)| {
+            let before = text[..start].chars().next_back();
+            let after = text[start + found.len()..].chars().next();
+            let boundary = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
+            boundary(before) && boundary(after)
+        })
+    })
+}
+
 /// Original quoted below a reply: "On <date>, <sender> wrote:" then `> ` lines.
 pub fn quote_for_reply(original: &Message) -> String {
     let header = format!(
@@ -607,6 +674,31 @@ impl Record for Signature {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn warns_about_a_missing_attachment_or_subject() {
+        use super::{SendWarning, send_warnings};
+        assert_eq!(
+            send_warnings("Hi", "See the attached file.", 0),
+            [SendWarning::MissingAttachment]
+        );
+        assert_eq!(
+            send_warnings("Salut", "Voici la pièce jointe", 0),
+            [SendWarning::MissingAttachment]
+        );
+        assert_eq!(
+            send_warnings("Salut", "Ci-joint le devis, en PJ.", 0),
+            [SendWarning::MissingAttachment]
+        );
+        assert!(send_warnings("Hi", "See the attached file.", 1).is_empty());
+        // Whole words only, and never the quoted original.
+        assert!(send_warnings("Hi", "Our pjm team is unattached.", 0).is_empty());
+        let reply = "Thanks!\nOn Mon, Ada wrote:\n> see attached";
+        assert!(send_warnings("Re: x", reply, 0).is_empty());
+        let forward = "FYI\n---------- Forwarded message ----------\nattached";
+        assert!(send_warnings("Fw: x", forward, 0).is_empty());
+        assert_eq!(send_warnings("  ", "Hello", 0), [SendWarning::NoSubject]);
+    }
+
     use super::*;
 
     #[test]
