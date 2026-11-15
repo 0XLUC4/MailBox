@@ -139,11 +139,18 @@ impl ContactForm {
                 .placeholder("Notes")
                 .default_value(notes_text)
         });
+        // A name computed from first + last is left empty so renaming updates it.
+        let full_name = format!("{} {}", details.first_name.trim(), details.last_name.trim());
+        let shown_as = if contact.display_name.trim() == full_name.trim() {
+            String::new()
+        } else {
+            contact.display_name.clone()
+        };
         let first_name = text_input("First name", &details.first_name, window, cx);
         // Focus the first field so typing starts right away.
         first_name.update(cx, |input, cx| input.focus(window, cx));
         Self {
-            display_name: text_input("Shown as (optional)", &contact.display_name, window, cx),
+            display_name: text_input("Shown as (optional)", &shown_as, window, cx),
             first_name,
             last_name: text_input("Last name", &details.last_name, window, cx),
             nickname: text_input("Nickname", &details.nickname, window, cx),
