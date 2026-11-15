@@ -1,6 +1,6 @@
 use gpui::*;
 
-use crate::theme::{SPACE_1, SPACE_3, theme};
+use crate::theme::{PANE_HEADER_HEIGHT, SPACE_1, SPACE_3, theme};
 
 /// Horizontal bar of actions with a bottom border, 40px high.
 ///
@@ -33,7 +33,7 @@ impl RenderOnce for Toolbar {
             .flex_shrink_0()
             .items_center()
             .gap(SPACE_1)
-            .h(px(40.))
+            .h(PANE_HEADER_HEIGHT)
             .px(SPACE_3)
             .border_b_1()
             .border_color(t.border_subtle)

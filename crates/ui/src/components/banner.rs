@@ -3,6 +3,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::{Button, Icon, IconName};
+use crate::settings::tr;
 use crate::theme::{ICON_SIZE, RADIUS_MD, SPACE_2, TEXT_SM, theme};
 
 /// Messages longer than this are shortened; the full text stays copyable.
@@ -104,7 +105,7 @@ impl RenderOnce for Banner {
                 .ghost()
                 .compact()
                 .icon(IconName::Copy)
-                .label("Copy full message")
+                .label(tr(cx, "Copy full message"))
                 .on_click(move |_, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(full.to_string()))
                 })
@@ -165,13 +166,13 @@ pub fn toast(notification: Notification, message: &str) -> Notification {
     }
     let full: SharedString = message.to_owned().into();
     // Stays until dismissed, so there is time to copy it.
-    notification.autohide(false).content(move |_, _, _| {
+    notification.autohide(false).content(move |_, _, cx| {
         let full = full.clone();
         Button::new("toast-copy")
             .ghost()
             .compact()
             .icon(IconName::Copy)
-            .label("Copy full message")
+            .label(tr(cx, "Copy full message"))
             .on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(full.to_string()))
             })

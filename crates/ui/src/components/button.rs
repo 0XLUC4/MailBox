@@ -2,7 +2,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::{ClickHandler, Icon, IconName};
-use crate::theme::{ICON_SIZE_SM, RADIUS_MD, SPACE_1_5, SPACE_2, SPACE_3, TEXT_SM, theme};
+use crate::theme::{
+    DISABLED_OPACITY, ICON_SIZE_SM, RADIUS_MD, SPACE_1_5, SPACE_2, SPACE_3, TEXT_SM, text_on, theme,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonVariant {
@@ -102,7 +104,7 @@ impl RenderOnce for Button {
             ButtonVariant::Primary => (t.accent, t.on_accent, t.accent, t.accent_hover),
             ButtonVariant::Secondary => (t.elevated, t.text, t.border, t.hover),
             ButtonVariant::Ghost => (transparent, t.text, transparent, t.hover),
-            ButtonVariant::Danger => (t.danger, t.on_accent, t.danger, t.danger.alpha(0.85)),
+            ButtonVariant::Danger => (t.danger, text_on(t.danger), t.danger, t.danger.alpha(0.85)),
         };
         let interactive = !self.disabled;
 
@@ -127,7 +129,7 @@ impl RenderOnce for Button {
                 el.child(Icon::new(icon).size(ICON_SIZE_SM).text_color(fg))
             })
             .when_some(self.label, |el, label| el.child(label))
-            .when(self.disabled, |el| el.opacity(0.45))
+            .when(self.disabled, |el| el.opacity(DISABLED_OPACITY))
             .when(interactive, |el| {
                 el.cursor_pointer().hover(move |style| style.bg(hover_bg))
             })

@@ -3,7 +3,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use super::{ClickHandler, Icon, IconName};
-use crate::theme::{ICON_SIZE, RADIUS_MD, theme};
+use crate::theme::{DISABLED_OPACITY, ICON_SIZE, RADIUS_MD, theme};
 
 /// Square icon-only button (rail, toolbars). `active` shows the selected state.
 #[derive(IntoElement)]
@@ -95,7 +95,7 @@ impl RenderOnce for IconButton {
             .text_color(fg)
             .when(self.active, |el| el.bg(t.accent_subtle))
             .child(Icon::new(self.icon).size(self.icon_size))
-            .when(self.disabled, |el| el.opacity(0.4))
+            .when(self.disabled, |el| el.opacity(DISABLED_OPACITY))
             .when(interactive && !self.active, |el| {
                 el.cursor_pointer()
                     .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
